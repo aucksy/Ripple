@@ -103,7 +103,9 @@ function folderCard(h, o) {
   row.append(check);
   card.append(row);
 
-  if (o.check) {
+  // A note with nothing in it is an empty coloured box, which reads as
+  // something that failed to load rather than as an answer.
+  if (o.check && o.check.message) {
     card.append(el('div', { className: 'note ' + (o.check.ok ? 'good' : 'bad'), style: 'margin-top:14px' },
       o.check.message));
   }
@@ -243,7 +245,10 @@ function saveOfflineSettings() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repoPath: o.path.trim(), sqlDialect: o.dialect, maxHops: o.hops }),
       });
-      o.check = S.health.folder;
+      // The saved message below says what happened. Leaving the "check this
+      // folder" answer up as well puts an empty green box on screen, because
+      // once it has been saved there is nothing left for it to report.
+      o.check = null;
       o.msg = { ok: true, text: `Saved. ${S.health.repo.files} file`
         + `${S.health.repo.files === 1 ? '' : 's'} indexed from ${S.health.repo.label}, `
         + `read as ${S.health.sqlDialect}.` };
