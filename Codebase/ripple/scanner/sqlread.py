@@ -168,14 +168,33 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
 def parse_repo(index: RepoIndex, cfg: Settings | None = None) -> ParsedRepo:
     cfg = cfg or default_settings
     pr = ParsedRepo()
-    pr.unreadable.extend(index.skipped)
+    problems: list[dict] = list(index.skipped)
     for f in index.files:
-        stmts, problems = parse_file(f, cfg)
+        stmts, file_problems = parse_file(f, cfg)
         if stmts:
             pr.statements.extend(stmts)
             pr.parsed_files.add(f.path)
-        pr.unreadable.extend(problems)
+        problems.extend(file_problems)
+    pr.unreadable = _one_entry_per_file(problems)
     return pr
+
+
+def _one_entry_per_file(problems: list[dict]) -> list[dict]:
+    """Collapse repeated failures in the same file down to one entry.
+
+    A program file can hold several blocks of SQL and fail on more than one of
+    them. That is still one file for a person to go and check, so counting it
+    twice would overstate "could not read" -- the number this whole tool is
+    judged on. The repeats are kept as a count so nothing is hidden.
+    """
+    merged: dict[str, dict] = {}
+    for p in problems:
+        key = p.get("file", "")
+        if key in merged:
+            merged[key]["places"] += 1
+        else:
+            merged[key] = {**p, "places": 1}
+    return list(merged.values())
 
 
 # ── working out how a column is used ───────────────────────────────────────

@@ -147,7 +147,7 @@ button.danger{border:1px solid #E7D0D0;background:#fff;color:var(--red);font-siz
 .pill.tab.on .sub{color:rgba(255,255,255,.6)}
 
 /* ── inputs ──────────────────────────────────────────── */
-input[type=text],input[type=date],textarea,select{
+input[type=text],input[type=date],input[type=password],textarea,select{
   width:100%;border:1px solid var(--line2);border-radius:7px;padding:8px 11px;
   font-family:inherit;font-size:14px;font-weight:600;color:var(--ink);
   outline-color:var(--blue);background:#fff;
@@ -155,6 +155,8 @@ input[type=text],input[type=date],textarea,select{
 textarea{resize:vertical;line-height:1.55;font-size:13.5px;font-weight:400;color:var(--body);padding:9px 11px}
 select{font-weight:600}
 input.mono{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--blued)}
+/* a hint must never look like a value that is already filled in */
+input::placeholder,textarea::placeholder{color:var(--faint);font-weight:400;opacity:1}
 .field{margin-top:12px}
 .field>.lbl{display:block;margin-bottom:6px}
 /* borderless input, used where the card itself is the frame (the reply) */
@@ -243,6 +245,8 @@ input.bare,textarea.bare{border:none;outline:none;background:transparent;padding
 .code .f .name{font-family:var(--mono);font-size:13px}
 .code .f .lang{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
   background:rgba(255,255,255,.15);padding:3px 9px;border-radius:999px}
+.code .f a{margin-left:auto;font-size:12.5px;font-weight:700;color:#8FC6F5;white-space:nowrap}
+.code .f a:hover{color:#fff;text-decoration:underline}
 .code .body{font-family:var(--mono);font-size:13px;line-height:1.75;padding:10px 0;background:var(--codebg)}
 .code .ln{display:flex;align-items:baseline;min-height:24px}
 .code .ln .n{width:52px;flex-shrink:0;color:var(--codenum);text-align:right;padding-right:18px;user-select:none}

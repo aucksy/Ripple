@@ -16,6 +16,15 @@ def _env(name: str, default: str) -> str:
     return os.environ.get(name, default).strip()
 
 
+def _env_any(names: tuple[str, ...], default: str = "") -> str:
+    """First of several environment variables that is actually set."""
+    for n in names:
+        v = os.environ.get(n, "").strip()
+        if v:
+            return v
+    return default
+
+
 def _serverless() -> bool:
     return bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
 
@@ -28,12 +37,32 @@ def _default_db() -> str:
 
 @dataclass
 class Settings:
-    # ── which repository is scanned ────────────────────────────────────────
+    # ── where the code comes from ──────────────────────────────────────────
+    # "folder" reads a directory on this machine. "github" pulls a repository
+    # over the network with an access token. Either can be chosen on screen.
+    repo_source: str = field(default_factory=lambda: _env("RIPPLE_REPO_SOURCE", "folder"))
+
+    # ── which repository is scanned (folder mode) ──────────────────────────
     repo_path: Path = field(
         default_factory=lambda: Path(_env("RIPPLE_REPO", str(BASE_DIR / "mockrepo")))
     )
     repo_label: str = field(default_factory=lambda: _env("RIPPLE_REPO_LABEL", "mockrepo"))
     repo_branch: str = field(default_factory=lambda: _env("RIPPLE_REPO_BRANCH", "main"))
+
+    # ── GitHub mode ────────────────────────────────────────────────────────
+    # The token is a secret. It is only ever sent to GitHub as a header; it is
+    # never logged, never saved to disk, and never returned by any route.
+    github_repo: str = field(default_factory=lambda: _env("RIPPLE_GITHUB_REPO", ""))
+    github_branch: str = field(default_factory=lambda: _env("RIPPLE_GITHUB_BRANCH", ""))
+    github_token: str = field(
+        default_factory=lambda: _env_any(("RIPPLE_GITHUB_TOKEN", "GITHUB_TOKEN"))
+    )
+    github_api: str = field(default_factory=lambda: _env("RIPPLE_GITHUB_API", "https://api.github.com"))
+    github_timeout: float = field(default_factory=lambda: float(_env("RIPPLE_GITHUB_TIMEOUT", "30")))
+    # How much compressed repository Ripple will pull in one go.
+    max_repo_bytes: int = field(
+        default_factory=lambda: int(_env("RIPPLE_MAX_REPO_BYTES", "60000000"))
+    )
 
     # Link template so a finding can jump to the real file. {path} and {line}
     # are filled in. Point this at your own Git host when you get there.

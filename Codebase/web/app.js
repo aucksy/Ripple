@@ -26,6 +26,11 @@ const S = {
   man: { source: '', changeType: '', effectiveDate: '', changeDesc: '', pocName: '', pocEmail: '', pocTeam: '' },
   busy: false,
   openGroup: 0, openRow: null, graphTab: 0,
+  // Repository step. The token is held here only long enough to send it once;
+  // it is cleared as soon as the server has accepted it.
+  repoTab: null,
+  gh: { repo: '', branch: '', token: '' },
+  connecting: false, connectMsg: '',
 };
 
 const MAN_FIELDS = [
@@ -341,31 +346,47 @@ function renderUpstreamRows(root, v) {
 // ── step 3 ────────────────────────────────────────────────────────────────
 function step3(root) {
   const h = S.health;
-  const r = x(root, 'repo'); r.innerHTML = '';
   if (!h) return;
-  r.append(el('span', { className: 'lbl', textContent: 'Repository' }));
-  r.append(el('div', { className: 'mono', textContent: h.repo.label, style: 'font-size:17px;font-weight:600;color:var(--blued);margin-top:8px' }));
-  r.append(el('div', { className: 'small faint', textContent: h.repo.path, style: 'margin-top:5px;word-break:break-all' }));
-  const facts = [
-    ['Files indexed', String(h.repo.files)],
-    ['Statements understood', String(h.repo.statements)],
-    ['Branch', h.repo.branch],
-    ['SQL read as', h.sqlDialect],
-    ['Renames followed', `${h.maxHops} hops deep`],
-  ];
-  const t = el('div', { style: 'margin-top:18px' });
-  facts.forEach(([k, val]) => t.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },
-    el('span', { className: 'small muted', textContent: k, style: 'flex:1' }),
-    el('span', { className: 'small', textContent: val, style: 'font-weight:700' }))));
-  r.append(t);
+  if (S.repoTab === null) S.repoTab = h.source === 'github' ? 'github' : 'folder';
+  const onGit = S.repoTab === 'github';
+  const live = h.source === 'github';
+
+  x(root, 'title').textContent = onGit ? 'Read a GitHub repository' : 'Connected repository';
+  x(root, 'sub').textContent = onGit
+    ? 'Point Ripple at a repository and give it an access token. It only ever reads.'
+    : 'This is the code Ripple will search. It is read, never written to.';
+
+  $$('[data-src]', root).forEach(b => {
+    b.className = 'pill' + (b.dataset.src === S.repoTab ? ' on' : '');
+    b.onclick = () => { S.repoTab = b.dataset.src; S.connectMsg = ''; render(); };
+  });
+
+  // anything the server wants to say about the last connection attempt
+  const alert = x(root, 'alert'); alert.innerHTML = '';
+  if (S.connectMsg) {
+    alert.append(el('div', { className: 'note bad', style: 'margin-bottom:18px' },
+      el('b', { textContent: 'Could not connect. ' }), S.connectMsg));
+  } else if (h.connectError) {
+    alert.append(el('div', { className: 'note warn', style: 'margin-bottom:18px' },
+      el('b', { textContent: 'Reading the folder on this machine instead. ' }), h.connectError));
+  }
+
+  x(root, 'left').innerHTML = '';
+  x(root, 'left').append(onGit ? gitHubForm(h, live) : repoFacts(h));
 
   // the same confirmation the prototype shows, on the numbers Ripple really has
   const ready = x(root, 'ready'); ready.innerHTML = '';
   const repoOk = h.repo.exists && h.repo.files > 0;
+  // Says which source it means, so a GitHub form beside it can never be
+  // mistaken for "connected" when the folder is what is really loaded.
   ready.append(el('div', { className: 'note ' + (repoOk ? 'good' : 'warn') },
-    el('b', { textContent: repoOk ? `✓ ${h.repo.label} connected` : `Nothing to scan in ${h.repo.label}`, style: 'display:block;font-size:14px' }),
-    el('div', { style: 'margin-top:6px;line-height:1.55' }, 'Branch ',
-      el('span', { className: 'mono', textContent: h.repo.branch }),
+    el('b', { textContent: repoOk ? `✓ ${h.repo.label} connected` : `Nothing to scan in ${h.repo.label}`,
+      style: 'display:block;font-size:14px' }),
+    el('div', { className: 'small', style: 'margin-top:2px;font-weight:600;opacity:.8',
+      textContent: live ? 'from GitHub' : 'a folder on this machine' }),
+    el('div', { style: 'margin-top:8px;line-height:1.55' },
+      live ? 'Commit ' : 'Branch ',
+      el('span', { className: 'mono', textContent: live ? (h.github.shortCommit || h.github.branch) : h.repo.branch }),
       repoOk ? ` — ${h.repo.files} file${h.repo.files === 1 ? '' : 's'} ready to scan.`
              : ' — check the repository folder in Settings & checks.')));
 
@@ -401,6 +422,130 @@ function step3(root) {
 
   x(root, 'reindex').onclick = () => run(async () => { S.health = await api('/api/reindex', { method: 'POST' }); render(); });
   x(root, 'next').onclick = () => runScan();
+  x(root, 'hint').textContent = h.repo.files
+    ? `Scanning ${h.repo.label}.`
+    : 'Nothing is indexed, so a scan would find nothing.';
+  x(root, 'next').disabled = !h.repo.files;
+}
+
+/* What Ripple is reading now — the same facts either way. */
+function repoFacts(h) {
+  const live = h.source === 'github';
+  const r = el('div', { className: 'card pad lg' });
+  r.append(el('span', { className: 'lbl', textContent: live ? 'GitHub repository' : 'Folder on this machine' }));
+  r.append(el('div', { className: 'mono', textContent: h.repo.label,
+    style: 'font-size:17px;font-weight:600;color:var(--blued);margin-top:8px;word-break:break-all' }));
+  r.append(el('div', { className: 'small faint', textContent: h.repo.path,
+    style: 'margin-top:5px;word-break:break-all' }));
+  const facts = [
+    ['Files indexed', String(h.repo.files)],
+    ['Statements understood', String(h.repo.statements)],
+    ['Branch', h.repo.branch],
+    ['SQL read as', h.sqlDialect],
+    ['Renames followed', `${h.maxHops} hops deep`],
+  ];
+  if (live) {
+    facts.splice(3, 0, ['Commit read', h.github.commit ? h.github.commit.slice(0, 12) : 'unknown']);
+    facts.push(['Visibility', h.github.private ? 'private' : 'public']);
+  }
+  const t = el('div', { style: 'margin-top:18px' });
+  facts.forEach(([k, val]) => t.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },
+    el('span', { className: 'small muted', textContent: k, style: 'flex:1' }),
+    el('span', { className: 'small' + (k === 'Commit read' ? ' mono' : ''), textContent: val, style: 'font-weight:700' }))));
+  r.append(t);
+  if (live) {
+    const off = el('button', { className: 'ghost sm', textContent: 'Disconnect and forget the token', style: 'margin-top:18px' });
+    off.onclick = () => run(async () => {
+      S.health = await api('/api/repo/disconnect', { method: 'POST' });
+      S.repoTab = 'folder'; S.connectMsg = ''; S.gh.token = '';
+      render();
+    });
+    r.append(off);
+  }
+  return r;
+}
+
+/* The connect form. Nothing here pretends: the button does one real request. */
+function gitHubForm(h, live) {
+  const card = el('div', { className: 'card pad lg' });
+  const envToken = h.tokenFrom === 'environment';
+
+  // Built first so typing a repository name can switch it on straight away,
+  // without redrawing the form and throwing away the cursor.
+  const btn = el('button', { className: 'pri',
+    textContent: S.connecting ? 'Reading the repository…' : (live ? 'Read it again' : 'Connect and read it') });
+  const syncBtn = () => { btn.disabled = S.connecting || (!S.gh.repo.trim() && !live); };
+
+  const field = (label, key, opts = {}) => {
+    const wrap = el('div', { style: 'margin-bottom:18px' });
+    wrap.append(el('label', { className: 'lbl', textContent: label, style: 'display:block;margin-bottom:7px' }));
+    const inp = el('input', {
+      type: opts.secret ? 'password' : 'text',
+      value: S.gh[key], placeholder: opts.hint || '',
+      className: opts.mono ? 'mono' : '',
+      style: 'padding:12px 14px' + (opts.width ? `;width:${opts.width}` : ''),
+    });
+    if (opts.secret) inp.autocomplete = 'off';
+    inp.oninput = () => { S.gh[key] = inp.value; syncBtn(); };
+    inp.onkeydown = (e) => { if (e.key === 'Enter') doConnect(); };
+    wrap.append(inp);
+    if (opts.note) wrap.append(el('div', { className: 'small faint', textContent: opts.note, style: 'margin-top:6px' }));
+    return wrap;
+  };
+
+  card.append(field('Repository', 'repo', {
+    mono: true, hint: 'owner/repository', note: 'Or paste the address straight from GitHub.' }));
+  card.append(field('Branch', 'branch', {
+    mono: true, hint: 'leave blank for the default', width: '240px' }));
+
+  if (envToken) {
+    card.append(el('div', { style: 'margin-bottom:18px' },
+      el('span', { className: 'lbl', style: 'display:block;margin-bottom:7px', textContent: 'Access token' }),
+      el('div', { className: 'note good' },
+        el('b', { textContent: 'A token is already set on this server. ' }),
+        'It was set as an environment variable, so it survives restarts. Leave the box below empty to keep using it.')));
+    card.append(field('Use a different token instead', 'token', { secret: true, hint: 'optional' }));
+  } else {
+    card.append(field('Access token', 'token', {
+      secret: true, hint: 'ghp_… or github_pat_…',
+      note: 'Needed for a private repository. A public one can be read without a token. '
+          + 'Read access is all it needs — Ripple never writes.' }));
+  }
+
+  syncBtn();
+  btn.onclick = () => doConnect();
+  const row = el('div', { className: 'foot', style: 'margin-top:4px' }, btn);
+  if (S.connecting) row.append(el('span', { className: 'spin' }),
+    el('span', { className: 'small muted', textContent: 'Downloading and indexing. A large repository takes a moment.' }));
+  card.append(row);
+
+  card.append(el('div', { className: 'note info', style: 'margin-top:20px' },
+    el('b', { textContent: 'Where the token goes. ' }),
+    'It is sent to GitHub and held in this server’s memory for as long as it is running. '
+    + 'It is never written to disk, never logged, and never sent back to this page.'
+    + (h.serverless
+      ? ' This copy is running on a serverless host, where the server is replaced often — set the token as an environment variable there so it lasts.'
+      : ' Restart the server and you will need to enter it again.')));
+  return card;
+}
+
+function doConnect() {
+  const repo = S.gh.repo.trim() || (S.health?.github?.slug || '');
+  if (!repo || S.connecting) return;
+  S.connecting = true; S.connectMsg = ''; render();
+  api('/api/repo/connect', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repo, branch: S.gh.branch.trim(), token: S.gh.token }),
+  }).then(out => {
+    S.health = out;
+    S.gh.token = '';            // the server has it now; do not keep a copy here
+    S.gh.repo = out.github?.slug || repo;
+    S.gh.branch = '';
+    S.connectMsg = '';
+    S.scan = null; S.summary = null;   // anything scanned before was another repo
+  }).catch(e => {
+    S.connectMsg = e.message;
+  }).finally(() => { S.connecting = false; render(); });
 }
 
 function runScan() {
@@ -496,15 +641,31 @@ function step4(root) {
   x(root, 'next').onclick = () => goto(5);
 }
 
+/* The address of a finding in the connected repository, or nothing at all.
+   Points at the first line that actually matched, not the top of the file. */
+function fileUrl(r) {
+  const tpl = S.scan?.repo?.urlTemplate;
+  if (!tpl || !r.file) return '';
+  const hit = (r.lines || []).find(l => l.hit) || (r.lines || [])[0];
+  return tpl.replace('{path}', r.file).replace('{line}', String(hit?.n ?? 1));
+}
+
 function detailFor(r) {
   const d = el('div', { className: 'detail' });
   d.append(el('div', { className: 'note ' + (r.noLocalFix ? 'bad' : r.breaking ? 'warn' : 'info') },
     el('b', { textContent: r.noLocalFix ? 'No local fix — the upstream team must supply a replacement. ' : r.breaking ? 'This breaks. ' : 'Changes, but does not break. ' }),
     r.impact));
   const code = el('div', { className: 'code' });
-  code.append(el('div', { className: 'f' },
+  const head = el('div', { className: 'f' },
     el('span', { className: 'name', textContent: r.file }),
-    el('span', { className: 'lang', textContent: r.lang })));
+    el('span', { className: 'lang', textContent: r.lang }));
+  // Only offered when Ripple genuinely knows the address of this code. On a
+  // local folder there is nothing to link to, so no link is shown.
+  const href = fileUrl(r);
+  if (href) {
+    head.append(el('a', { href, textContent: 'Open in GitHub ↗', target: '_blank', rel: 'noopener' }));
+  }
+  code.append(head);
   const body = el('div', { className: 'body' });
   (r.lines || []).forEach(ln => {
     const line = el('div', { className: 'ln' + (ln.hit ? ' hit' : '') },
@@ -532,7 +693,8 @@ function renderGaps(box, sc) {
     p.append(el('div', { className: 'prose', textContent: 'These are not covered by the findings above. A clean result is only as good as what could be read.' }));
     sc.unreadable.forEach(u => p.append(el('div', { style: 'display:flex;gap:10px;align-items:baseline;margin-top:10px;flex-wrap:wrap' },
       el('span', { className: 'chip mono', textContent: u.file }),
-      el('span', { className: 'small muted', textContent: u.reason }))));
+      el('span', { className: 'small muted',
+        textContent: u.reason + (u.places > 1 ? ` — in ${u.places} places` : '') }))));
     card.append(p);
     box.append(card);
   }

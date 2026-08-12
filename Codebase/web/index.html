@@ -144,10 +144,17 @@
 
 <!-- ══════════════ step 3 ══════════════ -->
 <template id="t-step3">
-  <div class="head"><div><h2>Connected repository</h2>
-    <p>This is the code Ripple will search. It is read, never written to.</p></div></div>
+  <div class="head">
+    <div><h2 data-x="title">Connected repository</h2><p data-x="sub"></p></div>
+    <div class="right">
+      <span class="lbl faint">Source</span>
+      <button class="pill" data-src="folder">This machine</button>
+      <button class="pill" data-src="github">GitHub</button>
+    </div>
+  </div>
+  <div data-x="alert"></div>
   <div class="grid2 even">
-    <div class="card pad lg" data-x="repo"></div>
+    <div data-x="left"></div>
     <div class="rail">
       <div class="card pad" data-x="kinds"></div>
       <div data-x="ready"></div>
@@ -156,7 +163,8 @@
     </div>
   </div>
   <div class="foot"><button class="pri" data-x="next">Run impact analysis</button>
-    <button class="ghost" data-x="reindex">Re-read the repository</button></div>
+    <button class="ghost" data-x="reindex">Re-read the repository</button>
+    <span class="small faint" data-x="hint"></span></div>
 </template>
 
 <!-- ══════════════ step 4 ══════════════ -->

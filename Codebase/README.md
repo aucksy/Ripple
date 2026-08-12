@@ -140,10 +140,20 @@ All optional. Set them as environment variables before starting.
 | `RIPPLE_REPO_LABEL` | `mockrepo` | The name shown in the interface. |
 | `RIPPLE_SQL_DIALECT` | generic | `oracle`, `teradata`, `snowflake`, `hive`, `spark`, `postgres`… **Setting this correctly matters more than anything else here.** |
 | `RIPPLE_MAX_HOPS` | `4` | How many renames deep to follow a column. |
-| `RIPPLE_REPO_URL_TEMPLATE` | empty | Link findings to your Git host. |
+| `RIPPLE_REPO_URL_TEMPLATE` | empty | Link findings to your Git host, when reading a folder. Use `{path}` and `{line}`. On GitHub this is worked out for you. |
 | `GROQ_API_KEY` | empty | Turns the AI on. Without it everything still works. |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Which model to call. |
 | `RIPPLE_DB` | `./ripple.db` | Where history is kept. |
+
+To read a repository from GitHub rather than a folder:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `RIPPLE_REPO_SOURCE` | `folder` | Set to `github` to connect on start-up instead of reading a folder. |
+| `RIPPLE_GITHUB_REPO` | empty | `owner/repository`, or the address copied from GitHub. |
+| `RIPPLE_GITHUB_BRANCH` | empty | Blank uses the repository's default branch. |
+| `GITHUB_TOKEN` | empty | A personal access token with **read** access. `RIPPLE_GITHUB_TOKEN` works too. |
+| `RIPPLE_MAX_REPO_BYTES` | `60000000` | The largest compressed repository Ripple will pull in one go. |
 
 Example, on Windows:
 
@@ -154,6 +164,38 @@ set RIPPLE_SQL_DIALECT=teradata && set GROQ_API_KEY=your-key-here && .venv\Scrip
 The **Settings & checks** screen inside Ripple shows what it is connected to and
 has a *Test the key* button, so a bad key is obvious immediately rather than at
 the worst moment.
+
+---
+
+## Reading a repository from GitHub
+
+Step 3 can read straight from GitHub instead of from a folder. Choose **GitHub**
+on that screen, enter `owner/repository`, and connect.
+
+* A **public** repository needs no token.
+* A **private** one needs a personal access token with read access — nothing
+  more. Ripple never writes.
+
+Create one on GitHub under *Settings → Developer settings → Personal access
+tokens*. A fine-grained token needs **Contents: Read-only**, and must list the
+repository you want scanned. A classic token needs the `repo` scope.
+
+**Where the token goes.** Typed into the screen, it is sent to GitHub and held
+in the running server's memory. It is never written to disk, never logged, and
+never sent back to the browser. Restart the server and you enter it again.
+
+For anything hosted, set `GITHUB_TOKEN` as an environment variable instead, so
+it survives restarts and is never typed into a page. On a serverless host such
+as Vercel this is the only way that works reliably, because each request can
+land on a fresh instance with no memory of the last one.
+
+Ripple downloads the repository as a single archive — one request rather than
+one per file — reads it in memory, and keeps only the file types it can scan.
+Nothing is written to your repository, and nothing is cloned to disk.
+
+Once connected, each finding gets an **Open in GitHub** link pointing at the
+exact commit Ripple read, so the line you are sent to is the line it saw, not
+whatever the branch has moved on to since.
 
 ---
 
@@ -182,12 +224,20 @@ and redeploys every time you push.
 1. Push this folder to GitHub.
 2. At <https://vercel.com> choose *Add New → Project* and pick the repository.
 3. Set the **Root Directory** to `Codebase`.
-4. Add `GROQ_API_KEY` under *Environment Variables* if you want the AI on.
+4. Under *Environment Variables*, add whichever of these you want:
+   * `GROQ_API_KEY` — turns the AI on.
+   * `GITHUB_TOKEN` — lets Ripple read a private repository. Set it here rather
+     than typing it into the screen; on Vercel each request can land on a fresh
+     instance, so a token typed into the page will not last.
+   * `RIPPLE_REPO_SOURCE=github` and `RIPPLE_GITHUB_REPO=owner/repository` — to
+     connect to that repository on start-up instead of reading the sample folder.
 5. Deploy.
 
-One thing to know: on Vercel the filesystem resets between requests, so **saved
-history does not survive**. Everything else works. Running locally keeps history
-properly.
+Two things to know. On Vercel the filesystem resets between requests, so **saved
+history does not survive**; everything else works, and running locally keeps
+history properly. And a large repository can take longer to download than a
+serverless request is allowed to run — if that happens, run Ripple somewhere
+without a request time limit.
 
 ---
 
@@ -197,10 +247,12 @@ properly.
 .venv\Scripts\python -m pytest tests -q
 ```
 
-37 tests. Most of them exist to prove Ripple is *honest* rather than that it is
+72 tests. Most of them exist to prove Ripple is *honest* rather than that it is
 clever — that unreadable files are reported, that a clean result still says
 where the name appeared, that a generic word like `STATUS` does not produce a
-page of false hits.
+page of false hits, and that an access token never comes back out of the app in
+any response. None of them touch the network: the GitHub tests build the archive
+GitHub would send and feed it in directly.
 
 ---
 
@@ -218,7 +270,8 @@ ripple/
   narrative.py      the summary and reply, written without AI
   store.py          history (SQLite)
   scanner/
-    repo.py         walking the repository and searching it
+    repo.py         walking a folder and searching it
+    github.py       reading a repository from GitHub with an access token
     sqlread.py      parsing SQL and classifying how a column is used
     lineage.py      following renames, and grouping by production table
 web/                the interface - plain HTML, CSS and JavaScript, no build step
