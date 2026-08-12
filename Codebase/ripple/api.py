@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from . import ai, narrative, store
 from .catalog import Catalog, build_catalog
-from .config import _serverless, settings
+from .config import settings
 from .notification import Notification, extract_by_rules, read_upload
 from .scanner import github as ghub
 from .scanner.lineage import trace
@@ -182,7 +182,14 @@ def health() -> dict:
         "connectError": _state["error"],
         # On a serverless host each request can land on a fresh instance, so a
         # token typed into the screen will not last. The screen says so.
-        "serverless": _serverless(),
+        "serverless": settings.serverless,
+        # The real ceilings on this host, so the screen never promises more than
+        # it can do. On a laptop these are generous; on Vercel they are not.
+        "limits": {
+            "maxUploadBytes": settings.max_upload_bytes,
+            "maxRepoBytes": settings.max_repo_bytes,
+            "historyKept": not settings.serverless,
+        },
         "repo": {
             "label": gh["slug"] if on_github else settings.repo_label,
             "branch": gh["branch"] if on_github else settings.repo_branch,
@@ -296,11 +303,24 @@ def _unknown_name_warnings(vals: dict, cat: Catalog) -> list[str]:
     return []
 
 
+def _too_big(size: int) -> str:
+    """Say what the real ceiling is, and why it is that number."""
+    # One decimal on the file, none on the limit -- otherwise a 4.4 MB file
+    # reads as "that file is 4 MB, the most accepted is 4 MB", which is absurd.
+    msg = (f"That file is {size / 1_000_000:.1f} MB. The most this copy of Ripple "
+           f"accepts is {settings.max_upload_bytes / 1_000_000:.0f} MB.")
+    if settings.serverless:
+        msg += (" This copy runs on a serverless host, which refuses anything bigger"
+                " before Ripple sees it. Save the email as .eml and try again, or"
+                " paste the text instead.")
+    return msg
+
+
 @app.post("/api/read-email")
 async def read_email_file(file: UploadFile = File(...), useAI: str = "true") -> dict:
     raw = await file.read()
-    if len(raw) > 25_000_000:
-        raise HTTPException(status_code=413, detail="That file is too large.")
+    if len(raw) > settings.max_upload_bytes:
+        raise HTTPException(status_code=413, detail=_too_big(len(raw)))
     n = read_upload(file.filename or "", raw)
     out = _extract(n, useAI.lower() == "true")
     out["emailPreview"] = {
@@ -417,11 +437,22 @@ def file_content(path: str) -> dict:
 
 # ── static site ────────────────────────────────────────────────────────────
 @app.middleware("http")
-async def no_cache_static(request, call_next):
+async def cache_rules(request, call_next):
     """Browsers hold on to app.js hard. During a demo or an edit that means you
-    stare at yesterday's page and think the change did not work."""
+    stare at yesterday's page and think the change did not work -- so the page
+    and its script are never cached.
+
+    The font files are the exception. They are 350 KB together and they do not
+    change. On a hosted copy there is no separate web server for them: every
+    request runs the app itself, so refusing to cache them means re-serving a
+    third of a megabyte on every page view. A month is long enough to help and
+    short enough that a replaced font is not stuck forever.
+    """
     response = await call_next(request)
-    if request.url.path.startswith("/static") or request.url.path == "/":
+    path = request.url.path
+    if path.startswith("/static/fonts/") and path.endswith(".woff2"):
+        response.headers["Cache-Control"] = "public, max-age=2592000, s-maxage=2592000"
+    elif path.startswith("/static") or path == "/":
         response.headers["Cache-Control"] = "no-store, must-revalidate"
     return response
 

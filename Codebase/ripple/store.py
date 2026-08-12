@@ -42,12 +42,20 @@ def _connect(cfg: Settings) -> sqlite3.Connection:
     return con
 
 
+KEPT_NOTE = (
+    "Saved on the machine that handled this request. This copy of Ripple runs on a "
+    "serverless host, which throws that machine away and starts a fresh one, so this "
+    "entry can disappear at any time -- often within minutes. Treat the list of past "
+    "analyses as a scratchpad here, not a record. Copy anything you need to keep."
+)
+
+
 def save(vals: dict, scan: dict, summary: dict, mode: str,
          cfg: Settings | None = None) -> dict:
     cfg = cfg or default_settings
     try:
         con = _connect(cfg)
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, OSError) as exc:
         return {"saved": False, "reason": f"history is unavailable here ({exc})"}
     try:
         with con:
@@ -70,7 +78,10 @@ def save(vals: dict, scan: dict, summary: dict, mode: str,
                     json.dumps(summary),
                 ),
             )
-        return {"saved": True, "id": cur.lastrowid}
+        out = {"saved": True, "id": cur.lastrowid}
+        if cfg.serverless:
+            out["note"] = KEPT_NOTE
+        return out
     finally:
         con.close()
 
@@ -79,7 +90,7 @@ def listing(cfg: Settings | None = None, limit: int = 50) -> list[dict]:
     cfg = cfg or default_settings
     try:
         con = _connect(cfg)
-    except sqlite3.Error:
+    except (sqlite3.Error, OSError):
         return []
     try:
         rows = con.execute(
@@ -96,7 +107,7 @@ def get(analysis_id: int, cfg: Settings | None = None) -> dict | None:
     cfg = cfg or default_settings
     try:
         con = _connect(cfg)
-    except sqlite3.Error:
+    except (sqlite3.Error, OSError):
         return None
     try:
         r = con.execute("SELECT * FROM analyses WHERE id = ?", (analysis_id,)).fetchone()
@@ -116,7 +127,7 @@ def set_status(analysis_id: int, status: str, cfg: Settings | None = None) -> bo
     cfg = cfg or default_settings
     try:
         con = _connect(cfg)
-    except sqlite3.Error:
+    except (sqlite3.Error, OSError):
         return False
     try:
         with con:

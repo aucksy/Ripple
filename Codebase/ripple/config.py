@@ -37,6 +37,14 @@ def _default_db() -> str:
 
 @dataclass
 class Settings:
+    # ── is this a serverless host? ─────────────────────────────────────────
+    # Vercel, Lambda and friends impose limits a laptop does not: the disk is
+    # read-only apart from /tmp, the machine is thrown away between requests,
+    # a request body cannot exceed about 4.5 MB, and a request is killed at
+    # 60 seconds. Several defaults below change because of that, so the app
+    # says what it will really do instead of promising laptop behaviour.
+    serverless: bool = field(default_factory=_serverless)
+
     # ── where the code comes from ──────────────────────────────────────────
     # "folder" reads a directory on this machine. "github" pulls a repository
     # over the network with an access token. Either can be chosen on screen.
@@ -59,9 +67,13 @@ class Settings:
     )
     github_api: str = field(default_factory=lambda: _env("RIPPLE_GITHUB_API", "https://api.github.com"))
     github_timeout: float = field(default_factory=lambda: float(_env("RIPPLE_GITHUB_TIMEOUT", "30")))
-    # How much compressed repository Ripple will pull in one go.
+    # How much compressed repository Ripple will pull in one go. Lower on a
+    # serverless host, where the whole request is killed at 60 seconds: a clear
+    # "that repository is too big for this host" beats a blank timeout.
     max_repo_bytes: int = field(
-        default_factory=lambda: int(_env("RIPPLE_MAX_REPO_BYTES", "60000000"))
+        default_factory=lambda: int(
+            _env("RIPPLE_MAX_REPO_BYTES", "25000000" if _serverless() else "60000000")
+        )
     )
 
     # Link template so a finding can jump to the real file. {path} and {line}
@@ -93,11 +105,27 @@ class Settings:
     )
     max_file_bytes: int = 2_000_000
 
+    # The biggest email file that can be uploaded. A serverless host refuses a
+    # request body over roughly 4.5 MB before Ripple ever sees it, so the limit
+    # on screen has to be the real one, not a friendlier invented one.
+    max_upload_bytes: int = field(
+        default_factory=lambda: int(
+            _env("RIPPLE_MAX_UPLOAD_BYTES", "4000000" if _serverless() else "25000000")
+        )
+    )
+
     # ── AI (entirely optional) ─────────────────────────────────────────────
     groq_api_key: str = field(default_factory=lambda: _env("GROQ_API_KEY", ""))
     groq_model: str = field(default_factory=lambda: _env("GROQ_MODEL", "llama-3.3-70b-versatile"))
     groq_base_url: str = field(
         default_factory=lambda: _env("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+    )
+    # How long to wait for the model. Writing the summary makes two calls one
+    # after the other, so on a serverless host both have to finish inside the
+    # 60-second cap -- otherwise the page dies with no explanation instead of
+    # falling back to the written-without-AI version.
+    ai_timeout: float = field(
+        default_factory=lambda: float(_env("RIPPLE_AI_TIMEOUT", "20" if _serverless() else "45"))
     )
 
     # ── storage ────────────────────────────────────────────────────────────

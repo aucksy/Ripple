@@ -143,7 +143,9 @@ All optional. Set them as environment variables before starting.
 | `RIPPLE_REPO_URL_TEMPLATE` | empty | Link findings to your Git host, when reading a folder. Use `{path}` and `{line}`. On GitHub this is worked out for you. |
 | `GROQ_API_KEY` | empty | Turns the AI on. Without it everything still works. |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Which model to call. |
-| `RIPPLE_DB` | `./ripple.db` | Where history is kept. |
+| `RIPPLE_DB` | `./ripple.db` | Where history is kept. On a serverless host this becomes `/tmp/ripple.db`, which does not survive. |
+| `RIPPLE_MAX_UPLOAD_BYTES` | `25000000` | Biggest notification file accepted. Drops to `4000000` on a serverless host, which refuses more than that itself. |
+| `RIPPLE_AI_TIMEOUT` | `45` | Seconds to wait for the model. Drops to `20` on a serverless host, where the whole request is killed at 60. |
 
 To read a repository from GitHub rather than a folder:
 
@@ -153,7 +155,7 @@ To read a repository from GitHub rather than a folder:
 | `RIPPLE_GITHUB_REPO` | empty | `owner/repository`, or the address copied from GitHub. |
 | `RIPPLE_GITHUB_BRANCH` | empty | Blank uses the repository's default branch. |
 | `GITHUB_TOKEN` | empty | A personal access token with **read** access. `RIPPLE_GITHUB_TOKEN` works too. |
-| `RIPPLE_MAX_REPO_BYTES` | `60000000` | The largest compressed repository Ripple will pull in one go. |
+| `RIPPLE_MAX_REPO_BYTES` | `60000000` | The largest compressed repository Ripple will pull in one go. Drops to `25000000` on a serverless host, where a request is killed after 60 seconds. |
 
 Example, on Windows:
 
@@ -219,25 +221,43 @@ manual mode; nothing is lost except some polish in the wording.
 ## Putting it online, free
 
 The project is set up for Vercel's free tier, which gives a real HTTPS address
-and redeploys every time you push.
+and redeploys every time you push to `main`.
 
-1. Push this folder to GitHub.
-2. At <https://vercel.com> choose *Add New → Project* and pick the repository.
-3. Set the **Root Directory** to `Codebase`.
-4. Under *Environment Variables*, add whichever of these you want:
-   * `GROQ_API_KEY` — turns the AI on.
-   * `GITHUB_TOKEN` — lets Ripple read a private repository. Set it here rather
-     than typing it into the screen; on Vercel each request can land on a fresh
-     instance, so a token typed into the page will not last.
+1. At <https://vercel.com> choose *Add New → Project* and pick this repository.
+2. Set the **Root Directory** to `Codebase`. This is the only setting that must
+   be changed by hand — everything else is detected. Leave the build and output
+   settings empty.
+3. Under *Environment Variables*, add whichever of these you want:
+   * `GROQ_API_KEY` — turns the AI on. Leave it out and Ripple still works;
+     every screen simply says the rules wrote it rather than a model.
+   * `GITHUB_TOKEN` — lets Ripple read a **private** repository. Public ones
+     need no token. Set it here rather than typing it into the screen: each
+     request can land on a fresh machine, so a token typed into the page will
+     not last.
    * `RIPPLE_REPO_SOURCE=github` and `RIPPLE_GITHUB_REPO=owner/repository` — to
      connect to that repository on start-up instead of reading the sample folder.
-5. Deploy.
+4. Deploy.
 
-Two things to know. On Vercel the filesystem resets between requests, so **saved
-history does not survive**; everything else works, and running locally keeps
-history properly. And a large repository can take longer to download than a
-serverless request is allowed to run — if that happens, run Ripple somewhere
-without a request time limit.
+### What a hosted copy does differently
+
+A serverless host is not a laptop, and Ripple says so on screen rather than
+promising otherwise. It detects the host automatically and changes four things:
+
+| | On your machine | Hosted |
+|---|---|---|
+| Saved history | Kept in `ripple.db`, permanent | **Does not survive.** The machine behind the site is replaced constantly and takes saved rows with it. Both the save confirmation and the *Past analyses* screen say so. |
+| Biggest email upload | 25 MB | **4 MB.** The host refuses a bigger request body before Ripple sees it, so the limit shown is the real one. Pasting the text has no such limit. |
+| Biggest repository pulled from GitHub | 60 MB compressed | **25 MB.** A request is killed after 60 seconds, so a clear "too big for this host" beats a blank timeout. |
+| Wait for the AI model | 45 seconds | **20 seconds.** Writing a summary calls the model twice in a row; both have to finish inside the 60-second cap, or the page dies with nothing on it. |
+
+Everything else is the same: reading a notification, scanning, the dependency
+map, the summary, the drafted reply, and connecting to GitHub.
+
+Two more things worth knowing. The first request after a quiet spell is slow,
+because the machine is starting from cold and reading the repository again — a
+few seconds for the bundled sample, longer for a real repository. And if you
+want history that lasts, or a big repository scanned, run Ripple on a normal
+server instead; nothing in the code has to change.
 
 ---
 
@@ -247,12 +267,13 @@ without a request time limit.
 .venv\Scripts\python -m pytest tests -q
 ```
 
-72 tests. Most of them exist to prove Ripple is *honest* rather than that it is
+85 tests. Most of them exist to prove Ripple is *honest* rather than that it is
 clever — that unreadable files are reported, that a clean result still says
 where the name appeared, that a generic word like `STATUS` does not produce a
-page of false hits, and that an access token never comes back out of the app in
-any response. None of them touch the network: the GitHub tests build the archive
-GitHub would send and feed it in directly.
+page of false hits, that an access token never comes back out of the app in any
+response, and that a hosted copy admits saved history will not survive instead
+of letting the word "Saved" stand on its own. None of them touch the network:
+the GitHub tests build the archive GitHub would send and feed it in directly.
 
 ---
 
@@ -261,6 +282,8 @@ GitHub would send and feed it in directly.
 ```
 run.py              start it locally
 api/index.py        start it on Vercel (same app)
+vercel.json         how Vercel runs it: one function, every request through it
+.vercelignore       what a hosted copy does not need
 ripple/
   config.py         every setting, in one place
   api.py            the web routes - deliberately thin
@@ -277,7 +300,7 @@ ripple/
 web/                the interface - plain HTML, CSS and JavaScript, no build step
 mockrepo/           the synthetic pipeline being scanned
 samples/            example notification emails
-tests/              the test suite
+tests/              the test suite (test_hosting.py covers the hosted copy)
 ```
 
 There is no build step and no framework anywhere in `web/`. That is on purpose:

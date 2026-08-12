@@ -249,6 +249,19 @@ function startManual() {
 }
 
 function upload(f) {
+  // Check the size here as well as on the server. A hosted copy sits behind a
+  // host that rejects an oversized upload itself, and its refusal is a bare
+  // number with no explanation — so say it properly before sending anything.
+  const cap = S.health?.limits?.maxUploadBytes || 25000000;
+  if (f.size > cap) {
+    alert(`That file is ${(f.size / 1e6).toFixed(1)} MB. The most this copy of Ripple accepts is `
+      + `${Math.round(cap / 1e6)} MB.`
+      + (S.health?.serverless
+        ? ' It is running on a serverless host, which refuses anything bigger before Ripple'
+          + ' sees it. Save the email as .eml, or paste the text into the box below instead.'
+        : ''));
+    return;
+  }
   run(async () => {
     const fd = new FormData();
     fd.append('file', f);
@@ -852,7 +865,16 @@ function step6(root) {
   }
 
   x(root, 'next').onclick = () => goto(7);
-  x(root, 'saved').textContent = S.savedId ? `Saved as analysis #${S.savedId}.` : '';
+  // "Saved" has to mean saved. Where it does not really last, say so in the
+  // same breath rather than letting the word stand on its own. This sits in a
+  // row between two buttons, so it stays one short line -- the full
+  // explanation is on the Past analyses screen.
+  x(root, 'saved').textContent = S.savedId
+    ? `Saved as analysis #${S.savedId}.`
+      + (S.health?.limits?.historyKept === false
+        ? ' This host wipes saved analyses — copy out anything you need to keep.'
+        : '')
+    : '';
   x(root, 'save').onclick = () => run(async () => {
     const out = await api('/api/history', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -904,13 +926,32 @@ function step7(root) {
 
 // ── history & settings ────────────────────────────────────────────────────
 function historyView(root) {
+  const kept = S.health?.limits?.historyKept !== false;
   root.append(el('div', { className: 'head' }, el('div', {},
     el('h2', { textContent: 'Past analyses' }),
-    el('p', { textContent: 'Everything saved on this server, newest first.' }))));
+    el('p', { textContent: kept
+      ? 'Everything saved on this server, newest first.'
+      : 'Newest first — but this list does not last on this host. See the note below.' }))));
+  // A hosted copy is replaced constantly and takes its saved rows with it.
+  // An empty list would otherwise look like a bug or like lost work.
+  if (!kept) {
+    root.append(el('div', { className: 'note warn', style: 'margin-bottom:18px' },
+      el('b', { textContent: 'Saved analyses do not survive here. ' }),
+      'This copy of Ripple runs on a serverless host, which replaces the machine behind '
+      + 'the site constantly and wipes anything saved on it. An analysis can vanish within '
+      + 'minutes, and the list can look different from one refresh to the next. Nothing is '
+      + 'broken and nothing is being deleted on purpose — there is simply nowhere permanent '
+      + 'to write. Copy out anything you need to keep before you leave the page.'));
+  }
   const card = el('div', { className: 'card clip' });
   root.append(card);
   api('/api/history').then(rows => {
-    if (!rows.length) { card.append(el('div', { className: 'pad lg muted', textContent: 'Nothing saved yet.' })); return; }
+    if (!rows.length) {
+      card.append(el('div', { className: 'pad lg muted', textContent: kept
+        ? 'Nothing saved yet.'
+        : 'Nothing here — either nothing has been saved yet, or this host has already been replaced.' }));
+      return;
+    }
     const t = el('table', { className: 'hist' });
     const hr = el('tr');
     ['When', 'Subject', 'Source', 'Change', 'Risk', 'Mode', 'Status'].forEach(h => hr.append(el('th', { textContent: h })));
@@ -995,7 +1036,11 @@ function render() {
   $('#hRight').innerHTML = '';
   if (S.busy) $('#hRight').append(el('span', { className: 'spin' }));
 
-  if (S.view === 'history') { setHeader('Past analyses', 'Saved on this server'); historyView(view); return; }
+  if (S.view === 'history') {
+    setHeader('Past analyses', S.health?.limits?.historyKept === false
+      ? 'Kept only until this host is replaced' : 'Saved on this server');
+    historyView(view); return;
+  }
   if (S.view === 'settings') { setHeader('Settings & checks', 'Connections and health'); settingsView(view); return; }
 
   setHeader(STEPS[S.step - 1][0], `Step ${S.step} of ${STEPS.length}`);

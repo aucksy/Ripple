@@ -81,7 +81,7 @@ def _chat(messages: list[dict], cfg: Settings, max_tokens: int = 1400) -> str:
                 "max_tokens": max_tokens,
                 "response_format": {"type": "json_object"},
             },
-            timeout=45.0,
+            timeout=cfg.ai_timeout,
         )
     except Exception as exc:
         raise AIUnavailable(f"could not reach the model ({type(exc).__name__})") from exc
