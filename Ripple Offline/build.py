@@ -48,6 +48,111 @@ def folder_size(path: Path) -> str:
     return f"{total / 1_000_000:.0f} MB"
 
 
+IT_NOTE = """RIPPLE OFFLINE - what this program is, for whoever has to approve it
+====================================================================
+
+This is an internal tool for our own data engineering work. It reads a copy of
+our pipeline code that is already on the machine and reports which production
+tables an upstream change would break. It is not downloaded from anywhere and it
+is not a commercial product.
+
+It is unsigned. There is no code-signing certificate behind it, so Windows will
+not recognise a publisher. That is the only reason it may be stopped.
+
+
+WHAT IT DOES
+
+  * Runs as the person who starts it. Its manifest asks Windows for
+    "asInvoker" - it never requests administrator rights and cannot prompt for
+    them. It has been run and tested end to end by a standard, non-administrator
+    user.
+  * Starts a small web server bound to 127.0.0.1 (this machine only) on the
+    first free port from 8000 to 8020, and opens the default browser at it.
+    It never listens on a network interface, so it cannot be reached by anyone
+    else, on the network or otherwise.
+  * Reads the folder of source code the user points it at. Read only. It never
+    writes to that folder.
+
+
+WHAT IT DOES NOT DO
+
+  * No internet access of any kind. Outbound connections are blocked inside the
+    program itself before anything else starts, and the components that could
+    make one - the AI client and the repository downloader used by the online
+    version, along with the HTTP library they need - are not packaged into this
+    build at all. There is a screen inside the program that reports whether the
+    block is active, and any attempt to reach out is refused and recorded.
+  * No installer. Nothing is registered, no service is created, nothing is added
+    to startup, and nothing is written to the registry.
+  * Nothing is unpacked into the temporary folder. The program is a plain folder
+    of files that runs where it sits.
+  * No data leaves the machine. Nothing is uploaded and nothing is reported back
+    to anyone. The source code it reads never goes anywhere.
+
+
+WHAT IT WRITES, AND WHERE
+
+  Only inside its own folder, and only these three files:
+
+    ripple-settings.json    the code folder to scan, and the SQL dialect
+    ripple-history.db       past analyses, so they are not lost
+    ripple-log.txt          what it would have printed if it had a console
+
+  Deleting the folder removes the program and everything it ever wrote.
+
+
+IDENTIFYING IT
+
+  File     : {name}
+  Size     : {size:,} bytes
+  SHA-256  : {digest}
+  Built    : from source held in our own repository, using PyInstaller
+
+  Rebuilding from the same source produces the same program but not a
+  byte-identical file, so please allow by this hash and ask for a new one if the
+  program is ever updated.
+
+
+HOW TO CHECK THE NETWORK CLAIM YOURSELF
+
+  Start the program and use it normally, then look at its connections in
+  Resource Monitor (Network tab, filtered to this process), or run:
+
+      netstat -ano | findstr <the process id>
+
+  The only sockets it should ever have are a listener on 127.0.0.1 and the
+  browser's own connections back to that same address. Any connection to a
+  public address would be a defect and we want to know about it.
+
+  Your own endpoint monitoring will show the same thing, and is better evidence
+  than anything we can tell you.
+
+
+IF THE ANSWER IS STILL NO
+
+  We would rather hear that than have people work around it. Please tell us what
+  would make it acceptable - a signed build, a different location, or reviewing
+  the source, which is ours and can be read in full.
+"""
+
+
+def write_it_note(out: Path, exe: Path) -> Path:
+    """A page to hand to whoever has to approve an unsigned program.
+
+    An unsigned executable on a managed laptop is refused by policy, not by
+    accident, and the person refusing it is asking a reasonable question. This
+    answers it: what it is, what it touches, and the fingerprint to allow.
+    """
+    import hashlib
+
+    digest = hashlib.sha256(exe.read_bytes()).hexdigest().upper()
+    note = out / "READ-ME-FIRST-for-IT.txt"
+    note.write_text(
+        IT_NOTE.format(name=exe.name, size=exe.stat().st_size, digest=digest),
+        encoding="utf-8")
+    return note
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build Ripple Offline for Windows.")
     parser.add_argument("--keep-work", action="store_true",
@@ -74,6 +179,15 @@ def main() -> int:
     # ── the executable ─────────────────────────────────────────────────────
     if DIST.exists():
         shutil.rmtree(DIST, ignore_errors=True)
+    if DIST.exists():
+        # Windows will not delete a folder that something is sitting in: the
+        # previous copy still running, or a command prompt whose current
+        # directory is inside it. PyInstaller's own failure here is a wall of
+        # traceback ending in "WinError 32", which says none of that.
+        say(f"ERROR: {DIST} could not be cleared out.")
+        say("Something is holding it open - usually the last build still running,")
+        say("or a terminal sitting inside that folder. Close it and build again.")
+        return 1
     command = [
         sys.executable, "-m", "PyInstaller",
         str(HERE / "run.py"),
@@ -122,6 +236,9 @@ def main() -> int:
         for f in SAMPLES.glob("*.eml"):
             shutil.copyfile(f, target / f.name)
         say(f"examples   : {len(list(target.glob('*.eml')))} example emails to try it with")
+
+    note = write_it_note(out, exe)
+    say(f"for IT     : {note.name} - the page to send if the program is blocked")
 
     if not args.keep_work:
         shutil.rmtree(WORK / "pyinstaller", ignore_errors=True)
