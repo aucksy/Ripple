@@ -33,6 +33,19 @@ def log_path() -> Path:
     return paths.app_dir() / "ripple-log.txt"
 
 
+class _Nowhere:
+    """Somewhere for writes to go when there is genuinely nowhere to put them."""
+
+    def write(self, _text: str) -> int:
+        return 0
+
+    def flush(self) -> None:
+        pass
+
+    def isatty(self) -> bool:
+        return False
+
+
 def start_logging() -> None:
     """With no terminal there is nowhere for a message to go, so make one.
 
@@ -40,12 +53,28 @@ def start_logging() -> None:
     box beside the browser looks like something went wrong. That leaves nothing
     to print to, so everything goes to a file beside the program instead, which
     is also the thing to ask for when someone says it did not start.
+
+    A locked-down machine may not let the program write beside itself: a folder
+    under Program Files, or a network share somebody opened it from. Failing to
+    open a log file must never be the reason the program does not start, so it
+    falls back to the temporary folder, and then to nowhere at all.
     """
     if not frozen():
         return
-    handle = open(log_path(), "a", encoding="utf-8", buffering=1)
-    sys.stdout = handle
-    sys.stderr = handle
+    import tempfile
+
+    for candidate in (log_path(), Path(tempfile.gettempdir()) / "ripple-log.txt"):
+        try:
+            handle = open(candidate, "a", encoding="utf-8", buffering=1)
+        except OSError:
+            continue
+        sys.stdout = handle
+        sys.stderr = handle
+        return
+    # Nothing writable anywhere. Carry on silently rather than not starting --
+    # but never leave these as None, which some logging setups will fall over on.
+    sys.stdout = _Nowhere()
+    sys.stderr = _Nowhere()
 
 
 def free_port() -> int:

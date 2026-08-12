@@ -121,6 +121,22 @@ def test_a_folder_that_disappears_stops_being_offered(clean_home, tmp_path):
         assert "not on this machine any more" in after["folder"]["message"]
 
 
+def test_a_place_ripple_cannot_write_to_says_what_to_do(client, monkeypatch):
+    """Copied into Program Files, or opened straight off a network share, Ripple
+    cannot save its settings beside itself. "Something went wrong: 500" tells
+    nobody to move the folder."""
+    def refuse(*_a, **_kw):
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(prefs, "save", refuse)
+    r = client.post("/api/settings", json={"repoPath": str(MOCKREPO),
+                                           "sqlDialect": "bigquery", "maxHops": 4})
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "does not allow writing" in detail
+    assert "Desktop or Documents" in detail
+
+
 def test_a_folder_can_be_checked_before_it_is_saved(client):
     out = client.post("/api/settings/check", json={"path": str(MOCKREPO)}).json()
     assert out["ok"] and out["files"] > 15

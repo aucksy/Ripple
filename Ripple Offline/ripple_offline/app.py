@@ -222,8 +222,19 @@ def save_settings(payload: SettingsIn) -> dict:
     verdict = prefs.check_folder(payload.repoPath)
     if not verdict["ok"]:
         raise HTTPException(status_code=400, detail=verdict["message"])
-    saved = prefs.save({"repoPath": payload.repoPath, "repoLabel": "",
-                        "sqlDialect": payload.sqlDialect, "maxHops": payload.maxHops})
+    try:
+        saved = prefs.save({"repoPath": payload.repoPath, "repoLabel": "",
+                            "sqlDialect": payload.sqlDialect, "maxHops": payload.maxHops})
+    except OSError as exc:
+        # Ripple keeps its settings beside itself. Somewhere like Program Files,
+        # or a network share it was opened from, may not allow that -- and
+        # "Something went wrong: 500" tells nobody to move the folder.
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Ripple could not save its settings into {paths.app_dir()} "
+                    f"({exc.strerror or exc}). That folder does not allow writing. "
+                    f"Copy the whole Ripple folder somewhere you own — your Desktop or "
+                    f"Documents — and start it again from there.")) from exc
     prefs.apply(saved)
     reindex()
     return _health()
