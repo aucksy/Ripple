@@ -141,8 +141,8 @@ All optional. Set them as environment variables before starting.
 | `RIPPLE_SQL_DIALECT` | generic | `bigquery`, `oracle`, `teradata`, `snowflake`, `hive`, `spark`, `postgres`, `mysql`, `tsql`, `redshift`, `databricks`, `presto`, `trino`, `duckdb`, `sqlite`. **Setting this correctly matters more than anything else here** — see below. |
 | `RIPPLE_MAX_HOPS` | `4` | How many renames deep to follow a column. |
 | `RIPPLE_REPO_URL_TEMPLATE` | empty | Link findings to your Git host, when reading a folder. Use `{path}` and `{line}`. On GitHub this is worked out for you. |
-| `GROQ_API_KEY` | empty | Turns the AI on. Without it everything still works. |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Which model to call. |
+| `GROQ_API_KEY` | empty | Turns the AI on. Without it everything still works. Can also be entered on the Settings screen. |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Which model to call. Also choosable on the Settings screen. |
 | `RIPPLE_DB` | `./ripple.db` | Where history is kept. On a serverless host this becomes `/tmp/ripple.db`, which does not survive. |
 | `RIPPLE_MAX_UPLOAD_BYTES` | `25000000` | Biggest notification file accepted. Drops to `4000000` on a serverless host, which refuses more than that itself. |
 | `RIPPLE_AI_TIMEOUT` | `45` | Seconds to wait for the model. Drops to `20` on a serverless host, where the whole request is killed at 60. |
@@ -231,14 +231,43 @@ Ripple works with no AI at all — that is deliberate, not a limitation. With a
 key it reads messier emails more reliably and writes better English.
 
 1. Get a key from <https://console.groq.com>.
-2. Set `GROQ_API_KEY` before starting.
-3. Open **Settings & checks** and press *Test the key*.
+2. Open **Settings & checks**, pick a model, paste the key, press *Turn the AI
+   on*. Or set `GROQ_API_KEY` before starting, which survives restarts.
+3. Either way, press *Test the key* whenever you want proof it still works.
+
+The key is treated exactly like the GitHub token: it is held in the running
+process, never written to disk, never logged, and never sent back to the page.
+There is a test that fails if it ever appears in a response.
+
+Turning it on is not taken on trust. Ripple calls the model there and then, and
+refuses a key the provider rejects rather than storing it and failing later —
+and it says so in a sentence, not a page of the provider's JSON.
+
+### Which model
+
+| Model | When |
+|---|---|
+| **GPT-OSS 120B** | Default. Best at pulling names out of a messy forwarded email. |
+| Llama 3.3 70B | A solid all-rounder, slightly quicker. |
+| GPT-OSS 20B | Lighter and faster. Fine for tidy notifications. |
+| Llama 3.1 8B | Fastest. Misses fields in awkward emails — check its answers. |
+
+Only Groq's production models are offered. Preview models get withdrawn without
+notice, and a model that disappears mid-demonstration is worse than one that is
+merely adequate. Change the default with `GROQ_MODEL`.
 
 **Before using this on anything real, read this.** Turning the AI on sends the
 notification text and the findings — table names, system names, colleagues'
 names — to Groq's servers. Being *able* to make the call is not the same as
 being *allowed* to send that data. If in doubt, leave the key unset and use
 manual mode; nothing is lost except some polish in the wording.
+
+**And on a shared copy, read this too.** A key typed into the screen belongs to
+that running copy, not to you. If the copy is reachable by other people — as any
+hosted one is — they are spending your allowance for as long as it is loaded.
+The Settings screen says so on a hosted copy. For anything but a demonstration,
+run Ripple on your own machine, or set the key as an environment variable on the
+host rather than typing it into a public page.
 
 ---
 
@@ -302,12 +331,13 @@ server instead; nothing in the code has to change.
 .venv\Scripts\python -m pytest tests -q
 ```
 
-93 tests. Most of them exist to prove Ripple is *honest* rather than that it is
+109 tests. Most of them exist to prove Ripple is *honest* rather than that it is
 clever — that unreadable files are reported, that a clean result still says
 where the name appeared, that a generic word like `STATUS` does not produce a
 page of false hits, that an access token never comes back out of the app in any
 response, and that a hosted copy admits saved history will not survive instead
-of letting the word "Saved" stand on its own, and that a BigQuery pipeline read
+of letting the word "Saved" stand on its own, that an AI key never comes back
+out of the app any more than a GitHub token does, and that a BigQuery pipeline read
 as generic SQL is caught rather than quietly reported as harmless. None of them
 touch the network: the GitHub tests build the archive GitHub would send and feed
 it in directly.

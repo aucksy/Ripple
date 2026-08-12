@@ -11,6 +11,48 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# The models Ripple offers on the Settings screen. Only Groq's production
+# models are listed -- preview ones get withdrawn without notice, and a model
+# that disappears mid-demo is worse than one that is merely adequate.
+#
+# The job is narrow: pull table and attribute names out of a forwarded, badly
+# quoted email and return strict JSON, then write a few careful sentences from
+# findings that are already worked out. That rewards instruction-following, not
+# breadth -- which is why the largest model is the default and the fastest one
+# carries a warning rather than being hidden.
+AI_MODELS: tuple[dict[str, str], ...] = (
+    {
+        "id": "openai/gpt-oss-120b",
+        "label": "GPT-OSS 120B",
+        "note": "Best at reading a messy forwarded email. Recommended.",
+    },
+    {
+        "id": "llama-3.3-70b-versatile",
+        "label": "Llama 3.3 70B",
+        "note": "A solid all-rounder, and a little quicker.",
+    },
+    {
+        "id": "openai/gpt-oss-20b",
+        "label": "GPT-OSS 20B",
+        "note": "Lighter and faster. Fine for tidy notifications.",
+    },
+    {
+        "id": "llama-3.1-8b-instant",
+        "label": "Llama 3.1 8B",
+        "note": "Fastest. Misses fields in awkward emails -- check its answers.",
+    },
+)
+
+DEFAULT_AI_MODEL = AI_MODELS[0]["id"]
+
+
+def model_label(model_id: str) -> str:
+    """The friendly name for a model id, or the id itself if it is not ours."""
+    for m in AI_MODELS:
+        if m["id"] == model_id:
+            return m["label"]
+    return model_id
+
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(name, default).strip()
@@ -116,7 +158,7 @@ class Settings:
 
     # ── AI (entirely optional) ─────────────────────────────────────────────
     groq_api_key: str = field(default_factory=lambda: _env("GROQ_API_KEY", ""))
-    groq_model: str = field(default_factory=lambda: _env("GROQ_MODEL", "llama-3.3-70b-versatile"))
+    groq_model: str = field(default_factory=lambda: _env("GROQ_MODEL", DEFAULT_AI_MODEL))
     groq_base_url: str = field(
         default_factory=lambda: _env("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
     )

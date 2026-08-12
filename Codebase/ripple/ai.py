@@ -64,6 +64,30 @@ class AIUnavailable(Exception):
     pass
 
 
+def _explain(status: int, body: str, cfg: Settings) -> str:
+    """Turn the provider's answer into a sentence worth putting on a screen.
+
+    The raw reply is a blob of JSON. Someone standing in front of a screen
+    needs to know what to do next, not what the API thought of them.
+    """
+    lower = (body or "").lower()
+    if status == 401:
+        return ("the key was rejected - it may be mistyped, expired or revoked. "
+                "Create a new one at console.groq.com and paste it in again")
+    if status == 429:
+        return ("the free allowance on this key is used up for the moment. "
+                "Wait a few minutes, or pick a smaller model")
+    if status in (404, 400) and ("model" in lower and ("not found" in lower or "does not exist" in lower
+                                                       or "decommission" in lower)):
+        return (f"the provider no longer offers {cfg.groq_model}. "
+                "Choose a different model on the Settings screen")
+    if status == 413:
+        return "the notification was too long for this model to read in one go"
+    if status >= 500:
+        return "the model provider is having trouble at its end - try again in a moment"
+    return f"the model provider refused the request ({status})"
+
+
 def _chat(messages: list[dict], cfg: Settings, max_tokens: int = 1400) -> str:
     if not cfg.groq_api_key:
         raise AIUnavailable("no API key configured")
@@ -86,8 +110,7 @@ def _chat(messages: list[dict], cfg: Settings, max_tokens: int = 1400) -> str:
     except Exception as exc:
         raise AIUnavailable(f"could not reach the model ({type(exc).__name__})") from exc
     if r.status_code != 200:
-        detail = r.text[:200]
-        raise AIUnavailable(f"the model returned {r.status_code}: {detail}")
+        raise AIUnavailable(_explain(r.status_code, r.text, cfg))
     try:
         return r.json()["choices"][0]["message"]["content"]
     except Exception as exc:

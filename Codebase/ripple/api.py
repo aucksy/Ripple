@@ -14,9 +14,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from dataclasses import replace
+
 from . import ai, narrative, store
 from .catalog import Catalog, build_catalog
-from .config import settings
+from .config import AI_MODELS, Settings, model_label, settings
 from .notification import Notification, extract_by_rules, read_upload
 from .scanner import github as ghub
 from .scanner.lineage import trace
@@ -34,12 +36,45 @@ app = FastAPI(title="Ripple", docs_url="/api/docs", redoc_url=None)
 _state: dict[str, Any] = {
     "index": None, "parsed": None, "catalog": None,
     "source": "folder", "conn": None, "token": "", "error": "",
+    # The AI key is a secret on exactly the same terms as the GitHub token:
+    # held here while the process runs, and nowhere else, ever.
+    "aiKey": "", "aiModel": "",
 }
 
 
 def _active_token() -> str:
     """A token typed into the app wins over one set in the environment."""
     return _state["token"] or settings.github_token
+
+
+def _ai_cfg() -> Settings:
+    """Settings as the AI should see them, with anything typed in applied.
+
+    A copy is made rather than the global being edited, so a key entered on the
+    screen can be forgotten again by clearing one value -- and so nothing else
+    in the app can accidentally read it.
+    """
+    return replace(
+        settings,
+        groq_api_key=_state["aiKey"] or settings.groq_api_key,
+        groq_model=_state["aiModel"] or settings.groq_model,
+    )
+
+
+def _ai_facts() -> dict:
+    """What the screen may know about the AI -- never the key itself."""
+    cfg = _ai_cfg()
+    return {
+        "available": cfg.ai_available(),
+        "model": cfg.groq_model,
+        "modelLabel": model_label(cfg.groq_model),
+        # Where the key came from, so "it stopped working" has an explanation.
+        "keyFrom": "entered" if _state["aiKey"] else ("environment" if settings.groq_api_key else ""),
+        "models": list(AI_MODELS),
+        # A key typed in here dies with the machine, and while it lives anyone
+        # else using this copy of Ripple is spending it. The screen says both.
+        "keyLasts": not settings.serverless,
+    }
 
 
 def _install(idx: RepoIndex, source: str, conn: "ghub.Connection | None") -> None:
@@ -129,6 +164,11 @@ class PasteIn(BaseModel):
     useAI: bool = True
 
 
+class AIKeyIn(BaseModel):
+    key: str = ""            # blank means keep whatever is already set
+    model: str = ""          # blank means keep the model already selected
+
+
 class ConnectIn(BaseModel):
     repo: str = ""          # owner/repository, or the address pasted from GitHub
     branch: str = ""        # blank means the repository's default branch
@@ -206,7 +246,7 @@ def health() -> dict:
         "catalog": {"tables": len(cat.tables), "columns": sum(len(v) for v in cat.tables.values())},
         "sqlDialect": settings.sql_dialect or "generic",
         "maxHops": settings.max_hops,
-        "ai": {"available": settings.ai_available(), "model": settings.groq_model},
+        "ai": _ai_facts(),
     }
 
 
@@ -218,7 +258,47 @@ def catalog() -> dict:
 
 @app.post("/api/ai/check")
 def ai_check() -> dict:
-    return ai.check_key(settings)
+    """Really call the model that is really selected, and say which one.
+
+    A key that is present is not the same as a key that works, and a key that
+    works with one model can be refused by another. The only honest check is
+    the round trip.
+    """
+    return ai.check_key(_ai_cfg())
+
+
+@app.post("/api/ai/connect")
+def ai_connect(payload: "AIKeyIn") -> dict:
+    """Turn the AI on from the screen, without touching the environment.
+
+    The key is held in this process and nowhere else: not written to disk, not
+    logged, and not returned by this or any other route.
+    """
+    model = (payload.model or "").strip()
+    if model and model not in {m["id"] for m in AI_MODELS}:
+        raise HTTPException(status_code=400, detail="That is not a model Ripple offers.")
+    key = (payload.key or "").strip()
+    if not key and not settings.groq_api_key:
+        raise HTTPException(status_code=400, detail="Enter a Groq API key to turn the AI on.")
+    if key:
+        _state["aiKey"] = key
+    if model:
+        _state["aiModel"] = model
+    # Prove it works now rather than at the worst moment. A key the model
+    # provider refuses is reported straight back, and is not kept.
+    result = ai.check_key(_ai_cfg())
+    if not result.get("ok") and key:
+        _state["aiKey"] = ""
+        raise HTTPException(status_code=502, detail=result.get("reason", "The key did not work."))
+    return health()
+
+
+@app.post("/api/ai/forget")
+def ai_forget() -> dict:
+    """Forget a key typed into the screen. One set in the environment stays."""
+    _state["aiKey"] = ""
+    _state["aiModel"] = ""
+    return health()
 
 
 @app.post("/api/reindex")
@@ -268,12 +348,13 @@ def repo_disconnect() -> dict:
 
 def _extract(n: Notification, use_ai: bool) -> dict:
     _, _, cat = repo_state()
+    cfg = _ai_cfg()
     rules = extract_by_rules(n, cat)
-    if not (use_ai and settings.ai_available()):
+    if not (use_ai and cfg.ai_available()):
         rules.setdefault("aiNote", "AI is off - fields were found by matching the repository catalogue.")
         return rules
     try:
-        out = ai.read_email(n.text(), settings)
+        out = ai.read_email(n.text(), cfg)
     except ai.AIUnavailable as exc:
         rules["warnings"] = list(rules.get("warnings", [])) + [
             f"The AI reader was unavailable ({exc}). Fields below were found without it."
@@ -289,7 +370,7 @@ def _extract(n: Notification, use_ai: bool) -> dict:
     if not out.get("upstream"):
         out["upstream"] = rules.get("upstream", [])
     out["warnings"] = list(out.get("warnings") or []) + _unknown_name_warnings(out, cat)
-    out["aiNote"] = f"Read by {settings.groq_model}. Check it before scanning."
+    out["aiNote"] = f"Read by {model_label(cfg.groq_model)}. Check it before scanning."
     return out
 
 
@@ -368,10 +449,11 @@ def scan(payload: ScanIn) -> dict:
 
 @app.post("/api/summary")
 def summary(payload: SummaryIn) -> dict:
+    cfg = _ai_cfg()
     base = narrative.summarise(payload.scan, payload.vals)
     reply = narrative.draft_reply(payload.scan, payload.vals, base)
     out = {"summary": base, "reply": reply}
-    if not (payload.useAI and settings.ai_available()):
+    if not (payload.useAI and cfg.ai_available()):
         return out
     trimmed = {
         "risk": payload.scan.get("risk"),
@@ -393,8 +475,8 @@ def summary(payload: SummaryIn) -> dict:
         "upstream": payload.vals.get("upstream", []),
     }
     try:
-        out["summary"] = {**base, **ai.write_summary(trimmed, settings)}
-        out["reply"] = {**reply, **ai.write_reply({**trimmed, "summary": out["summary"]}, settings)}
+        out["summary"] = {**base, **ai.write_summary(trimmed, cfg)}
+        out["reply"] = {**reply, **ai.write_reply({**trimmed, "summary": out["summary"]}, cfg)}
     except ai.AIUnavailable as exc:
         out["aiNote"] = f"AI unavailable ({exc}). Written without it."
     return out

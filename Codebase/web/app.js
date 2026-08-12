@@ -22,6 +22,7 @@ const S = {
   summary: null,
   reply: null,
   savedId: null,
+  aiMsg: null,        // result of the last AI key action, kept across redraws
   manRows: [{ table: '', attrs: '' }],
   man: { source: '', changeType: '', effectiveDate: '', changeDesc: '', pocName: '', pocEmail: '', pocTeam: '' },
   busy: false,
@@ -148,7 +149,7 @@ function step1(root) {
   if (S.mode === 'email') {
     const ai = S.health?.ai?.available;
     x(root, 'aiState').textContent = ai
-      ? `AI is on — the email is read by ${S.health.ai.model}.`
+      ? `AI is on — the email is read by ${S.health.ai.modelLabel}.`
       : 'AI is off — fields are found by matching the repository catalogue.';
     const drop = $('#drop', root), file = $('#file', root);
     drop.onclick = () => file.click();
@@ -802,7 +803,7 @@ function step6(root) {
   const s = S.summary; if (!s) return;
   const [cls, label] = RISK[S.scan.risk] || RISK.none;
   x(root, 'sub').textContent = s.writtenBy === 'ai'
-    ? `Written by ${S.health.ai.model} from the findings — no code was sent to it.`
+    ? `Written by ${S.health.ai.modelLabel} from the findings — no code was sent to it.`
     : 'Written from the findings without AI.';
 
   const b = x(root, 'body');
@@ -999,25 +1000,104 @@ function settingsView(root) {
     el('span', { className: 'mono', textContent: 'RIPPLE_SQL_DIALECT' }), ', ',
     el('span', { className: 'mono', textContent: 'GROQ_API_KEY' }), '. See the README.'));
 
-  const right = el('div', { className: 'card pad lg' });
-  right.append(el('span', { className: 'lbl', textContent: 'AI (optional)' }));
-  right.append(el('div', { className: 'note ' + (h.ai.available ? 'good' : 'info'), style: 'margin-top:12px' },
-    el('b', { textContent: h.ai.available ? 'A key is set. ' : 'No key set. ' }),
-    h.ai.available
-      ? `The email reader and the summary use ${h.ai.model}. Your source code is never sent to it.`
-      : 'Ripple is running on rules alone. Everything works; the wording is just plainer.'));
-  const btn = el('button', { className: 'ghost', textContent: 'Test the key', style: 'margin-top:14px' });
-  const out = el('div', { style: 'margin-top:12px' });
-  btn.onclick = () => run(async () => {
-    out.innerHTML = '';
-    const res = await api('/api/ai/check', { method: 'POST' });
-    out.append(el('div', { className: 'note ' + (res.ok ? 'good' : 'warn') },
-      res.ok ? `Working — replied using ${res.model}.` : `Not working — ${res.reason}`));
-  });
-  right.append(btn, out);
-
-  grid.append(left, right);
+  grid.append(left, aiCard(h));
   root.append(grid);
+}
+
+/* Turning the AI on from the screen. Same rules as the GitHub token: the key
+   goes to the server, is held in memory only, and never comes back to this
+   page — so this form can show whether one is set, never what it is. */
+function aiCard(h) {
+  const card = el('div', { className: 'card pad lg' });
+  const on = h.ai.available;
+  const fromEnv = h.ai.keyFrom === 'environment';
+
+  card.append(el('span', { className: 'lbl', textContent: 'AI (optional)' }));
+  card.append(el('div', { className: 'note ' + (on ? 'good' : 'info'), style: 'margin-top:12px' },
+    el('b', { textContent: on ? `AI is on — ${h.ai.modelLabel}. ` : 'No key set. ' }),
+    on
+      ? (fromEnv
+        ? 'The key came from this server’s settings, so it survives restarts. Only the notification text and the findings are sent — never your source code.'
+        : 'The key was typed in here. Only the notification text and the findings are sent — never your source code.')
+      : 'Ripple is running on rules alone. Everything works; the wording is just plainer.'));
+
+  // Model first: it applies whether the key is typed in or already set.
+  card.append(el('label', { className: 'lbl', style: 'display:block;margin:18px 0 7px',
+    textContent: 'Model' }));
+  const sel = el('select', { className: 'statussel', style: 'width:100%;padding:11px 12px' });
+  (h.ai.models || []).forEach(m => sel.append(el('option', {
+    value: m.id, textContent: m.label, selected: m.id === h.ai.model })));
+  // The description goes underneath rather than inside the dropdown, which
+  // would cut it off at whatever width the box happens to be.
+  const why = el('div', { className: 'small faint', style: 'margin-top:6px' });
+  const showWhy = () => {
+    const m = (h.ai.models || []).find(x => x.id === sel.value);
+    why.textContent = m ? m.note : '';
+  };
+  sel.onchange = showWhy;
+  showWhy();
+  card.append(sel, why);
+
+  card.append(el('label', { className: 'lbl', style: 'display:block;margin:18px 0 7px',
+    textContent: fromEnv ? 'Use a different key instead' : 'Groq API key' }));
+  const key = el('input', { type: 'password', autocomplete: 'off', placeholder: 'gsk_…',
+    style: 'padding:12px 14px' });
+  card.append(key);
+  card.append(el('div', { className: 'small faint', style: 'margin-top:6px' },
+    'Create one free at console.groq.com. Ripple only ever reads with it.'));
+
+  // The answer is kept in state, not written straight into the page. Every
+  // action here ends in a redraw, which would throw away anything appended to
+  // this card -- which is why pressing a button used to look like it did
+  // nothing at all.
+  const out = el('div', { style: 'margin-top:14px' });
+  if (S.aiMsg) {
+    out.append(el('div', { className: 'note ' + (S.aiMsg.ok ? 'good' : 'warn'), textContent: S.aiMsg.text }));
+  }
+  const say = (ok, text) => { S.aiMsg = { ok, text }; };
+
+  const save = el('button', { className: 'pri', textContent: on ? 'Save and re-test' : 'Turn the AI on' });
+  save.onclick = () => run(async () => {
+    S.aiMsg = null;
+    try {
+      S.health = await api('/api/ai/connect', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key.value, model: sel.value }),
+      });
+      key.value = '';                    // the server has it; keep no copy here
+      say(true, `AI is on. The model answered, using ${S.health.ai.modelLabel}.`);
+    } catch (e) { say(false, 'That did not work — ' + e.message); }
+  });
+
+  const test = el('button', { className: 'ghost', textContent: 'Test the key' });
+  test.onclick = () => run(async () => {
+    const res = await api('/api/ai/check', { method: 'POST' });
+    say(res.ok, res.ok ? `Working — the model replied, using ${res.model}.` : `Not working — ${res.reason}`);
+  });
+
+  const row = el('div', { className: 'foot', style: 'margin-top:16px' }, save, test);
+  if (on && h.ai.keyFrom === 'entered') {
+    const forget = el('button', { className: 'ghost', textContent: 'Forget the key' });
+    forget.onclick = () => run(async () => {
+      S.health = await api('/api/ai/forget', { method: 'POST' });
+      S.aiMsg = { ok: true, text: 'Key forgotten. Ripple is back to rules alone.' };
+    });
+    row.append(forget);
+  }
+  card.append(row, out);
+
+  // On a host that is replaced constantly, a typed key does not last -- and
+  // while it does last, every other visitor to this copy is spending it.
+  if (h.ai.keyLasts === false) {
+    card.append(el('div', { className: 'note warn', style: 'margin-top:18px' },
+      el('b', { textContent: 'A key typed in here is shared, and temporary. ' }),
+      'This copy of Ripple runs on a serverless host that anyone with the address can open. '
+      + 'While your key is loaded, other people using this site will be spending it, and it '
+      + 'disappears whenever the machine behind the site is replaced — often within minutes. '
+      + 'For anything beyond a demonstration, run Ripple on your own machine, or set the key '
+      + 'as an environment variable on the host so it is at least not typed into a public page.'));
+  }
+  return card;
 }
 
 // ── plumbing ──────────────────────────────────────────────────────────────
