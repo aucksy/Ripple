@@ -226,7 +226,14 @@ and redeploys every time you push to `main`.
 1. At <https://vercel.com> choose *Add New → Project* and pick this repository.
 2. Set the **Root Directory** to `Codebase`. This is the only setting that must
    be changed by hand — everything else is detected. Leave the build and output
-   settings empty.
+   settings empty; the install command should read `pip install -r
+   requirements.txt` on its own.
+
+   Vercel finds the app on its own because `api/index.py` is one of the
+   entrypoints it looks in and exports a variable called `app`. Because that is
+   a whole FastAPI application rather than a lone function, Vercel sends **every**
+   request to it and lets Ripple's own routing decide — so no redirect or rewrite
+   rules are needed, and none are configured.
 3. Under *Environment Variables*, add whichever of these you want:
    * `GROQ_API_KEY` — turns the AI on. Leave it out and Ripple still works;
      every screen simply says the rules wrote it rather than a model.
@@ -282,8 +289,9 @@ the GitHub tests build the archive GitHub would send and feed it in directly.
 ```
 run.py              start it locally
 api/index.py        start it on Vercel (same app)
-vercel.json         how Vercel runs it: one function, every request through it
+vercel.json         how long the hosted copy may run, and how assets are cached
 .vercelignore       what a hosted copy does not need
+.python-version     pins Python 3.12, so a host cannot change it underneath us
 ripple/
   config.py         every setting, in one place
   api.py            the web routes - deliberately thin

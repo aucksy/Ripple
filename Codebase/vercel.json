@@ -2,11 +2,21 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.py": {
-      "maxDuration": 60,
-      "includeFiles": "{ripple/**,web/**,mockrepo/**}"
+      "maxDuration": 60
     }
   },
-  "routes": [
-    { "src": "/(.*)", "dest": "/api/index" }
+  "headers": [
+    {
+      "source": "/static/fonts/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=2592000" }
+      ]
+    },
+    {
+      "source": "/static/(app.js|styles.css)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, must-revalidate" }
+      ]
+    }
   ]
 }
