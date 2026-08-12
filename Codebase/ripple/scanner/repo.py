@@ -18,7 +18,9 @@ LANG_BY_EXT = {
     ".sql": "SQL",
     ".ddl": "SQL",
     ".hql": "Hive SQL",
-    ".py": "Spark SQL",
+    # "Python", not "Spark SQL": a .py file here might be a Spark job, a
+    # BigQuery job or neither, and guessing wrong is visible on screen.
+    ".py": "Python",
     ".scala": "Scala",
     ".java": "Java",
     ".sh": "Shell",
@@ -179,14 +181,29 @@ _WRITE_TARGET = re.compile(
     re.IGNORECASE,
 )
 
+# The same problem in the BigQuery world. A Python job there runs a bare SELECT
+# and names its destination in the job settings, not in the SQL -- so without
+# this the chain stops at the job, exactly as it would for Spark. Project ids
+# may contain hyphens, hence the wider character set.
+_BQ_WRITE_TARGET = re.compile(
+    r"""(?:destination(?:_table)?\s*=\s*["']([A-Za-z0-9_.\-]+)["']"""
+    r"""|to_gbq\s*\(\s*["']([A-Za-z0-9_.\-]+)["'])""",
+    re.IGNORECASE,
+)
+
 
 def written_tables(f: SourceFile) -> list[str]:
     """Tables a program file writes to, in the order they appear."""
     if f.abs_path.suffix.lower() not in EMBEDDED_SQL_EXTS:
         return []
+    hits: list[tuple[int, str]] = []
+    for pat in (_WRITE_TARGET, _BQ_WRITE_TARGET):
+        for m in pat.finditer(f.text):
+            raw = next((g for g in m.groups() if g), "")
+            if raw:
+                hits.append((m.start(), raw.split(".")[-1]))
     out: list[str] = []
-    for m in _WRITE_TARGET.finditer(f.text):
-        name = m.group(1).split(".")[-1]
+    for _, name in sorted(hits):          # order they appear in the file
         if name not in out:
             out.append(name)
     return out

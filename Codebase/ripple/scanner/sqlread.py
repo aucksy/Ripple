@@ -101,7 +101,11 @@ def _table_name(node: exp.Expression | None) -> str | None:
 
 
 def _target_of(stmt: exp.Expression) -> str | None:
-    if isinstance(stmt, (exp.Create, exp.Insert)):
+    # MERGE matters as much as CREATE and INSERT. On BigQuery, Snowflake and
+    # Databricks it is the usual way a production table is loaded -- without it
+    # the chain stops one step short of the table anyone actually reads, and
+    # Ripple reports "no production impact" for a change that plainly has some.
+    if isinstance(stmt, (exp.Create, exp.Insert, exp.Merge)):
         return _table_name(stmt.this)
     return None
 

@@ -138,7 +138,7 @@ All optional. Set them as environment variables before starting.
 |---|---|---|
 | `RIPPLE_REPO` | `./mockrepo` | The folder to scan. Point at a real checkout. |
 | `RIPPLE_REPO_LABEL` | `mockrepo` | The name shown in the interface. |
-| `RIPPLE_SQL_DIALECT` | generic | `oracle`, `teradata`, `snowflake`, `hive`, `spark`, `postgres`… **Setting this correctly matters more than anything else here.** |
+| `RIPPLE_SQL_DIALECT` | generic | `bigquery`, `oracle`, `teradata`, `snowflake`, `hive`, `spark`, `postgres`, `mysql`, `tsql`, `redshift`, `databricks`, `presto`, `trino`, `duckdb`, `sqlite`. **Setting this correctly matters more than anything else here** — see below. |
 | `RIPPLE_MAX_HOPS` | `4` | How many renames deep to follow a column. |
 | `RIPPLE_REPO_URL_TEMPLATE` | empty | Link findings to your Git host, when reading a folder. Use `{path}` and `{line}`. On GitHub this is worked out for you. |
 | `GROQ_API_KEY` | empty | Turns the AI on. Without it everything still works. |
@@ -165,7 +165,31 @@ set RIPPLE_SQL_DIALECT=teradata && set GROQ_API_KEY=your-key-here && .venv\Scrip
 
 The **Settings & checks** screen inside Ripple shows what it is connected to and
 has a *Test the key* button, so a bad key is obvious immediately rather than at
-the worst moment.
+the worst moment. It also shows which dialect is in use, because that one is
+easy to leave wrong.
+
+---
+
+## Why the SQL dialect is the setting that matters
+
+Leaving it unset does not degrade the answer politely. It can invert it.
+
+A small BigQuery pipeline is kept in the tests. It uses nothing exotic — a
+`QUALIFY`, a `SELECT * EXCEPT`, an `UNNEST`, a `MERGE`, and table names written
+the BigQuery way with backticks and a project prefix. Run against it:
+
+| | dialect unset | `RIPPLE_SQL_DIALECT=bigquery` |
+|---|---|---|
+| Files parsed | 2 of 5 | 5 of 5 |
+| Tables learned | 0 | 3 |
+| Production tables affected | 0 | 1 |
+| Verdict | **No impact** | **Medium risk, 2 breaking usages** |
+
+The unset run is not a smaller answer. It is the opposite answer, and it is
+wrong. Ripple does report the files it could not read, so the evidence is on
+screen — but a "no impact" headline is what gets remembered.
+
+Set it once, and check the Settings screen agrees.
 
 ---
 
@@ -243,6 +267,10 @@ and redeploys every time you push to `main`.
      not last.
    * `RIPPLE_REPO_SOURCE=github` and `RIPPLE_GITHUB_REPO=owner/repository` — to
      connect to that repository on start-up instead of reading the sample folder.
+   * `RIPPLE_SQL_DIALECT` — set this to match the repository you point it at
+     (`bigquery`, `teradata`, `oracle`…). Leave it out and the answer can be
+     wrong rather than merely vaguer; see *Why the SQL dialect is the setting
+     that matters* above.
 4. Deploy.
 
 ### What a hosted copy does differently
@@ -274,13 +302,15 @@ server instead; nothing in the code has to change.
 .venv\Scripts\python -m pytest tests -q
 ```
 
-85 tests. Most of them exist to prove Ripple is *honest* rather than that it is
+93 tests. Most of them exist to prove Ripple is *honest* rather than that it is
 clever — that unreadable files are reported, that a clean result still says
 where the name appeared, that a generic word like `STATUS` does not produce a
 page of false hits, that an access token never comes back out of the app in any
 response, and that a hosted copy admits saved history will not survive instead
-of letting the word "Saved" stand on its own. None of them touch the network:
-the GitHub tests build the archive GitHub would send and feed it in directly.
+of letting the word "Saved" stand on its own, and that a BigQuery pipeline read
+as generic SQL is caught rather than quietly reported as harmless. None of them
+touch the network: the GitHub tests build the archive GitHub would send and feed
+it in directly.
 
 ---
 
@@ -308,7 +338,7 @@ ripple/
 web/                the interface - plain HTML, CSS and JavaScript, no build step
 mockrepo/           the synthetic pipeline being scanned
 samples/            example notification emails
-tests/              the test suite (test_hosting.py covers the hosted copy)
+tests/              the test suite (hosting and BigQuery have their own files)
 ```
 
 There is no build step and no framework anywhere in `web/`. That is on purpose:
@@ -328,7 +358,12 @@ certain than it is.
   listed as unreadable, but they are a real hole.
 - **Stored procedure bodies are not parsed.**
 - **`SELECT *` hides which columns flow onward.**
-- **A Spark job writing to several tables** cannot be attributed reliably, so
-  lineage stops there — and says so.
+- **A job writing to several tables** cannot be attributed reliably, so lineage
+  stops there — and says so.
+- **A chain ends at the first production table it reaches.** If one production
+  table feeds another, the second is not reported. That is deliberate: the first
+  one is the thing an engineer has to go and fix.
 - **Columns are matched by name.** Two different tables using the same column
   name can produce a finding that needs a human to dismiss.
+- **The SQL dialect must be set correctly**, and it is the one setting that can
+  turn a real finding into a silent "no impact". See below.
