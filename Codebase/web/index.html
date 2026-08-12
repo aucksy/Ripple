@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ripple — upstream change impact analysis</title>
+<link rel="stylesheet" href="/static/fonts/fonts.css">
 <link rel="stylesheet" href="/static/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='44' fill='none' stroke='%23006FCF' stroke-width='8' opacity='.4'/><circle cx='50' cy='50' r='28' fill='none' stroke='%23006FCF' stroke-width='8' opacity='.75'/><circle cx='50' cy='50' r='13' fill='%2300175A'/></svg>">
 </head>
@@ -11,17 +12,16 @@
 
 <nav class="side">
   <div class="brand">
-    <svg viewBox="0 0 100 100">
-      <circle cx="50" cy="50" r="44" fill="none" stroke="#006FCF" stroke-width="8" opacity=".4"/>
-      <circle cx="50" cy="50" r="28" fill="none" stroke="#006FCF" stroke-width="8" opacity=".75"/>
-      <circle cx="50" cy="50" r="13" fill="#fff"/>
-    </svg>
-    <div><b>Ripple</b><span>Upstream change impact</span></div>
+    <span class="mark"><i></i><i></i><i></i><i class="pip"></i></span>
+    <div class="btext"><b>Ripple</b><span>Upstream change impact analysis</span></div>
   </div>
+  <div class="sep"></div>
   <div class="steps" id="steps"></div>
-  <div class="spacer"></div>
-  <button class="navbtn" id="navHistory">Past analyses</button>
-  <button class="navbtn" id="navSettings">Settings &amp; checks</button>
+  <div class="sep mid"></div>
+  <div class="navs">
+    <button class="navbtn" id="navHistory">Past analyses</button>
+    <button class="navbtn" id="navSettings">Settings &amp; checks</button>
+  </div>
   <div class="status" id="status"></div>
 </nav>
 
@@ -38,7 +38,7 @@
   <div class="head">
     <div><h2 data-x="title">New impact notification</h2><p data-x="sub"></p></div>
     <div class="right">
-      <span class="lbl">Input mode</span>
+      <span class="lbl faint">Input mode</span>
       <button class="pill" data-mode="email">From email</button>
       <button class="pill" data-mode="manual">Enter manually</button>
     </div>
@@ -53,24 +53,28 @@
           <span class="muted small">Outlook <span class="mono">.msg</span>, <span class="mono">.eml</span> or a plain text file — or click to choose</span>
           <input type="file" id="file" accept=".msg,.eml,.txt" hidden>
         </div>
-        <div class="card pad" style="margin-top:18px">
-          <span class="lbl">Or paste the email text</span>
-          <textarea id="paste" rows="7" placeholder="Paste the notification here…" style="margin-top:8px"></textarea>
-          <div class="foot"><button class="pri" id="doPaste">Read this text</button>
-            <span class="small muted" data-x="aiState"></span></div>
+        <div class="card clip" style="margin-top:24px">
+          <div class="chead"><b>Or paste the email text</b></div>
+          <div class="pad lg">
+            <textarea id="paste" rows="8" placeholder="Paste the notification here…"></textarea>
+          </div>
+          <div class="chead" style="border-bottom:none;border-top:1px solid var(--line3)">
+            <button class="pri" id="doPaste">Read this text</button>
+            <span class="small faint" data-x="aiState"></span>
+          </div>
         </div>
       </div>
-      <div>
+      <div class="rail">
         <div class="card pad">
           <span class="lbl">What Ripple does</span>
-          <ul class="ticks">
+          <ol class="nums">
             <li>Reads the tables, attributes, date and contact out of the notice</li>
             <li>Searches every file in the connected repository</li>
             <li>Follows each rename to the production table it feeds</li>
             <li>Says plainly what breaks — and what it could not read</li>
-          </ul>
+          </ol>
         </div>
-        <div class="note info" style="margin-top:16px">
+        <div class="note info">
           <b>Nothing is scanned until you confirm.</b> Whatever is read out of the email
           is shown to you first, and every field is editable.
         </div>
@@ -81,32 +85,32 @@
   <!-- manual -->
   <div data-x="manualMode" class="hide">
     <div class="grid2">
-      <div class="card">
-        <div class="pad" style="border-bottom:1px solid var(--line);display:flex;align-items:center;background:#FAFCFE">
+      <div class="card clip">
+        <div class="chead">
           <b>Upstream tables &amp; attributes</b>
-          <span class="small muted" style="margin-left:auto" data-x="manCount"></span>
+          <span class="badge grey" style="margin-left:auto" data-x="manCount"></span>
         </div>
         <div data-x="manRows"></div>
-        <div class="pad" style="border-top:1px solid #F0F4F9;display:flex;align-items:center;gap:12px">
+        <div class="pad" style="border-top:1px solid var(--hair);display:flex;align-items:center;gap:12px">
           <button class="ghost sm" data-x="addRow">+ Add another table</button>
-          <span class="small muted">Add every upstream table named in the notice.</span>
+          <span class="small faint">Add every upstream table named in the notice.</span>
         </div>
       </div>
-      <div>
+      <div class="rail">
         <div class="card pad">
           <span class="lbl">Change details — all optional</span>
           <div data-x="manFields"></div>
         </div>
-        <div class="note good" style="margin-top:16px">
+        <div class="note good">
           <b>No AI used in this mode.</b> Ripple scans on exactly what you type.
           Nothing is sent to any model.
         </div>
       </div>
     </div>
-    <div class="card pad foot" style="margin-top:20px">
+    <div class="card pad lg foot" style="margin-top:24px">
       <button class="pri" data-x="manStart">Run impact analysis</button>
       <button class="ghost" data-x="manDemo">Fill with an example</button>
-      <span class="small muted" data-x="manHint"></span>
+      <span class="small faint" data-x="manHint"></span>
     </div>
   </div>
 </template>
@@ -115,38 +119,40 @@
 <template id="t-step2">
   <div class="head">
     <div><h2 data-x="title"></h2><p data-x="sub"></p></div>
-    <div class="right"><span class="badge grey" data-x="by"></span></div>
+    <div class="right"><span class="muted" style="font-size:13px;font-weight:600" data-x="by"></span></div>
   </div>
   <div data-x="warnings"></div>
-  <div class="stats" data-x="meta"></div>
-  <div class="card pad">
+  <div class="metagrid" data-x="meta"></div>
+  <div class="card pad lg">
     <span class="lbl">Subject &amp; what is changing</span>
     <div class="field"><input type="text" data-x="subject"></div>
     <div class="field"><textarea rows="2" data-x="desc"></textarea></div>
   </div>
-  <div class="card" style="margin-top:16px">
-    <div class="pad" style="border-bottom:1px solid var(--line);display:flex;align-items:center;background:#FAFCFE">
-      <b>Upstream tables &amp; mapped attributes</b>
-      <span class="small muted" style="margin-left:auto" data-x="count"></span>
+  <div class="card clip" style="margin-top:16px">
+    <div class="chead">
+      <span class="lbl">Upstream tables &amp; mapped attributes</span>
+      <span class="badge grey" style="margin-left:auto" data-x="count"></span>
     </div>
     <div data-x="rows"></div>
-    <div class="pad" style="border-top:1px solid #F0F4F9">
+    <div class="pad" style="border-top:1px solid var(--hair)">
       <button class="ghost sm" data-x="addRow">+ Add another table</button>
     </div>
   </div>
   <div class="foot"><button class="pri" data-x="next">Continue to repository</button>
-    <span class="small muted">Correct anything wrong before scanning — the scan uses exactly this.</span></div>
+    <span class="small faint">Correct anything wrong before scanning — the scan uses exactly this.</span></div>
 </template>
 
 <!-- ══════════════ step 3 ══════════════ -->
 <template id="t-step3">
   <div class="head"><div><h2>Connected repository</h2>
     <p>This is the code Ripple will search. It is read, never written to.</p></div></div>
-  <div class="grid2">
-    <div class="card pad" data-x="repo"></div>
-    <div>
+  <div class="grid2 even">
+    <div class="card pad lg" data-x="repo"></div>
+    <div class="rail">
+      <div class="card pad" data-x="kinds"></div>
+      <div data-x="ready"></div>
       <div class="card pad"><span class="lbl">What was understood</span><div data-x="cat"></div></div>
-      <div data-x="gaps" style="margin-top:16px"></div>
+      <div data-x="gaps"></div>
     </div>
   </div>
   <div class="foot"><button class="pri" data-x="next">Run impact analysis</button>
@@ -160,7 +166,7 @@
     <div class="right" data-x="risk"></div></div>
   <div data-x="progress"></div>
   <div class="stats" data-x="stats"></div>
-  <div data-x="groups"></div>
+  <div class="groups" data-x="groups"></div>
   <div data-x="gaps"></div>
   <div class="foot"><button class="pri" data-x="next">Continue to dependency map</button></div>
 </template>
@@ -169,19 +175,18 @@
 <template id="t-step5">
   <div class="head"><div><h2>Dependency map</h2>
     <p>Every branch from the changed attribute to the production tables it feeds.</p></div></div>
-  <div data-x="tabs" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px"></div>
+  <div data-x="tabs" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:18px"></div>
   <div data-x="map"></div>
   <div class="foot"><button class="pri" data-x="next">Continue to summary</button></div>
 </template>
 
 <!-- ══════════════ step 6 ══════════════ -->
 <template id="t-step6">
-  <div class="head"><div><h2>Summary</h2><p data-x="sub"></p></div>
-    <div class="right" data-x="risk"></div></div>
+  <div class="head"><div><h2>Summary</h2><p data-x="sub"></p></div></div>
   <div data-x="body"></div>
   <div class="foot"><button class="pri" data-x="next">Continue to reply</button>
     <button class="ghost" data-x="save">Save to history</button>
-    <span class="small muted" data-x="saved"></span></div>
+    <span class="small faint" data-x="saved"></span></div>
 </template>
 
 <!-- ══════════════ step 7 ══════════════ -->
@@ -189,19 +194,24 @@
   <div class="head"><div><h2>Reply to the upstream team</h2>
     <p>Drafted from the findings. Edit it, then copy it into Outlook.</p></div></div>
   <div class="grid2">
-    <div class="card pad">
-      <span class="lbl">Subject</span>
-      <div class="field"><input type="text" data-x="subject"></div>
-      <div class="field"><span class="lbl">Body</span>
-        <textarea rows="18" data-x="body" style="margin-top:6px"></textarea></div>
-      <div class="foot"><button class="pri" data-x="copy">Copy reply</button>
+    <div class="card clip">
+      <div class="chead" data-x="to"></div>
+      <div class="chead" style="background:#fff">
+        <span class="small" style="font-weight:700;color:var(--mute);flex-shrink:0">Subject</span>
+        <input type="text" class="bare" data-x="subject">
+      </div>
+      <textarea class="bare" rows="15" data-x="body"
+        style="display:block;padding:18px 22px;font-size:14px;line-height:1.65"></textarea>
+      <div class="chead" style="border-bottom:none;border-top:1px solid var(--line3)">
+        <button class="pri" data-x="copy">Copy reply</button>
         <button class="ghost" data-x="restart">Start a new analysis</button>
-        <span class="small muted" data-x="copied"></span></div>
+        <span class="small faint" data-x="copied">Drafted from the impact analysis — edit freely before copying.</span>
+      </div>
     </div>
-    <div>
-      <div class="card pad"><span class="lbl">Next actions</span><ol class="acts" data-x="acts"></ol></div>
-      <div class="card pad" style="margin-top:16px"><span class="lbl">Send to</span>
-        <div data-x="poc" style="margin-top:8px"></div></div>
+    <div class="card clip">
+      <div class="chead"><b>Next actions</b><span data-x="risk" style="margin-left:auto"></span></div>
+      <div class="pad"><ol class="acts" data-x="acts" style="margin-top:0"></ol></div>
+      <div data-x="deadline" style="margin:0 20px 20px"></div>
     </div>
   </div>
 </template>

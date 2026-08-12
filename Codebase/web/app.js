@@ -113,13 +113,13 @@ function renderStatus() {
   if (!h) return;
   const repoOk = h.repo.exists && h.repo.files > 0;
   box.append(
-    el('div', { className: 'row' },
+    el('div', { className: 'srow' },
       el('span', { className: 'dot ' + (repoOk ? 'ok' : 'warn') }),
       el('span', { textContent: repoOk ? `${h.repo.label} · ${h.repo.files} files` : 'No repository found' })),
-    el('div', { className: 'row' },
+    el('div', { className: 'srow' },
       el('span', { className: 'dot ' + (h.ai.available ? 'ok' : 'off') }),
       el('span', { textContent: h.ai.available ? 'AI on' : 'AI off — rules only' })),
-    el('div', { className: 'row' },
+    el('div', { className: 'srow' },
       el('span', { className: 'dot ' + (h.sqlDialect === 'generic' ? 'warn' : 'ok') }),
       el('span', { textContent: `SQL read as ${h.sqlDialect}` })),
   );
@@ -172,17 +172,16 @@ function step1(root) {
   const rows = x(root, 'manRows');
   rows.innerHTML = '';
   S.manRows.forEach((r, i) => {
-    const wrap = el('div', { className: 'pad' });
-    wrap.style.cssText = 'display:flex;gap:16px;align-items:flex-end' + (i ? ';border-top:1px solid #F0F4F9' : '');
-    const t = el('input', { type: 'text', className: 'mono', value: r.table, placeholder: 'CUSTOMER_DEMOGRAPHICS' });
+    const wrap = el('div', { style: 'display:flex;gap:20px;align-items:flex-end;padding:16px 20px' + (i ? ';border-top:1px solid var(--hair)' : '') });
+    const t = el('input', { type: 'text', className: 'mono', value: r.table, placeholder: 'CUSTOMER_DEMOGRAPHICS', style: 'margin-top:6px' });
     t.oninput = () => { r.table = t.value; updateManHint(root); };
-    const a = el('input', { type: 'text', className: 'mono', value: r.attrs, placeholder: 'MARKET_CODE, MARKET_NAME' });
+    const a = el('input', { type: 'text', className: 'mono', value: r.attrs, placeholder: 'MARKET_CODE, MARKET_NAME', style: 'margin-top:6px' });
     a.oninput = () => { r.attrs = a.value; updateManHint(root); };
     wrap.append(
-      el('div', { style: 'flex:1;min-width:0' }, el('span', { className: 'lbl', textContent: 'Upstream table name' }), t),
-      el('div', { style: 'flex:1;min-width:0' }, el('span', { className: 'lbl', textContent: 'Attributes — comma separated' }), a));
+      el('div', { style: 'flex:1;min-width:0' }, el('span', { className: 'lbl faint', textContent: 'Upstream table name' }), t),
+      el('div', { style: 'flex:1;min-width:0' }, el('span', { className: 'lbl faint', textContent: 'Attributes — comma separated' }), a));
     if (S.manRows.length > 1) {
-      const rm = el('button', { className: 'ghost sm', textContent: 'Remove' });
+      const rm = el('button', { className: 'danger', textContent: 'Remove' });
       rm.onclick = () => { S.manRows.splice(i, 1); render(); };
       wrap.append(rm);
     }
@@ -193,9 +192,10 @@ function step1(root) {
   const fields = x(root, 'manFields');
   fields.innerHTML = '';
   MAN_FIELDS.forEach(([key, label, hint]) => {
-    const inp = el('input', { type: 'text', value: S.man[key], placeholder: hint });
+    const inp = el('input', { type: 'text', value: S.man[key], placeholder: hint,
+      style: 'margin-top:7px;font-size:12.5px;font-weight:400;color:var(--mute);padding:7px 11px' });
     inp.oninput = () => { S.man[key] = inp.value; };
-    fields.append(el('div', { className: 'field' }, el('span', { className: 'lbl', textContent: label }), inp));
+    fields.append(el('div', { className: 'field' }, el('span', { className: 'lbl faint', textContent: label }), inp));
   });
 
   x(root, 'manDemo').onclick = () => {
@@ -292,19 +292,19 @@ function step2(root) {
     const card = el('div', { className: 'stat' });
     card.append(el('span', { className: 'lbl', textContent: label }));
     if (type === 'select') {
-      const sel = el('select', { style: 'margin-top:7px' });
+      const sel = el('select', { style: 'margin-top:8px' });
       CHANGE_KINDS.forEach(([k, l]) => sel.append(el('option', { value: k, textContent: l, selected: k === v.changeKind })));
       sel.onchange = () => { v.changeKind = sel.value; v.changeType = sel.selectedOptions[0].textContent; };
       card.append(sel);
     } else {
-      const inp = el('input', { type: type === 'date' ? 'date' : 'text', value: v[key] || '', style: 'margin-top:7px' });
+      const inp = el('input', { type: type === 'date' ? 'date' : 'text', value: v[key] || '', style: 'margin-top:8px' });
       inp.oninput = () => { v[key] = inp.value; };
       card.append(inp);
       if (key === 'effectiveDate' && dl !== null) {
-        card.append(el('span', { className: 'badge ' + (dl <= 21 ? 'amber' : 'blue'),
+        card.append(el('span', { className: 'badge sm ' + (dl <= 21 ? 'amber' : 'blue'),
           textContent: dl < 0 ? 'date has passed' : `${dl} day${dl === 1 ? '' : 's'} left`, style: 'margin-top:8px' }));
       }
-      if (key === 'pocName' && v.pocEmail) card.append(el('div', { className: 'small muted', textContent: v.pocEmail, style: 'margin-top:5px' }));
+      if (key === 'pocName' && v.pocEmail) card.append(el('div', { className: 'small muted', textContent: v.pocEmail, style: 'margin-top:5px;overflow-wrap:break-word' }));
     }
     meta.append(card);
   });
@@ -323,17 +323,16 @@ function renderUpstreamRows(root, v) {
   const attrs = v.upstream.reduce((a, u) => a + (u.attrs || []).length, 0);
   x(root, 'count').textContent = `${tables} table${tables === 1 ? '' : 's'} · ${attrs} attribute${attrs === 1 ? '' : 's'}`;
   v.upstream.forEach((u, i) => {
-    const wrap = el('div', { className: 'pad' });
-    wrap.style.cssText = 'display:flex;gap:16px;align-items:flex-end' + (i ? ';border-top:1px solid #F0F4F9' : '');
-    const t = el('input', { type: 'text', className: 'mono', value: u.table });
+    const wrap = el('div', { style: 'display:flex;gap:24px;align-items:flex-end;padding:16px 20px;animation:fadeUp .3s ease' + (i ? ';border-top:1px solid var(--hair)' : '') });
+    const t = el('input', { type: 'text', className: 'mono', value: u.table, style: 'margin-top:6px' });
     t.oninput = () => { u.table = t.value; };
-    const a = el('input', { type: 'text', className: 'mono', value: (u.attrs || []).join(', ') });
+    const a = el('input', { type: 'text', className: 'mono', value: (u.attrs || []).join(', '), style: 'margin-top:6px' });
     a.oninput = () => { u.attrs = a.value.split(',').map(s => s.trim()).filter(Boolean); };
-    const rm = el('button', { className: 'ghost sm', textContent: 'Remove' });
+    const rm = el('button', { className: 'danger', textContent: 'Remove' });
     rm.onclick = () => { v.upstream.splice(i, 1); render(); };
     wrap.append(
-      el('div', { style: 'flex:1;min-width:0' }, el('span', { className: 'lbl', textContent: 'Upstream table' }), t),
-      el('div', { style: 'flex:1;min-width:0' }, el('span', { className: 'lbl', textContent: 'Attributes' }), a), rm);
+      el('div', { style: 'width:288px;flex-shrink:0' }, el('span', { className: 'lbl faint', textContent: 'Upstream table name' }), t),
+      el('div', { style: 'flex:1;min-width:0' }, el('span', { className: 'lbl faint', textContent: 'Upstream attributes name' }), a), rm);
     box.append(wrap);
   });
   if (!v.upstream.length) box.append(el('div', { className: 'pad muted', textContent: 'Nothing to scan yet — add a table below.' }));
@@ -345,8 +344,8 @@ function step3(root) {
   const r = x(root, 'repo'); r.innerHTML = '';
   if (!h) return;
   r.append(el('span', { className: 'lbl', textContent: 'Repository' }));
-  r.append(el('div', { className: 'mono', textContent: h.repo.label, style: 'font-size:16px;font-weight:700;color:var(--blued);margin-top:6px' }));
-  r.append(el('div', { className: 'small muted', textContent: h.repo.path, style: 'margin-top:4px;word-break:break-all' }));
+  r.append(el('div', { className: 'mono', textContent: h.repo.label, style: 'font-size:17px;font-weight:600;color:var(--blued);margin-top:8px' }));
+  r.append(el('div', { className: 'small faint', textContent: h.repo.path, style: 'margin-top:5px;word-break:break-all' }));
   const facts = [
     ['Files indexed', String(h.repo.files)],
     ['Statements understood', String(h.repo.statements)],
@@ -354,20 +353,40 @@ function step3(root) {
     ['SQL read as', h.sqlDialect],
     ['Renames followed', `${h.maxHops} hops deep`],
   ];
-  const t = el('div', { style: 'margin-top:14px' });
-  facts.forEach(([k, val]) => t.append(el('div', { style: 'display:flex;padding:6px 0;border-top:1px solid #F0F4F9' },
+  const t = el('div', { style: 'margin-top:18px' });
+  facts.forEach(([k, val]) => t.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },
     el('span', { className: 'small muted', textContent: k, style: 'flex:1' }),
     el('span', { className: 'small', textContent: val, style: 'font-weight:700' }))));
   r.append(t);
-  r.append(el('div', { className: 'note good', textContent: 'Read only. Ripple never writes to the repository.', style: 'margin-top:14px' }));
+
+  // the same confirmation the prototype shows, on the numbers Ripple really has
+  const ready = x(root, 'ready'); ready.innerHTML = '';
+  const repoOk = h.repo.exists && h.repo.files > 0;
+  ready.append(el('div', { className: 'note ' + (repoOk ? 'good' : 'warn') },
+    el('b', { textContent: repoOk ? `✓ ${h.repo.label} connected` : `Nothing to scan in ${h.repo.label}`, style: 'display:block;font-size:14px' }),
+    el('div', { style: 'margin-top:6px;line-height:1.55' }, 'Branch ',
+      el('span', { className: 'mono', textContent: h.repo.branch }),
+      repoOk ? ` — ${h.repo.files} file${h.repo.files === 1 ? '' : 's'} ready to scan.`
+             : ' — check the repository folder in Settings & checks.')));
+
+  // what kinds of file are in the index — counted, not assumed
+  const kinds = x(root, 'kinds'); kinds.innerHTML = '';
+  if (h.repo.kinds?.length) {
+    kinds.append(el('span', { className: 'lbl', textContent: 'What gets read' }));
+    const chips = el('div', { className: 'chips', style: 'margin-top:12px' });
+    h.repo.kinds.forEach(k => chips.append(el('span', { className: 'chip', textContent: `${k.lang} · ${k.files}` })));
+    kinds.append(chips);
+    kinds.append(el('div', { className: 'small muted', style: 'margin-top:14px;line-height:1.55',
+      textContent: 'Read-only access. Ripple never writes to your repository.' }));
+  }
 
   const c = x(root, 'cat'); c.innerHTML = '';
   api('/api/catalog').then(cat => {
-    c.append(el('div', { style: 'display:flex;gap:22px;margin-top:8px' },
-      el('div', {}, el('div', { className: 'v', textContent: String(cat.tableCount), style: 'font-size:24px;font-weight:800' }),
-        el('div', { className: 'small muted', textContent: 'tables found' })),
-      el('div', {}, el('div', { className: 'v', textContent: String(cat.columnCount), style: 'font-size:24px;font-weight:800' }),
-        el('div', { className: 'small muted', textContent: 'columns found' }))));
+    c.append(el('div', { style: 'display:flex;gap:26px;margin-top:10px' },
+      el('div', {}, el('div', { textContent: String(cat.tableCount), style: 'font-size:26px;font-weight:800;font-variant-numeric:tabular-nums' }),
+        el('div', { className: 'small faint', textContent: 'tables found' })),
+      el('div', {}, el('div', { textContent: String(cat.columnCount), style: 'font-size:26px;font-weight:800;font-variant-numeric:tabular-nums' }),
+        el('div', { className: 'small faint', textContent: 'columns found' }))));
     const g = x(root, 'gaps'); g.innerHTML = '';
     if (cat.gaps.length) {
       const box = el('div', { className: 'note warn' });
@@ -402,9 +421,20 @@ function step4(root) {
   const [cls, label] = RISK[sc.risk] || RISK.none;
   x(root, 'risk').append(el('span', { className: 'badge ' + cls, textContent: label }));
 
-  x(root, 'progress').append(el('div', { className: 'note info' },
-    `Read ${sc.filesScanned} files in ${S.health.repo.label}. `,
-    el('b', { textContent: `${sc.filesMatched} mention the names you confirmed.` })));
+  // What was actually read. Real counts only — the scan has already finished by
+  // the time this renders, so there is nothing to animate.
+  const done = el('div', { className: 'card pad lg' });
+  done.append(el('div', { style: 'display:flex;align-items:center;gap:12px;flex-wrap:wrap' },
+    el('span', { className: 'chip mono', textContent: S.health.repo.label }),
+    el('span', { className: 'chip', textContent: S.health.repo.branch }),
+    el('span', { textContent: sc.stats.filesWithImpact
+      ? `Scan complete — ${sc.stats.filesWithImpact} file${sc.stats.filesWithImpact === 1 ? '' : 's'} with impact`
+      : 'Scan complete — nothing carries these attributes',
+      style: 'margin-left:auto;font-size:13px;font-weight:600;color:var(--blued)' })));
+  done.append(el('div', { style: 'display:flex;align-items:baseline;gap:9px;margin-top:18px;flex-wrap:wrap' },
+    el('span', { className: 'big', textContent: String(sc.filesScanned) }),
+    el('span', { className: 'small muted', textContent: `files read · ${sc.filesMatched} mention the names you confirmed` })));
+  x(root, 'progress').append(done);
 
   const st = sc.stats;
   const cards = [
@@ -423,36 +453,36 @@ function step4(root) {
 
   const groups = x(root, 'groups');
   if (!sc.groups.length) {
-    groups.append(el('div', { className: 'card pad', style: 'text-align:center;padding:44px' },
-      el('div', { style: 'font-size:17px;font-weight:800', textContent: 'No production table depends on these attributes' }),
-      el('div', { className: 'muted', style: 'margin-top:7px',
-        textContent: 'Nothing in this repository carries them through to a table this team publishes.' })));
+    groups.append(el('div', { className: 'note good', style: 'display:flex;align-items:center;gap:14px;padding:18px 22px' },
+      el('span', { textContent: '✓', style: 'width:30px;height:30px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0' }),
+      el('div', {}, el('b', { textContent: 'No production table depends on these attributes', style: 'display:block' }),
+        el('div', { style: 'margin-top:3px', textContent: 'Nothing in this repository carries them through to a table this team publishes.' }))));
   }
   sc.groups.forEach((g, gi) => {
-    const card = el('div', { className: 'card group' });
+    const card = el('div', { className: 'card clip group' });
     const open = S.openGroup === gi;
     const head = el('div', { className: 'ghead' + (open ? ' open' : '') });
     head.append(
-      el('div', {}, el('span', { className: 'lbl', textContent: 'Production table' }),
-        el('div', { className: 'mono', textContent: g.prod, style: 'font-size:15px;font-weight:700;margin-top:2px' })),
-      el('span', { className: 'badge red', textContent: `${g.rows.length} impact${g.rows.length === 1 ? '' : 's'}` }),
+      el('span', { className: 'tag', textContent: 'Production table' }),
+      el('div', { className: 'mono', textContent: g.prod, style: 'font-size:15px;font-weight:600' }),
+      el('span', { className: 'badge grey', textContent: `${g.rows.length} impact${g.rows.length === 1 ? '' : 's'}` }),
       el('span', { className: 'small muted', textContent: g.note }),
       el('span', { className: 'caret', textContent: '›' }));
     head.onclick = () => { S.openGroup = open ? null : gi; S.openRow = null; render(); };
     card.append(head);
     if (open) {
       const hr = el('div', { className: 'rowhead' });
-      ['Table it lands in', 'Attribute', 'Called', 'What the code does', 'Value', ''].forEach(h => hr.append(el('span', { textContent: h })));
+      ['Table it lands in', 'Attribute impacted', 'Alias used', 'What the code does', 'Value', ''].forEach(h => hr.append(el('span', { textContent: h })));
       card.append(hr);
       g.rows.forEach((r, ri) => {
         const key = `${gi}-${ri}`, ro = S.openRow === key;
         const row = el('div', { className: 'row' + (ro ? ' open' : '') });
         row.append(
-          el('span', { className: 'mono', textContent: r.inter, style: 'font-weight:700;font-size:13px' }),
-          el('span', { className: 'mono', textContent: r.attr, style: 'font-size:12.5px;color:var(--blued)' }),
-          el('span', { className: 'mono', textContent: r.alias, style: 'font-size:12.5px' }),
-          el('span', {}, el('span', { className: 'badge ' + (r.breaking ? 'red' : 'grey'), textContent: r.logic })),
-          el('span', { className: 'small muted', textContent: r.mode }),
+          el('span', { className: 'mono', textContent: r.inter, style: 'font-weight:600;font-size:13px;min-width:0;overflow-wrap:break-word' }),
+          el('span', { className: 'mono', textContent: r.attr, style: 'font-size:13px;font-weight:600;color:var(--blued);min-width:0;overflow-wrap:break-word' }),
+          el('span', {}, el('span', { className: 'chip alias', textContent: r.alias })),
+          el('span', {}, el('span', { className: 'badge sm ' + (r.breaking ? 'red' : 'grey'), textContent: r.logic })),
+          el('span', {}, el('span', { className: 'badge sm ' + (r.mode === 'Direct pull' ? 'blue' : 'violet'), textContent: r.mode })),
           el('span', { className: 'caret', textContent: '›' }));
         row.onclick = () => { S.openRow = ro ? null : key; render(); };
         card.append(row);
@@ -468,39 +498,50 @@ function step4(root) {
 
 function detailFor(r) {
   const d = el('div', { className: 'detail' });
-  d.append(el('div', { className: 'note ' + (r.noLocalFix ? 'bad' : r.breaking ? 'warn' : 'info'), style: 'margin-top:14px' },
+  d.append(el('div', { className: 'note ' + (r.noLocalFix ? 'bad' : r.breaking ? 'warn' : 'info') },
     el('b', { textContent: r.noLocalFix ? 'No local fix — the upstream team must supply a replacement. ' : r.breaking ? 'This breaks. ' : 'Changes, but does not break. ' }),
     r.impact));
   const code = el('div', { className: 'code' });
   code.append(el('div', { className: 'f' },
-    el('span', { textContent: r.file, style: 'font-weight:700' }),
-    el('span', { textContent: r.lang, style: 'margin-left:auto' })));
+    el('span', { className: 'name', textContent: r.file }),
+    el('span', { className: 'lang', textContent: r.lang })));
+  const body = el('div', { className: 'body' });
   (r.lines || []).forEach(ln => {
-    code.append(el('div', { className: 'ln' + (ln.hit ? ' hit' : '') },
+    const line = el('div', { className: 'ln' + (ln.hit ? ' hit' : '') },
       el('span', { className: 'n', textContent: String(ln.n) }),
-      el('span', { className: 't', textContent: ln.t })));
-    if (ln.hit) code.append(el('div', { className: 'note', textContent: '▲ ' + ln.hit }));
+      el('span', { className: 't', textContent: ln.t }));
+    // why this line matched, sitting on the line itself rather than under it
+    if (ln.hit) line.append(el('span', { className: 'why', textContent: ln.hit }));
+    body.append(line);
   });
+  code.append(body);
   d.append(code);
   return d;
 }
 
+/* The honest half of the report: what Ripple could NOT account for. Styled to
+   stand out, never to shrink — a clean finding list is only worth what was read. */
 function renderGaps(box, sc) {
   box.innerHTML = '';
   if (sc.unreadable?.length) {
-    const card = el('div', { className: 'card pad', style: 'margin-top:18px;border-color:var(--amberln);background:var(--amberbg)' });
-    card.append(el('b', { textContent: `${sc.unreadable.length} file${sc.unreadable.length === 1 ? '' : 's'} Ripple could not read — check these by hand` }));
-    card.append(el('div', { className: 'small', style: 'margin-top:5px;color:var(--amber)',
-      textContent: 'A clean result is only as good as what could be read. These are not covered by the findings above.' }));
-    sc.unreadable.forEach(u => card.append(el('div', { style: 'margin-top:8px;font-size:13px' },
-      el('span', { className: 'mono', textContent: u.file, style: 'font-weight:700' }),
-      el('span', { className: 'muted', textContent: ' — ' + u.reason }))));
+    const card = el('div', { className: 'card clip', style: 'margin-top:20px;border-color:var(--amberln)' });
+    card.append(el('div', { className: 'chead', style: 'background:var(--amberbg);border-bottom-color:var(--amberln)' },
+      el('span', { className: 'tag', style: 'background:var(--amber);color:#fff', textContent: 'Check by hand' }),
+      el('b', { textContent: `${sc.unreadable.length} file${sc.unreadable.length === 1 ? '' : 's'} Ripple could not read` })));
+    const p = el('div', { className: 'pad lg' });
+    p.append(el('div', { className: 'prose', textContent: 'These are not covered by the findings above. A clean result is only as good as what could be read.' }));
+    sc.unreadable.forEach(u => p.append(el('div', { style: 'display:flex;gap:10px;align-items:baseline;margin-top:10px;flex-wrap:wrap' },
+      el('span', { className: 'chip mono', textContent: u.file }),
+      el('span', { className: 'small muted', textContent: u.reason }))));
+    card.append(p);
     box.append(card);
   }
   if (sc.mentionsOnly?.length) {
-    const card = el('div', { className: 'card pad', style: 'margin-top:14px' });
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:16px' });
     card.append(el('span', { className: 'lbl', textContent: `${sc.mentionsOnly.length} file${sc.mentionsOnly.length === 1 ? '' : 's'} mention the name but carry it nowhere` }));
-    sc.mentionsOnly.forEach(m => card.append(el('div', { className: 'small mono muted', textContent: m.file, style: 'margin-top:5px' })));
+    const chips = el('div', { className: 'chips', style: 'margin-top:10px' });
+    sc.mentionsOnly.forEach(m => chips.append(el('span', { className: 'chip mono', textContent: m.file })));
+    card.append(chips);
     box.append(card);
   }
 }
@@ -510,42 +551,62 @@ function step5(root) {
   const gs = S.scan?.graphs || [];
   const tabs = x(root, 'tabs'), map = x(root, 'map');
   if (!gs.length) {
-    map.append(el('div', { className: 'card pad', style: 'text-align:center;padding:44px' },
-      el('div', { style: 'font-size:17px;font-weight:800', textContent: 'No downstream lineage found' }),
-      el('div', { className: 'muted', style: 'margin-top:7px', textContent: 'These attributes do not feed any table this team publishes.' })));
+    map.append(el('div', { className: 'note good', style: 'max-width:600px;padding:22px 26px' },
+      el('b', { textContent: 'No downstream lineage found', style: 'display:block;font-size:15px' }),
+      el('div', { style: 'margin-top:6px', textContent: 'These attributes do not feed any table this team publishes.' })));
     x(root, 'next').onclick = () => goto(6);
     return;
   }
   const gi = Math.min(S.graphTab, gs.length - 1);
+  tabs.append(el('span', { className: 'lbl faint', textContent: 'Attribute', style: 'margin-right:4px' }));
   gs.forEach((g, i) => {
-    const b = el('button', { className: 'pill' + (i === gi ? ' on' : '') });
-    b.append(el('span', { textContent: g.attr, className: 'mono' }));
+    const b = el('button', { className: 'pill tab' + (i === gi ? ' on' : '') });
+    b.append(el('span', { className: 'mono', textContent: g.attr }),
+      el('span', { className: 'sub', textContent: g.table }));
     b.onclick = () => { S.graphTab = i; render(); };
     tabs.append(b);
   });
   const g = gs[gi];
-  const card = el('div', { className: 'card pad' });
-  card.append(el('span', { className: 'lbl', textContent: 'Upstream source' }));
-  card.append(el('div', { className: 'mono', textContent: `${g.table}.${g.attr}`, style: 'font-size:16px;font-weight:700;color:var(--blued);margin-top:4px' }));
-  card.append(el('div', { className: 'small muted', style: 'margin-top:3px',
-    textContent: `${g.branches.length} branch${g.branches.length === 1 ? '' : 'es'} to production` }));
+  const card = el('div', { className: 'card pad lg' });
+  const row = el('div', { className: 'maprow' });
+  const src = el('div', { className: 'mapsrc' });
+  src.append(el('div', {},
+    el('div', { className: 'k', textContent: 'Upstream source' }),
+    el('div', { className: 'tb', textContent: g.table }),
+    el('div', { className: 'at', textContent: g.attr }),
+    el('div', { className: 'ct', textContent: `${g.branches.length} branch${g.branches.length === 1 ? '' : 'es'} to production` })));
+  const branches = el('div', { className: 'branches' });
   g.branches.forEach(br => {
     const line = el('div', { className: 'branch' });
-    line.append(nodeEl({ name: g.table, kind: 'Source', alias: g.attr }));
-    br.forEach(n => { line.append(el('div', { className: 'arrow', textContent: '→' })); line.append(nodeEl(n)); });
-    card.append(line);
+    br.forEach((n, i) => {
+      line.append(nodeEl(n));
+      if (i < br.length - 1) line.append(el('span', { className: 'arrow', textContent: '→' }));
+    });
+    branches.append(line);
   });
-  card.append(el('div', { className: 'small muted', style: 'margin-top:16px',
-    textContent: 'Each box is a table. The name underneath is what the column is called at that point — that is the rename a word search would miss.' }));
+  row.append(src, branches);
+  card.append(row);
   map.append(card);
+
+  const legend = el('div', { className: 'legend' });
+  [['var(--redbg)', 'var(--redln)', 'Production table'],
+   ['#F4F9FE', '#9CC4EA', 'Intermediate table'],
+   ['var(--violetbg)', 'var(--violetln)', 'Alias used for the attribute']].forEach(([bg, ln, label]) =>
+    legend.append(el('div', {}, el('i', { style: `background:${bg};border:1px solid ${ln}` }), label)));
+  map.append(legend);
+  map.append(el('div', { className: 'small muted', style: 'margin-top:12px',
+    textContent: 'Each box is a table. The alias is what the column is called at that point — that is the rename a word search would miss.' }));
   x(root, 'next').onclick = () => makeSummary();
 }
 
 function nodeEl(n) {
   const d = el('div', { className: 'node' + (n.prod ? ' prod' : '') });
-  d.append(el('div', { className: 'k', textContent: n.kind }),
-    el('div', { className: 'nm', textContent: n.name }));
-  if (n.alias) d.append(el('div', { className: 'al' }, 'as ', el('b', { textContent: n.alias })));
+  d.append(el('div', { className: 'top' },
+    el('span', { className: 'k', textContent: n.kind }),
+    el('span', { className: 'nm', textContent: n.name })));
+  if (n.alias) d.append(el('div', { className: 'al' },
+    el('span', { textContent: 'alias' }),
+    el('span', { className: 'chip alias', textContent: n.alias })));
   return d;
 }
 
@@ -565,41 +626,67 @@ function makeSummary() {
 function step6(root) {
   const s = S.summary; if (!s) return;
   const [cls, label] = RISK[S.scan.risk] || RISK.none;
-  x(root, 'risk').append(el('span', { className: 'badge ' + cls, textContent: label }));
   x(root, 'sub').textContent = s.writtenBy === 'ai'
     ? `Written by ${S.health.ai.model} from the findings — no code was sent to it.`
     : 'Written from the findings without AI.';
 
   const b = x(root, 'body');
-  const main = el('div', { className: 'card pad' });
-  main.append(el('div', { style: 'font-size:19px;font-weight:800;line-height:1.3', textContent: s.headline }));
-  main.append(el('p', { style: 'margin-top:11px;font-size:14.5px;line-height:1.6;color:#33445E', textContent: s.narrative }));
-  const ul = el('ul', { className: 'ticks' });
+  const grid = el('div', { className: 'grid2', style: 'grid-template-columns:1.7fr 1fr' });
+
+  // ── the summary itself ──
+  const main = el('div', { className: 'card clip' });
+  main.append(el('div', { className: 'chead', style: 'background:#fff;padding:18px 26px' },
+    el('b', { textContent: s.headline, style: 'font-size:16px;font-weight:800;line-height:1.35' }),
+    el('span', { className: 'badge ' + cls, textContent: label, style: 'margin-left:auto;flex-shrink:0' })));
+  main.append(el('p', { style: 'padding:20px 26px 4px;font-size:14.5px;line-height:1.7;color:var(--body)', textContent: s.narrative }));
+  const ul = el('ul', { className: 'ticks', style: 'padding:16px 26px 24px;margin-top:0' });
   (s.bullets || []).forEach(t => ul.append(el('li', {}, t)));
   main.append(ul);
-  b.append(main);
+  const fields = el('div', { style: 'padding:0 26px 24px;display:grid;grid-template-columns:1fr 1fr;gap:16px 24px' });
+  [['Source system', S.vals.source, false], ['Change type', S.vals.changeType, false],
+   ['Upstream tables name', S.vals.upstream.map(u => u.table).join(', '), true],
+   ['Upstream attributes name', S.vals.upstream.flatMap(u => u.attrs).join(', '), true]].forEach(([k, v, mono]) =>
+    fields.append(el('div', {}, el('span', { className: 'lbl', textContent: k }),
+      el('div', { textContent: v || '—',
+        style: 'margin-top:5px;font-size:14px;font-weight:600;line-height:1.45;overflow-wrap:break-word;'
+          + (mono ? 'font-family:var(--mono);color:var(--blued)' : 'color:var(--ink)') }))));
+  main.append(fields);
 
-  const grid = el('div', { className: 'grid2', style: 'margin-top:18px' });
-  const facts = el('div', { className: 'card pad' });
-  facts.append(el('span', { className: 'lbl', textContent: 'The change' }));
+  // ── right rail ──
+  const rail = el('div', { className: 'rail' });
   const dl = daysLeft(S.vals.effectiveDate);
-  [['Source system', S.vals.source], ['Change type', S.vals.changeType],
-   ['Tables', S.vals.upstream.map(u => u.table).join(', ')],
-   ['Attributes', S.vals.upstream.flatMap(u => u.attrs).join(', ')],
-   ['Effective', fmtDate(S.vals.effectiveDate) + (dl !== null ? ` · ${dl} days left` : '')],
-   ['Contact', [S.vals.pocName, S.vals.pocTeam].filter(Boolean).join(', ')]].forEach(([k, v]) =>
-    facts.append(el('div', { style: 'display:flex;gap:14px;padding:8px 0;border-top:1px solid #F0F4F9' },
-      el('span', { className: 'small muted', textContent: k, style: 'width:110px;flex-shrink:0' }),
-      el('span', { className: 'small', textContent: v || '—', style: 'font-weight:600;word-break:break-word' }))));
+  const dead = el('div', { className: 'card pad' });
+  dead.append(el('span', { className: 'lbl', textContent: 'Deadline' }));
+  dead.append(el('div', { textContent: fmtDate(S.vals.effectiveDate) || 'Not given',
+    style: 'font-size:20px;font-weight:800;margin-top:8px' }));
+  if (dl !== null) dead.append(el('span', { className: 'badge sm ' + (dl <= 21 ? 'amber' : 'blue'),
+    textContent: dl < 0 ? 'date has passed' : `${dl} day${dl === 1 ? '' : 's'} left`, style: 'margin-top:8px' }));
+  if (S.vals.pocName || S.vals.pocTeam) {
+    dead.append(el('div', { className: 'small muted', style: 'margin-top:12px;line-height:1.55' },
+      'Upstream contact: ', el('b', { textContent: S.vals.pocName || '—', style: 'color:var(--body)' }),
+      S.vals.pocTeam ? ', ' + S.vals.pocTeam : ''));
+  }
+
+  const st = S.scan.stats;
+  const radius = el('div', { className: 'card pad' });
+  radius.append(el('span', { className: 'lbl', textContent: 'Blast radius' }));
+  [[st.productionTables, 'production tables impacted'], [st.intermediateTables, 'intermediate tables in the path'],
+   [st.filesWithImpact, 'code files to change'], [st.couldNotRead, 'files that must be checked by hand']]
+    .forEach(([n, lab]) => radius.append(el('div', { style: 'display:flex;align-items:baseline;gap:10px;padding:6px 0' },
+      el('span', { textContent: String(n), style: 'font-size:18px;font-weight:800;color:var(--blued);font-variant-numeric:tabular-nums;min-width:26px' }),
+      el('span', { style: 'font-size:13px;color:var(--body)', textContent: lab }))));
+
   const acts = el('div', { className: 'card pad' });
   acts.append(el('span', { className: 'lbl', textContent: 'What to do' }));
   const ol = el('ol', { className: 'acts' });
   (s.actions || []).forEach(a => ol.append(el('li', {}, a)));
   acts.append(ol);
-  grid.append(facts, acts);
+
+  rail.append(dead, radius, acts);
+  grid.append(main, rail);
   b.append(grid);
   if (S.scan.unreadable?.length) {
-    const g = el('div', { style: 'margin-top:18px' }); renderGaps(g, { unreadable: S.scan.unreadable }); b.append(g);
+    const g = el('div'); renderGaps(g, { unreadable: S.scan.unreadable }); b.append(g);
   }
 
   x(root, 'next').onclick = () => goto(7);
@@ -622,10 +709,26 @@ function step7(root) {
   const body = x(root, 'body'); body.value = r.body; body.oninput = () => { r.body = body.value; };
   const ol = x(root, 'acts');
   (S.summary?.actions || []).forEach(a => ol.append(el('li', {}, a)));
-  const poc = x(root, 'poc');
-  poc.append(el('div', { style: 'font-weight:700', textContent: S.vals.pocName || 'Not specified' }));
-  if (S.vals.pocEmail) poc.append(el('div', { className: 'small mono', textContent: S.vals.pocEmail, style: 'color:var(--blued)' }));
-  if (S.vals.pocTeam) poc.append(el('div', { className: 'small muted', textContent: S.vals.pocTeam }));
+
+  // who the reply is for — real values only, and nothing here sends anything
+  const to = x(root, 'to');
+  to.append(el('span', { className: 'small', textContent: 'To', style: 'font-weight:700;color:var(--mute);flex-shrink:0' }));
+  to.append(el('span', { className: 'chip',
+    textContent: [S.vals.pocName, S.vals.pocEmail].filter(Boolean).join(' · ') || 'No contact was given' }));
+  if (S.vals.pocTeam) to.append(el('span', { className: 'badge sm blue', textContent: S.vals.pocTeam }));
+
+  if (S.scan) {
+    const [cls, label] = RISK[S.scan.risk] || RISK.none;
+    x(root, 'risk').append(el('span', { className: 'badge ' + cls, textContent: label }));
+  }
+  const dl = daysLeft(S.vals.effectiveDate);
+  if (S.vals.effectiveDate) {
+    x(root, 'deadline').append(el('div', { className: 'note info', style: 'padding:14px 18px' },
+      el('span', { className: 'lbl', style: 'color:var(--blued);display:block', textContent: 'Respond by' }),
+      el('div', { style: 'font-size:15px;font-weight:700;margin-top:6px;color:var(--ink)',
+        textContent: fmtDate(S.vals.effectiveDate) + (dl !== null ? ` · ${dl} day${dl === 1 ? '' : 's'} left` : '') })));
+  }
+
   x(root, 'copy').onclick = async () => {
     await navigator.clipboard.writeText(`Subject: ${r.subject}\n\n${r.body}`);
     x(root, 'copied').textContent = 'Copied — paste it into Outlook.';
@@ -642,17 +745,17 @@ function historyView(root) {
   root.append(el('div', { className: 'head' }, el('div', {},
     el('h2', { textContent: 'Past analyses' }),
     el('p', { textContent: 'Everything saved on this server, newest first.' }))));
-  const card = el('div', { className: 'card' });
+  const card = el('div', { className: 'card clip' });
   root.append(card);
   api('/api/history').then(rows => {
-    if (!rows.length) { card.append(el('div', { className: 'pad muted', textContent: 'Nothing saved yet.' })); return; }
+    if (!rows.length) { card.append(el('div', { className: 'pad lg muted', textContent: 'Nothing saved yet.' })); return; }
     const t = el('table', { className: 'hist' });
     const hr = el('tr');
     ['When', 'Subject', 'Source', 'Change', 'Risk', 'Mode', 'Status'].forEach(h => hr.append(el('th', { textContent: h })));
     t.append(hr);
     rows.forEach(r => {
       const [cls, label] = RISK[r.risk] || RISK.none;
-      const sel = el('select', { className: 'status' });
+      const sel = el('select', { className: 'statussel' });
       ['New', 'In progress', 'Verified', 'Closed'].forEach(s =>
         sel.append(el('option', { value: s, textContent: s, selected: s === r.status })));
       sel.onchange = () => api(`/api/history/${r.id}`, {
@@ -677,25 +780,25 @@ function settingsView(root) {
   root.append(el('div', { className: 'head' }, el('div', {},
     el('h2', { textContent: 'Settings & checks' }),
     el('p', { textContent: 'What Ripple is connected to, and whether it is working.' }))));
-  const grid = el('div', { className: 'grid2' });
+  const grid = el('div', { className: 'grid2 even' });
 
-  const left = el('div', { className: 'card pad' });
+  const left = el('div', { className: 'card pad lg' });
   left.append(el('span', { className: 'lbl', textContent: 'Repository' }));
   [['Folder', h.repo.path], ['Label', h.repo.label], ['Files indexed', String(h.repo.files)],
    ['Statements understood', String(h.repo.statements)], ['Files unreadable', String(h.repo.unreadable)],
    ['SQL dialect', h.sqlDialect], ['Renames followed', `${h.maxHops} hops`]].forEach(([k, v]) =>
-    left.append(el('div', { style: 'display:flex;gap:14px;padding:8px 0;border-top:1px solid #F0F4F9' },
+    left.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },
       el('span', { className: 'small muted', textContent: k, style: 'width:150px;flex-shrink:0' }),
       el('span', { className: 'small', textContent: v, style: 'font-weight:600;word-break:break-all' }))));
-  left.append(el('div', { className: 'note info', style: 'margin-top:14px' },
+  left.append(el('div', { className: 'note info', style: 'margin-top:18px' },
     'Change any of these with environment variables — ',
     el('span', { className: 'mono', textContent: 'RIPPLE_REPO' }), ', ',
     el('span', { className: 'mono', textContent: 'RIPPLE_SQL_DIALECT' }), ', ',
     el('span', { className: 'mono', textContent: 'GROQ_API_KEY' }), '. See the README.'));
 
-  const right = el('div', { className: 'card pad' });
+  const right = el('div', { className: 'card pad lg' });
   right.append(el('span', { className: 'lbl', textContent: 'AI (optional)' }));
-  right.append(el('div', { className: 'note ' + (h.ai.available ? 'good' : 'info'), style: 'margin-top:10px' },
+  right.append(el('div', { className: 'note ' + (h.ai.available ? 'good' : 'info'), style: 'margin-top:12px' },
     el('b', { textContent: h.ai.available ? 'A key is set. ' : 'No key set. ' }),
     h.ai.available
       ? `The email reader and the summary use ${h.ai.model}. Your source code is never sent to it.`

@@ -80,6 +80,11 @@ class PasteIn(BaseModel):
 @app.get("/api/health")
 def health() -> dict:
     idx, parsed, cat = repo_state()
+    # What kinds of file are actually in the index, biggest group first. The
+    # screen shows these, so they have to be counted rather than assumed.
+    kinds: dict[str, int] = {}
+    for f in idx.files:
+        kinds[f.lang] = kinds.get(f.lang, 0) + 1
     return {
         "ok": True,
         "repo": {
@@ -90,6 +95,10 @@ def health() -> dict:
             "statements": len(parsed.statements),
             "unreadable": len(parsed.unreadable),
             "exists": settings.repo_path.exists(),
+            "kinds": [
+                {"lang": k, "files": n}
+                for k, n in sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))
+            ],
         },
         "catalog": {"tables": len(cat.tables), "columns": sum(len(v) for v in cat.tables.values())},
         "sqlDialect": settings.sql_dialect or "generic",
