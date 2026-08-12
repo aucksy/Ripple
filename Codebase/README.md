@@ -377,6 +377,28 @@ installing tooling is difficult.
 
 ---
 
+## Running it where there is no internet
+
+There is a second edition, in `../Ripple Offline`, for a locked-down machine
+with no network at all: one folder to copy across, double-click, no Python and
+no install. The repository folder and the SQL dialect are asked for on screen
+instead of being environment variables, and the GitHub source and the AI key
+form are not merely switched off — they are deleted from the build, along with
+the HTTP client they would need.
+
+It is **not a fork**. It has no copy of `ripple/` and no copy of `web/`: its
+build script reads both out of this folder, so it is always built from whatever
+this version is today. In `web/app.js`, the blocks between `//<online-only>` and
+`//</online-only>` are the ones removed from that build. Deleting those lines has
+to leave working JavaScript, which is why each block is written to read
+correctly with its marked lines gone.
+
+Moving a marker is safe. Losing one is caught: the offline build searches what it
+produced for the words that should be gone and fails with the line it found,
+rather than shipping a key box onto a machine where nobody can check it.
+
+---
+
 ## Known limits
 
 Worth saying out loud, because a tool like this is dangerous when it looks more

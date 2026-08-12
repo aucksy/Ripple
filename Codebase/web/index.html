@@ -60,7 +60,9 @@
           </div>
           <div class="chead" style="border-bottom:none;border-top:1px solid var(--line3)">
             <button class="pri" id="doPaste">Read this text</button>
+            <!--<online-only>-->
             <span class="small faint" data-x="aiState"></span>
+            <!--</online-only>-->
           </div>
         </div>
       </div>
@@ -146,11 +148,13 @@
 <template id="t-step3">
   <div class="head">
     <div><h2 data-x="title">Connected repository</h2><p data-x="sub"></p></div>
+    <!--<online-only>-->
     <div class="right">
       <span class="lbl faint">Source</span>
       <button class="pill" data-src="folder">This machine</button>
       <button class="pill" data-src="github">GitHub</button>
     </div>
+    <!--</online-only>-->
   </div>
   <div data-x="alert"></div>
   <div class="grid2 even">

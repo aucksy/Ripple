@@ -288,3 +288,26 @@ def test_file_endpoint_returns_real_lines(client):
 
 def test_file_endpoint_rejects_unknown_path(client):
     assert client.get("/api/file", params={"path": "../../secrets.txt"}).status_code == 404
+
+
+# ── where the repository happens to live ───────────────────────────────────
+def test_a_repository_under_a_folder_called_build_is_still_read(tmp_path):
+    """The skipped-folder names apply inside the repository, not to the whole
+    path. Matched against the whole path, a repository that merely sits under a
+    folder called build, dist, target or venv has every file skipped -- and the
+    scan comes back clean because it read nothing at all."""
+    root = tmp_path / "build" / "our-pipelines"
+    (root / "etl").mkdir(parents=True)
+    (root / "etl" / "load.sql").write_text("CREATE TABLE A_PROD AS SELECT 1 AS X;", encoding="utf-8")
+    idx = RepoIndex.build(root, settings)
+    assert [f.path for f in idx.files] == ["etl/load.sql"]
+
+
+def test_skipped_folders_inside_the_repository_are_still_skipped(tmp_path):
+    root = tmp_path / "repo"
+    (root / "node_modules").mkdir(parents=True)
+    (root / "src").mkdir(parents=True)
+    (root / "node_modules" / "junk.sql").write_text("SELECT 1;", encoding="utf-8")
+    (root / "src" / "real.sql").write_text("SELECT 1;", encoding="utf-8")
+    idx = RepoIndex.build(root, settings)
+    assert [f.path for f in idx.files] == ["src/real.sql"]

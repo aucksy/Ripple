@@ -2,6 +2,20 @@
    Plain JavaScript on purpose: no build step, no framework, nothing to install.
    The same file can be opened, read and changed by anyone. */
 
+//<online-only>
+// This file is also the front end of Ripple Offline, which is built from it
+// rather than being a second copy — a copy would drift, and the drifting one
+// would be the build running where nobody can check it. The lines between
+// //<online-only> and //</online-only> are deleted from that build: they are
+// the parts that reach out (the GitHub source and the AI key form), which must
+// not merely be unused offline but absent. Deleting those lines has to leave
+// working JavaScript, so each block is written to read correctly with its
+// marked lines gone. The offline build then checks the result for the words
+// that should be gone, and fails with the line it found rather than shipping a
+// key box onto a locked-down machine. Moving a marker is safe; quietly dropping
+// one is not. See Ripple Offline/ripple_offline/webbuild.py.
+//</online-only>
+
 const STEPS = [
   ['Notification',    'Upload or type it in'],
   ['Review fields',   'Check before scanning'],
@@ -22,16 +36,20 @@ const S = {
   summary: null,
   reply: null,
   savedId: null,
+  //<online-only>
   aiMsg: null,        // result of the last AI key action, kept across redraws
+  //</online-only>
   manRows: [{ table: '', attrs: '' }],
   man: { source: '', changeType: '', effectiveDate: '', changeDesc: '', pocName: '', pocEmail: '', pocTeam: '' },
   busy: false,
   openGroup: 0, openRow: null, graphTab: 0,
+  //<online-only>
   // Repository step. The token is held here only long enough to send it once;
   // it is cleared as soon as the server has accepted it.
   repoTab: null,
   gh: { repo: '', branch: '', token: '' },
   connecting: false, connectMsg: '',
+  //</online-only>
 };
 
 const MAN_FIELDS = [
@@ -122,9 +140,11 @@ function renderStatus() {
     el('div', { className: 'srow' },
       el('span', { className: 'dot ' + (repoOk ? 'ok' : 'warn') }),
       el('span', { textContent: repoOk ? `${h.repo.label} · ${h.repo.files} files` : 'No repository found' })),
+    //<online-only>
     el('div', { className: 'srow' },
       el('span', { className: 'dot ' + (h.ai.available ? 'ok' : 'off') }),
       el('span', { textContent: h.ai.available ? 'AI on' : 'AI off — rules only' })),
+    //</online-only>
     el('div', { className: 'srow' },
       el('span', { className: 'dot ' + (h.sqlDialect === 'generic' ? 'warn' : 'ok') }),
       el('span', { textContent: `SQL read as ${h.sqlDialect}` })),
@@ -147,10 +167,12 @@ function step1(root) {
   x(root, 'manualMode').classList.toggle('hide', S.mode !== 'manual');
 
   if (S.mode === 'email') {
+    //<online-only>
     const ai = S.health?.ai?.available;
     x(root, 'aiState').textContent = ai
       ? `AI is on — the email is read by ${S.health.ai.modelLabel}.`
       : 'AI is off — fields are found by matching the repository catalogue.';
+    //</online-only>
     const drop = $('#drop', root), file = $('#file', root);
     drop.onclick = () => file.click();
     drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
@@ -294,7 +316,10 @@ function step2(root) {
     ? 'The details you entered. Edit anything before scanning.'
     : 'Check every field. Ripple scans on exactly what is here, not on the email.';
   x(root, 'by').textContent = manual ? 'Entered by you — no AI used'
-    : v.extractedBy === 'ai' ? 'Read by AI — check it' : 'Found by matching the catalogue — check it';
+    //<online-only>
+    : v.extractedBy === 'ai' ? 'Read by AI — check it'
+    //</online-only>
+    : 'Found by matching the catalogue — check it';
 
   const warn = x(root, 'warnings'); warn.innerHTML = '';
   (v.warnings || []).forEach(w => warn.append(el('div', { className: 'note warn', textContent: w, style: 'margin-bottom:12px' })));
@@ -358,54 +383,96 @@ function renderUpstreamRows(root, v) {
 }
 
 // ── step 3 ────────────────────────────────────────────────────────────────
+/* Anything worth saying about the repository before anything is scanned, or
+   nothing at all. Online that is a failed connection; offline it is a folder
+   that has been moved or deleted since it was chosen, so the offline build
+   replaces this whole function rather than sharing it. */
+//<online-only>
+function repoAlert(h) {
+  if (S.connectMsg) {
+    return el('div', { className: 'note bad', style: 'margin-bottom:18px' },
+      el('b', { textContent: 'Could not connect. ' }), S.connectMsg);
+  }
+  if (h.connectError) {
+    return el('div', { className: 'note warn', style: 'margin-bottom:18px' },
+      el('b', { textContent: 'Reading the folder on this machine instead. ' }), h.connectError);
+  }
+  return null;
+}
+//</online-only>
+
 function step3(root) {
   const h = S.health;
   if (!h) return;
+  //<online-only>
   if (S.repoTab === null) S.repoTab = h.source === 'github' ? 'github' : 'folder';
   const onGit = S.repoTab === 'github';
   const live = h.source === 'github';
+  //</online-only>
 
-  x(root, 'title').textContent = onGit ? 'Read a GitHub repository' : 'Connected repository';
-  x(root, 'sub').textContent = onGit
-    ? 'Point Ripple at a repository and give it an access token. It only ever reads.'
-    : 'This is the code Ripple will search. It is read, never written to.';
+  x(root, 'title').textContent =
+    //<online-only>
+    onGit ? 'Read a GitHub repository' :
+    //</online-only>
+    'Connected repository';
+  x(root, 'sub').textContent =
+    //<online-only>
+    onGit ? 'Point Ripple at a repository and give it an access token. It only ever reads.' :
+    //</online-only>
+    'This is the code Ripple will search. It is read, never written to.';
 
+  //<online-only>
   $$('[data-src]', root).forEach(b => {
     b.className = 'pill' + (b.dataset.src === S.repoTab ? ' on' : '');
     b.onclick = () => { S.repoTab = b.dataset.src; S.connectMsg = ''; render(); };
   });
+  //</online-only>
 
-  // anything the server wants to say about the last connection attempt
   const alert = x(root, 'alert'); alert.innerHTML = '';
-  if (S.connectMsg) {
-    alert.append(el('div', { className: 'note bad', style: 'margin-bottom:18px' },
-      el('b', { textContent: 'Could not connect. ' }), S.connectMsg));
-  } else if (h.connectError) {
-    alert.append(el('div', { className: 'note warn', style: 'margin-bottom:18px' },
-      el('b', { textContent: 'Reading the folder on this machine instead. ' }), h.connectError));
-  }
+  const said = repoAlert(h);
+  if (said) alert.append(said);
 
   x(root, 'left').innerHTML = '';
-  x(root, 'left').append(onGit ? gitHubForm(h, live) : repoFacts(h));
+  x(root, 'left').append(
+    //<online-only>
+    onGit ? gitHubForm(h, live) :
+    //</online-only>
+    repoFacts(h));
 
   // the same confirmation the prototype shows, on the numbers Ripple really has
   const ready = x(root, 'ready'); ready.innerHTML = '';
   const repoOk = h.repo.exists && h.repo.files > 0;
-  // Says which source it means, so a GitHub form beside it can never be
-  // mistaken for "connected" when the folder is what is really loaded.
+  // Where the code came from, and the one fact that pins down which version of
+  // it was read. A folder that was never a git checkout has no branch, and says
+  // nothing rather than claiming "main" because that is the usual answer.
+  let where = 'a folder on this machine';
+  let pin = h.repo.branch ? ['Branch ', el('span', { className: 'mono', textContent: h.repo.branch })] : [];
+  //<online-only>
+  // Pulled from a hosted repository instead, where the commit is the exact
+  // version. Naming the source here is what stops a connect form sitting beside
+  // this note from being mistaken for "connected" when the folder is what is
+  // really loaded.
+  if (live) {
+    where = 'from GitHub';
+    pin = ['Commit ', el('span', { className: 'mono', textContent: h.github.shortCommit || h.github.branch })];
+  }
+  //</online-only>
   ready.append(el('div', { className: 'note ' + (repoOk ? 'good' : 'warn') },
     el('b', { textContent: repoOk ? `✓ ${h.repo.label} connected` : `Nothing to scan in ${h.repo.label}`,
       style: 'display:block;font-size:14px' }),
     el('div', { className: 'small', style: 'margin-top:2px;font-weight:600;opacity:.8',
-      textContent: live ? 'from GitHub' : 'a folder on this machine' }),
+      textContent: where }),
     el('div', { style: 'margin-top:8px;line-height:1.55' },
-      live ? 'Commit ' : 'Branch ',
-      el('span', { className: 'mono', textContent: live ? (h.github.shortCommit || h.github.branch) : h.repo.branch }),
-      repoOk ? ` — ${h.repo.files} file${h.repo.files === 1 ? '' : 's'} ready to scan.`
-             : ' — check the repository folder in Settings & checks.')));
+      pin,
+      (pin.length ? ' — ' : '') + (repoOk
+        ? `${h.repo.files} file${h.repo.files === 1 ? '' : 's'} ready to scan.`
+        : 'check the repository folder in Settings & checks.'))));
 
   // what kinds of file are in the index — counted, not assumed
   const kinds = x(root, 'kinds'); kinds.innerHTML = '';
+  // Nothing indexed means nothing to list, and an empty card sitting there
+  // reads as a panel that failed to load.
+  kinds.classList.toggle('hide', !h.repo.kinds?.length);
   if (h.repo.kinds?.length) {
     kinds.append(el('span', { className: 'lbl', textContent: 'What gets read' }));
     const chips = el('div', { className: 'chips', style: 'margin-top:12px' });
@@ -429,6 +496,12 @@ function step3(root) {
       cat.gaps.forEach(gap => box.append(el('div', { style: 'margin-top:6px' },
         el('span', { className: 'mono', textContent: gap.table }), ' — ' + gap.reason)));
       g.append(box);
+    } else if (!cat.tableCount) {
+      // "Every table definition was readable" is technically true of nothing at
+      // all, and reads as a clean bill of health for a repository that was
+      // never read.
+      g.append(el('div', { className: 'note info',
+        textContent: 'No table definitions were read, so there is no catalogue to check.' }));
     } else {
       g.append(el('div', { className: 'note good', textContent: 'Every table definition was readable.' }));
     }
@@ -436,17 +509,25 @@ function step3(root) {
 
   x(root, 'reindex').onclick = () => run(async () => { S.health = await api('/api/reindex', { method: 'POST' }); render(); });
   x(root, 'next').onclick = () => runScan();
-  x(root, 'hint').textContent = h.repo.files
+  x(root, 'hint').textContent = repoOk
     ? `Scanning ${h.repo.label}.`
     : 'Nothing is indexed, so a scan would find nothing.';
-  x(root, 'next').disabled = !h.repo.files;
+  // Both halves matter. Files can be indexed from a folder that has since been
+  // moved or deleted, and offering to scan it would be scanning a memory.
+  x(root, 'next').disabled = !repoOk;
 }
 
 /* What Ripple is reading now — the same facts either way. */
 function repoFacts(h) {
+  //<online-only>
   const live = h.source === 'github';
+  //</online-only>
   const r = el('div', { className: 'card pad lg' });
-  r.append(el('span', { className: 'lbl', textContent: live ? 'GitHub repository' : 'Folder on this machine' }));
+  r.append(el('span', { className: 'lbl', textContent:
+    //<online-only>
+    live ? 'GitHub repository' :
+    //</online-only>
+    'Folder on this machine' }));
   r.append(el('div', { className: 'mono', textContent: h.repo.label,
     style: 'font-size:17px;font-weight:600;color:var(--blued);margin-top:8px;word-break:break-all' }));
   r.append(el('div', { className: 'small faint', textContent: h.repo.path,
@@ -454,19 +535,24 @@ function repoFacts(h) {
   const facts = [
     ['Files indexed', String(h.repo.files)],
     ['Statements understood', String(h.repo.statements)],
-    ['Branch', h.repo.branch],
+    // A folder that was never a git checkout has no branch, and an empty row
+    // would read as a missing answer rather than as "there isn't one".
+    ...(h.repo.branch ? [['Branch', h.repo.branch]] : []),
     ['SQL read as', h.sqlDialect],
     ['Renames followed', `${h.maxHops} hops deep`],
   ];
+  //<online-only>
   if (live) {
     facts.splice(3, 0, ['Commit read', h.github.commit ? h.github.commit.slice(0, 12) : 'unknown']);
     facts.push(['Visibility', h.github.private ? 'private' : 'public']);
   }
+  //</online-only>
   const t = el('div', { style: 'margin-top:18px' });
   facts.forEach(([k, val]) => t.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },
     el('span', { className: 'small muted', textContent: k, style: 'flex:1' }),
     el('span', { className: 'small' + (k === 'Commit read' ? ' mono' : ''), textContent: val, style: 'font-weight:700' }))));
   r.append(t);
+  //<online-only>
   if (live) {
     const off = el('button', { className: 'ghost sm', textContent: 'Disconnect and forget the token', style: 'margin-top:18px' });
     off.onclick = () => run(async () => {
@@ -476,10 +562,12 @@ function repoFacts(h) {
     });
     r.append(off);
   }
+  //</online-only>
   return r;
 }
 
 /* The connect form. Nothing here pretends: the button does one real request. */
+//<online-only>
 function gitHubForm(h, live) {
   const card = el('div', { className: 'card pad lg' });
   const envToken = h.tokenFrom === 'environment';
@@ -561,6 +649,7 @@ function doConnect() {
     S.connectMsg = e.message;
   }).finally(() => { S.connecting = false; render(); });
 }
+//</online-only>
 
 function runScan() {
   run(async () => {
@@ -585,7 +674,9 @@ function step4(root) {
   const done = el('div', { className: 'card pad lg' });
   done.append(el('div', { style: 'display:flex;align-items:center;gap:12px;flex-wrap:wrap' },
     el('span', { className: 'chip mono', textContent: S.health.repo.label }),
-    el('span', { className: 'chip', textContent: S.health.repo.branch }),
+    // A folder that was never a git checkout has no branch, and an empty chip
+    // sitting there reads as something that failed to load.
+    S.health.repo.branch ? el('span', { className: 'chip', textContent: S.health.repo.branch }) : null,
     el('span', { textContent: sc.stats.filesWithImpact
       ? `Scan complete — ${sc.stats.filesWithImpact} file${sc.stats.filesWithImpact === 1 ? '' : 's'} with impact`
       : 'Scan complete — nothing carries these attributes',
@@ -657,12 +748,14 @@ function step4(root) {
 
 /* The address of a finding in the connected repository, or nothing at all.
    Points at the first line that actually matched, not the top of the file. */
+//<online-only>
 function fileUrl(r) {
   const tpl = S.scan?.repo?.urlTemplate;
   if (!tpl || !r.file) return '';
   const hit = (r.lines || []).find(l => l.hit) || (r.lines || [])[0];
   return tpl.replace('{path}', r.file).replace('{line}', String(hit?.n ?? 1));
 }
+//</online-only>
 
 function detailFor(r) {
   const d = el('div', { className: 'detail' });
@@ -675,10 +768,12 @@ function detailFor(r) {
     el('span', { className: 'lang', textContent: r.lang }));
   // Only offered when Ripple genuinely knows the address of this code. On a
   // local folder there is nothing to link to, so no link is shown.
+  //<online-only>
   const href = fileUrl(r);
   if (href) {
     head.append(el('a', { href, textContent: 'Open in GitHub ↗', target: '_blank', rel: 'noopener' }));
   }
+  //</online-only>
   code.append(head);
   const body = el('div', { className: 'body' });
   (r.lines || []).forEach(ln => {
@@ -802,9 +897,11 @@ function makeSummary() {
 function step6(root) {
   const s = S.summary; if (!s) return;
   const [cls, label] = RISK[S.scan.risk] || RISK.none;
-  x(root, 'sub').textContent = s.writtenBy === 'ai'
-    ? `Written by ${S.health.ai.modelLabel} from the findings — no code was sent to it.`
-    : 'Written from the findings without AI.';
+  x(root, 'sub').textContent =
+    //<online-only>
+    s.writtenBy === 'ai' ? `Written by ${S.health.ai.modelLabel} from the findings — no code was sent to it.` :
+    //</online-only>
+    'Written from the findings without AI.';
 
   const b = x(root, 'body');
   const grid = el('div', { className: 'grid2', style: 'grid-template-columns:1.7fr 1fr' });
@@ -979,6 +1076,11 @@ function historyView(root) {
   });
 }
 
+/* Settings, and the AI key form that is most of it. The offline build replaces
+   this whole screen: it has no key to set, and it has two settings of its own
+   that online reads from environment variables — which folder to scan, and
+   which SQL dialect to read it as. */
+//<online-only>
 function settingsView(root) {
   const h = S.health;
   root.append(el('div', { className: 'head' }, el('div', {},
@@ -1099,6 +1201,7 @@ function aiCard(h) {
   }
   return card;
 }
+//</online-only>
 
 // ── plumbing ──────────────────────────────────────────────────────────────
 function goto(n) { S.step = n; S.maxStep = Math.max(S.maxStep, n); S.view = 'wizard'; render(); }
@@ -1136,8 +1239,18 @@ function render() {
 $('#navHistory').onclick = () => { S.view = 'history'; render(); };
 $('#navSettings').onclick = () => { S.view = 'settings'; render(); };
 
+/* Run once, after the server has answered and before the first screen is drawn.
+   Nothing to do online. The offline build replaces this to open on the settings
+   screen the very first time, when no repository folder has been chosen yet —
+   there, that is a question that has to be asked rather than a default that can
+   be assumed. */
+//<online-only>
+function afterBoot() {}
+//</online-only>
+
 (async function boot() {
   try { S.health = await api('/api/health'); }
   catch (e) { alert('Could not reach the Ripple server: ' + e.message); }
+  afterBoot();
   render();
 })();

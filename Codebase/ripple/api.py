@@ -19,7 +19,7 @@ from dataclasses import replace
 from . import ai, narrative, store
 from .catalog import Catalog, build_catalog
 from .config import AI_MODELS, Settings, model_label, settings
-from .notification import Notification, extract_by_rules, read_upload
+from .notification import Notification, extract_by_rules, read_pasted, read_upload
 from .scanner import github as ghub
 from .scanner.lineage import trace
 from .scanner.repo import RepoIndex
@@ -417,11 +417,12 @@ async def read_email_file(file: UploadFile = File(...), useAI: str = "true") -> 
 
 @app.post("/api/read-text")
 def read_email_text(payload: PasteIn) -> dict:
-    n = Notification(body=payload.text, source_kind="paste")
+    n = read_pasted(payload.text)
     out = _extract(n, payload.useAI)
     out["emailPreview"] = {
         "subject": n.subject, "body": n.body[:4000],
-        "fromName": "", "fromEmail": "", "attachments": [], "kind": "paste",
+        "fromName": n.from_name, "fromEmail": n.from_email,
+        "attachments": [], "kind": "paste",
     }
     return out
 

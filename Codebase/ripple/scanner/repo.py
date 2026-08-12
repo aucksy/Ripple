@@ -75,12 +75,17 @@ class RepoIndex:
         for p in sorted(root.rglob("*")):
             if not p.is_file():
                 continue
-            if any(part in cfg.skip_dirs for part in p.parts):
+            # Judged on the path *inside* the repository, never the whole path.
+            # Otherwise a repository that merely happens to live under a folder
+            # called build, dist, target or venv has every one of its files
+            # skipped, and the scan comes back clean because it read nothing.
+            relative = p.relative_to(root)
+            if any(part in cfg.skip_dirs for part in relative.parts):
                 continue
             ext = p.suffix.lower()
             if ext not in cfg.code_extensions:
                 continue
-            rel = p.relative_to(root).as_posix()
+            rel = relative.as_posix()
             try:
                 size = p.stat().st_size
                 if size > cfg.max_file_bytes:

@@ -35,6 +35,8 @@ CHANGE_HINTS = [
     (("data type", "datatype", "length", "precision", "varchar", "widened"), "type_change", "Data type change"),
 ]
 
+EMAIL_ADDR = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+
 
 @dataclass
 class Notification:
@@ -83,7 +85,7 @@ def read_eml(raw: bytes) -> Notification:
     n.body = "\n".join(p for p in body_parts if p).strip()
     if not n.body:
         n.warnings.append("The email had no readable text body - paste the text instead.")
-    return n
+    return enrich(n)
 
 
 def read_msg(raw: bytes) -> Notification:
@@ -110,7 +112,7 @@ def read_msg(raw: bytes) -> Notification:
         n.warnings.append(f"Could not open the Outlook file ({type(exc).__name__}) - paste the text instead.")
     if not n.body and not n.warnings:
         n.warnings.append("The Outlook file had no readable text body - paste the text instead.")
-    return n
+    return enrich(n)
 
 
 def strip_html(html: str) -> str:
@@ -124,6 +126,232 @@ def strip_html(html: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+# ── headers and sign-offs that live inside the text itself ─────────────────
+# A saved .msg or .eml carries real headers, so the sender and the subject are
+# handed to us. Pasted text carries none: everything the reader needs is in the
+# words themselves. That used to leave the source system and the contact blank
+# on the one path that has no AI to cover for it, so the same facts are read
+# out of the text here -- for pasted text and for uploads alike, because a
+# forwarded email hides the original sender in its body too.
+
+HEADER_KEYS = ("from", "sent", "date", "to", "cc", "bcc", "subject", "reply-to", "importance")
+HEADER_LINE = re.compile(r"^\s*(" + "|".join(HEADER_KEYS) + r")\s*:\s*(.*)$", re.I)
+# Anything header-shaped, used only to decide how far a block reaches. Someone
+# who opens a saved .eml in Notepad and pastes the lot brings Content-Type and
+# MIME-Version with them, and left in the body one of those becomes Ripple's
+# description of the change.
+ANY_HEADER = re.compile(r"^\s*[A-Za-z][A-Za-z0-9-]{1,40}\s*:\s")
+# "-----Original Message-----", or the row of underscores Outlook draws above a
+# forwarded block. Worth removing with the block, or it is left floating.
+FORWARD_RULE = re.compile(r"^\s*(?:[-_=*]{5,}|-{2,}\s*original message\s*-{2,}|-{2,}\s*forwarded message\s*-{2,})\s*$", re.I)
+# Gmail and most phones write the attribution as one line instead of a block.
+# The name is the part after the last comma, so it may not contain one itself --
+# otherwise the whole date swallows it ("Mon, 3 Aug 2026 at 09:14, Priya Raman").
+WROTE_LINE = re.compile(r"^\s*On\b.{0,80}?,\s*(?P<who>[^<>,]{2,60}?)\s*(?:<(?P<email>[^>]+)>)?\s*wrote:\s*$", re.I)
+
+# How people end these notices. The name comes after the closing, not before.
+SIGNOFF_OPENERS = re.compile(
+    r"^\s*(regards|kind regards|best regards|best wishes|best|thanks|thank you|many thanks|"
+    r"cheers|sincerely|yours|warm regards|br)\s*[,.!]*\s*$", re.I)
+# Words that describe what a team does rather than which system it owns, so
+# "C360 Data Governance" yields "C360" and "Data Governance" yields nothing.
+TEAM_TAIL_WORDS = {
+    "data", "governance", "office", "team", "platform", "engineering", "operations",
+    "ops", "group", "dept", "department", "services", "service", "support", "delivery",
+    "programme", "program", "function", "domain", "coe",
+}
+# Bracketed subject tags that are a priority flag, not a system name.
+SUBJECT_TAG_STOPWORDS = {
+    "action required", "action", "notice", "fyi", "eom", "external", "urgent",
+    "reminder", "info", "important", "confidential", "internal", "update", "alert",
+}
+
+
+def split_pasted_headers(body: str) -> tuple[dict[str, str], str]:
+    """Lift an Outlook-style header block out of text and hand back both halves.
+
+    Only a run of header lines anchored on a ``From:`` line counts, so a
+    sentence that merely begins "To: " is left alone. Every block found is
+    removed -- a twice-forwarded email has several -- but the values reported
+    are the first block's, which is the one at the top of what was pasted.
+    """
+    lines = (body or "").splitlines()
+    found: dict[str, str] = {}
+    keep: list[str] = []
+    i = 0
+    while i < len(lines):
+        m = WROTE_LINE.match(lines[i])
+        if m:
+            found.setdefault("from", (m.group("who") or "").strip()
+                             + (f" <{m.group('email')}>" if m.group("email") else ""))
+            i += 1
+            continue
+        head = HEADER_LINE.match(lines[i])
+        if not (head and head.group(1).lower() == "from"):
+            keep.append(lines[i])
+            i += 1
+            continue
+        # A real block: this From: line plus the header lines packed around it.
+        # A block reaches as far as header-shaped lines go, but only the ones
+        # worth reading are read -- the rest are noise to be taken out of the way.
+        start = i
+        while start > 0 and keep and ANY_HEADER.match(keep[-1]):
+            keep.pop()
+            start -= 1
+        end = i
+        block: list[str] = []
+        while end < len(lines) and ANY_HEADER.match(lines[end]):
+            block.append(lines[end])
+            end += 1
+        for line in block:
+            hm = HEADER_LINE.match(line)
+            if hm:
+                found.setdefault(hm.group(1).lower(), hm.group(2).strip())
+        # the rule Outlook draws above the block goes with it
+        while keep and (not keep[-1].strip() or FORWARD_RULE.match(keep[-1])):
+            if FORWARD_RULE.match(keep[-1]):
+                keep.pop()
+                break
+            keep.pop()
+        i = end
+    return found, "\n".join(keep).strip()
+
+
+def parse_sender(value: str) -> tuple[str, str]:
+    """A name and an address out of one ``From:`` value, in any of its shapes."""
+    raw = (value or "").strip()
+    if not raw:
+        return "", ""
+    email = ""
+    m = EMAIL_ADDR.search(raw)
+    if m:
+        email = m.group(0)
+    # strip the address itself, however it was wrapped, and any mailto: label
+    name = re.sub(r"<[^>]*>|\[mailto:[^\]]*\]|\(mailto:[^)]*\)", " ", raw, flags=re.I)
+    name = name.replace(email, " ").strip().strip('",;').strip()
+    if name.lower().startswith("mailto:"):
+        name = ""
+    # "priya.raman@corp.example.com" alone -> make a readable name from it
+    if not name and email:
+        name = email.split("@")[0].replace(".", " ").replace("_", " ").title()
+    return name, email
+
+
+def _is_person(line: str) -> bool:
+    words = line.split()
+    if not (1 < len(words) <= 4) or len(line) > 45:
+        return False
+    # A tab means a table cell, not a person -- an HTML table flattens to tabs.
+    if any(c in line for c in "@:_/\\|\t") or any(c.isdigit() for c in line):
+        return False
+    if line.rstrip().endswith((".", "?", "!")):
+        return False
+    return all(w[0].isupper() or (len(w) <= 3 and w.islower()) for w in words if w)
+
+
+def _is_team(line: str) -> bool:
+    """A team line has to say what the team does, not merely look tidy.
+
+    Without that, the second name in a sign-off, or any short capitalised line,
+    becomes somebody's "team". Requiring one of the words teams are actually
+    named after means an unrecognised shape leaves the field blank instead.
+    """
+    words = line.split()
+    if not (0 < len(words) <= 6) or len(line) > 60:
+        return False
+    if any(c in line for c in "@:|\t") or line.rstrip().endswith((".", "?", "!")):
+        return False
+    if IDENT.search(line):                 # a table name is not a team name
+        return False
+    return any(w.strip(",.").lower() in TEAM_TAIL_WORDS for w in words)
+
+
+def signature(body: str) -> dict[str, str]:
+    """The name, team and address a notice is signed off with.
+
+    Read from the bottom up, because that is where a sign-off is: reading down
+    from the top, the first tidy-looking line of the message body wins instead.
+    Only the tail is considered, and only lines that plainly read as a person
+    and a team are accepted. Nothing here guesses -- an unrecognised shape
+    leaves the field blank for someone to fill in, rather than filling it in
+    wrongly.
+    """
+    out = {"name": "", "team": "", "email": ""}
+    tail = [ln.strip() for ln in (body or "").splitlines() if ln.strip()][-8:]
+    if not tail:
+        return out
+    pending_team, pending_at = "", -1
+    for i in range(len(tail) - 1, -1, -1):
+        clean = tail[i].lstrip("-–—•* ").strip()
+        if not clean or SIGNOFF_OPENERS.match(clean):
+            continue
+        # "Priya Raman, C360 Data Governance" -- both on one line
+        if "," in clean:
+            left, right = (p.strip() for p in clean.split(",", 1))
+            if _is_person(left) and _is_team(right):
+                out["name"], out["team"] = left, right
+                break
+        if _is_team(clean):
+            pending_team, pending_at = clean, i
+            continue
+        if _is_person(clean):
+            out["name"] = clean
+            if pending_at == i + 1:        # the team sits directly beneath it
+                out["team"] = pending_team
+            break
+    for line in tail:
+        m = EMAIL_ADDR.search(line)
+        if m:
+            out["email"] = m.group(0)
+            break
+    return out
+
+
+def source_system(team: str, subject: str) -> str:
+    """Which upstream system this came from -- never who typed the email.
+
+    It used to be the sender's first name, so a notice from Priya Raman was
+    filed under "Priya". The system is named by the team that owns it, or by a
+    tag on the subject line when that tag is a system code rather than a
+    priority flag.
+    """
+    words = (team or "").split()
+    while words and words[-1].strip(",.").lower() in TEAM_TAIL_WORDS:
+        words.pop()
+    if words:
+        return " ".join(words).strip(",.-")
+    m = re.match(r"\s*[\[(]([^\])]{1,20})[\])]", subject or "")
+    if m:
+        tag = m.group(1).strip()
+        if tag.lower() not in SUBJECT_TAG_STOPWORDS and (tag.isupper() or any(c.isdigit() for c in tag)):
+            return tag
+    return ""
+
+
+def enrich(n: Notification) -> Notification:
+    """Fill in whatever the envelope did not carry, from the text itself."""
+    found, body = split_pasted_headers(n.body)
+    n.body = body or n.body
+    if found.get("subject") and not n.subject:
+        n.subject = found["subject"]
+    if found.get("from"):
+        name, email = parse_sender(found["from"])
+        if not n.from_name:
+            n.from_name = name
+        if not n.from_email:
+            n.from_email = email
+    if not (n.from_name and n.from_email):
+        sig = signature(n.body)
+        n.from_name = n.from_name or sig["name"]
+        n.from_email = n.from_email or sig["email"]
+    return n
+
+
+def read_pasted(text: str) -> Notification:
+    """Text someone pasted in, read as carefully as an uploaded file is."""
+    return enrich(Notification(body=(text or "").strip(), source_kind="paste"))
+
+
 def read_upload(filename: str, raw: bytes) -> Notification:
     name = (filename or "").lower()
     if name.endswith(".msg"):
@@ -131,7 +359,7 @@ def read_upload(filename: str, raw: bytes) -> Notification:
     if name.endswith(".eml"):
         return read_eml(raw)
     try:
-        return Notification(body=raw.decode("utf-8"), source_kind="paste")
+        return read_pasted(raw.decode("utf-8"))
     except UnicodeDecodeError:
         n = Notification(source_kind="paste")
         n.warnings.append("That file is not a .msg, .eml or plain text file.")
@@ -174,6 +402,7 @@ def extract_by_rules(n: Notification, cat: Catalog) -> dict:
     Columns are only accepted once their own table has matched. Without that
     rule, generic words like STATUS or AMOUNT produce a page of false hits.
     """
+    n = enrich(n)                      # however this arrived, read its own text too
     text = n.text()
     idents = [m.group(0) for m in IDENT.finditer(text)]
     seen_tables: list[str] = []
@@ -205,26 +434,38 @@ def extract_by_rules(n: Notification, cat: Catalog) -> dict:
             "attributes by hand before scanning."
         )
 
+    sig = signature(n.body)
     return {
-        "source": (n.from_name.split()[0] if n.from_name else "") or "Unknown",
+        "source": source_system(sig["team"], n.subject) or "Unknown",
         "changeType": label,
         "changeKind": kind,
         "changeDesc": first_sentence(n.body),
         "subject": n.subject,
         "effectiveDate": parse_date(text),
-        "pocName": n.from_name,
-        "pocEmail": n.from_email,
-        "pocTeam": n.from_name,
+        "pocName": n.from_name or sig["name"],
+        "pocEmail": n.from_email or sig["email"],
+        "pocTeam": sig["team"],
         "upstream": upstream,
         "warnings": warnings,
         "extractedBy": "rules",
     }
 
 
+# Header names that are plumbing rather than words a person wrote. Kept narrow
+# on purpose: "Impact: this breaks the nightly load" is a real first sentence,
+# and a rule that skipped every line with a colon in it would throw that away.
+PLUMBING_HEADERS = re.compile(
+    r"^\s*(content-type|content-transfer-encoding|content-disposition|content-language|"
+    r"mime-version|message-id|received|return-path|delivered-to|authentication-results|"
+    r"dkim-signature|thread-topic|thread-index|accept-language|x-[a-z0-9-]+)\s*:", re.I)
+
+
 def first_sentence(body: str, limit: int = 240) -> str:
     clean = re.sub(r"\s+", " ", (body or "")).strip()
     for line in (body or "").splitlines():
         line = line.strip()
+        if PLUMBING_HEADERS.match(line):
+            continue
         if len(line) > 40 and not line.lower().startswith(("hi ", "hello", "team", "dear")):
             clean = line
             break

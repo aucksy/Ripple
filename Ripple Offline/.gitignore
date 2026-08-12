@@ -1,0 +1,14 @@
+# Everything here is made from something else that IS committed:
+# build/  the generated front end, and PyInstaller's working files
+# dist/   the folder that gets copied onto the other machine
+build/
+dist/
+
+# Written beside the program as it is used, on whichever machine runs it.
+ripple-settings.json
+ripple-history.db
+ripple-log.txt
+
+__pycache__/
+*.pyc
+.pytest_cache/
