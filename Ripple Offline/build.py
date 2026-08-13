@@ -251,6 +251,16 @@ def main() -> int:
     # answer it gives is one this code no longer gives. Rebuilt here so the zip
     # beside the source can never disagree with the source.
     say("zip        : packing dist.zip")
+    # Anything a previous run of the program left in that folder goes into the
+    # zip with it, and this zip is committed to a public repository. The
+    # settings file names a real folder on a real machine and the history
+    # database holds real analyses -- neither belongs in a download, and neither
+    # belongs to whoever unpacks it either: they should start with nothing set.
+    for leftover in ("ripple-settings.json", "ripple-history.db", "ripple-log.txt"):
+        stray = out / leftover
+        if stray.exists():
+            stray.unlink()
+            say(f"zip        : left out {leftover} from an earlier run")
     if ZIP.exists():
         ZIP.unlink()
     made = Path(shutil.make_archive(str(ZIP.with_suffix("")), "zip",

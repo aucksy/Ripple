@@ -142,15 +142,17 @@ def apply(values: dict[str, Any]) -> None:
     key, and no serverless limits, because this runs on a real machine with a
     real disk.
     """
-    from ripple.config import DEFAULT_PRODUCTION, parse_production_rule, settings
+    from ripple.config import settings
 
     settings.repo_path = Path(str(values.get("repoPath") or ""))
     settings.repo_label = str(values.get("repoLabel") or "") or folder_label(settings.repo_path)
     settings.repo_branch = git_branch(settings.repo_path)
     settings.sql_dialect = str(values.get("sqlDialect") or "")
     settings.max_hops = int(values.get("maxHops") or 4)
-    settings.production_patterns = (parse_production_rule(str(values.get("prodTables") or ""))
-                                    or DEFAULT_PRODUCTION)
+    # The pasted list, in whatever shape it arrived. An empty one falls back to
+    # the shipped default inside set_production, because "nothing is production"
+    # would report every repository as clean.
+    settings.set_production(str(values.get("prodTables") or ""))
     settings.db_path = paths.history_file()
     settings.serverless = False
     settings.repo_source = "folder"

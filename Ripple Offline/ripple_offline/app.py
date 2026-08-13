@@ -14,6 +14,7 @@ here — this is a thin layer, exactly as the online service is.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -24,7 +25,7 @@ from pydantic import BaseModel
 from . import folderpick, nonet, paths, prefs, synced
 
 # The shared engine. Importing this package has already put it on the path.
-from ripple import narrative, progress, store                      # noqa: E402
+from ripple import narrative, production, progress, store          # noqa: E402
 from ripple.catalog import Catalog, build_catalog                  # noqa: E402
 from ripple.config import settings                                 # noqa: E402
 from ripple.notification import extract_by_rules, read_pasted, read_upload  # noqa: E402
@@ -114,6 +115,9 @@ def _health() -> dict:
             # online-only can never be fetched.
             "heldOnline": len(idx.held_online),
             "pathTooLong": len(idx.too_long),
+            # Code files Ripple walked past because of the folder they sit in.
+            "inSkippedDirs": len(idx.in_skipped_dirs),
+            "skippedDirNames": list(idx.skipped_dir_names),
             # Programs that run SQL kept in a separate .sql file. Two folders of
             # DAGs are written that way, and without this they read as empty.
             "runsSqlFrom": len([r for r in parsed.runs_sql_from if r["runs"]]),
@@ -130,8 +134,11 @@ def _health() -> dict:
         "maxHops": settings.max_hops,
         # Which table names count as the ones this team publishes. On screen so
         # that "no production table is impacted" can be checked rather than
-        # believed -- it is only ever as true as this rule is.
+        # believed -- it is only ever as true as this rule is. The one-line form
+        # is for a status row; the full one is what the settings screen shows,
+        # and it holds the paste exactly as it arrived so it can be edited again.
         "production": settings.production_rule(),
+        "productionRule": settings.production().to_dict(),
     }
 
 
@@ -168,6 +175,10 @@ class PasteIn(BaseModel):
 
 class PathIn(BaseModel):
     path: str = ""
+
+
+class ProductionIn(BaseModel):
+    text: str = ""
 
 
 class SettingsIn(BaseModel):
@@ -226,6 +237,27 @@ def check_settings(payload: PathIn) -> dict:
     return prefs.check_folder(payload.path)
 
 
+# ── the tables this team publishes ─────────────────────────────────────────
+# The most expensive setting here, so it can be read back before it is saved.
+# The question that matters is not "did the paste parse" but "which of these
+# tables has Ripple never seen in the folder it just read".
+def _production_report(rule: production.ProductionRule) -> dict:
+    idx, parsed, _ = repo_state()
+    return {**rule.to_dict(), "check": production.check_against_repo(rule, idx, parsed)}
+
+
+@app.post("/api/production/read")
+def production_read(payload: ProductionIn) -> dict:
+    """Read a pasted list without saving it, and say what was made of it."""
+    return _production_report(production.parse(payload.text or ""))
+
+
+@app.get("/api/production")
+def production_now() -> dict:
+    """The list in play, checked against the folder that is loaded."""
+    return _production_report(settings.production())
+
+
 @app.post("/api/settings/browse")
 def browse() -> dict:
     """Open this machine's own folder picker, when there is one to open.
@@ -253,6 +285,15 @@ def save_settings(payload: SettingsIn) -> dict:
     verdict = prefs.check_folder(payload.repoPath)
     if not verdict["ok"]:
         raise HTTPException(status_code=400, detail=verdict["message"])
+    # Only two of these settings change what was read off the disk. Correcting
+    # the published-table list on a repository of a few thousand files used to
+    # cost a full re-read -- minutes of waiting for an answer that was already
+    # in memory, which is how somebody learns not to correct it.
+    before = prefs.load()
+    rereads = (str(before.get("repoPath") or "") != str(Path(payload.repoPath.strip()).resolve()
+                                                        if payload.repoPath.strip() else "")
+               or str(before.get("sqlDialect") or "") != payload.sqlDialect
+               or _state["index"] is None)
     try:
         saved = prefs.save({"repoPath": payload.repoPath, "repoLabel": "",
                             "sqlDialect": payload.sqlDialect, "maxHops": payload.maxHops,
@@ -268,7 +309,8 @@ def save_settings(payload: SettingsIn) -> dict:
                     f"Copy the whole Ripple folder somewhere you own — your Desktop or "
                     f"Documents — and start it again from there.")) from exc
     prefs.apply(saved)
-    reindex()
+    if rereads:
+        reindex()
     return _health()
 
 

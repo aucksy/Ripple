@@ -94,6 +94,46 @@ def test_an_empty_rule_falls_back_rather_than_calling_everything_safe(clean_home
     assert settings.is_production_table("sales_prod") is True
 
 
+PASTED = """Table name\tOwner
+• cust360_market_lookup\tPriya
+• cust360_address_book\tMarcus
+`sales_daily_summary`,
+_UMDL
+"""
+
+
+def test_a_pasted_list_survives_a_restart_and_can_be_edited_again(clean_home):
+    """Two hundred table names do not fit in the sentence "the rule", so what
+    was pasted is kept exactly and handed back to the box, not a tidied version
+    of somebody's list."""
+    prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4,
+                "prodTables": PASTED})
+    again = prefs.load()
+    assert again["prodTables"].strip() == PASTED.strip()
+    assert "\n" in again["prodTables"], "a long list must not be flattened to one line"
+
+
+def test_a_pasted_list_reaches_the_engine_as_exact_table_names(clean_home):
+    from ripple.config import settings
+    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery",
+                            "maxHops": 4, "prodTables": PASTED}))
+    assert settings.is_production_table("cust360_market_lookup") is True
+    assert settings.is_production_table("sales_daily_summary") is True
+    # An exact name is exact: a staging copy of it is not a published table.
+    assert settings.is_production_table("stg_cust360_market_lookup") is False
+    # And a pattern in the same paste goes on behaving like a pattern.
+    assert settings.is_production_table("card_guid_umdl") is True
+    rule = settings.production()
+    assert len(rule.names) == 3 and len(rule.patterns) == 1
+
+
+def test_the_settings_file_holds_the_whole_paste(clean_home):
+    prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4,
+                "prodTables": PASTED})
+    written = json.loads((clean_home / "ripple-settings.json").read_text(encoding="utf-8"))
+    assert "cust360_address_book" in written["prodTables"]
+
+
 # ── a folder that is not where it was ──────────────────────────────────────
 def test_a_good_folder_says_how_much_it_holds():
     verdict = prefs.check_folder(MOCKREPO)

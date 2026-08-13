@@ -140,7 +140,7 @@ All optional. Set them as environment variables before starting.
 | `RIPPLE_REPO_LABEL` | `mockrepo` | The name shown in the interface. |
 | `RIPPLE_SQL_DIALECT` | generic | `bigquery`, `oracle`, `teradata`, `snowflake`, `hive`, `spark`, `postgres`, `mysql`, `tsql`, `redshift`, `databricks`, `presto`, `trino`, `duckdb`, `sqlite`. **Setting this correctly matters more than anything else here** — see below. |
 | `RIPPLE_MAX_HOPS` | `4` | How many renames deep to follow a column. |
-| `RIPPLE_PROD_TABLES` | `_PROD, _PRD, _PUBLISHED` | How **your** published tables are named. A plain word matches the end of a table name; `*` matches anything (`PROD_*`, or `*` for every table). **This is the second setting that can turn a real finding into a calm-looking result** — see below. |
+| `RIPPLE_PROD_TABLES` | `_PROD, _PRD, _PUBLISHED` | Which tables **your team publishes**. Paste the real list, one per line — Ripple reads it as written. A naming pattern still works alongside it: a word starting with an underscore matches the end of a table name, `*` matches anything (`PROD_*`, or `*` for every table). **This is the second setting that can turn a real finding into a calm-looking result** — see below. |
 | `RIPPLE_REPO_URL_TEMPLATE` | empty | Link findings to your Git host, when reading a folder. Use `{path}` and `{line}`. On GitHub this is worked out for you. |
 | `GROQ_API_KEY` | empty | Turns the AI on. Without it everything still works. Can also be entered on the Settings screen. |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | Which model to call. Also choosable on the Settings screen. |
@@ -196,15 +196,32 @@ Set it once, and check the Settings screen agrees.
 
 ## The other setting that can flatten a real result
 
-`RIPPLE_PROD_TABLES` says how *your* published tables are named. It decides one
+`RIPPLE_PROD_TABLES` says which tables *your team publishes*. It decides one
 thing: whether a finding counts as **production impact**, which is what the
 headline, the risk level and the drafted reply are all built from.
 
-It ships as `_PROD, _PRD, _PUBLISHED`, because that is a common convention and
-there is no way to guess. Point Ripple at a repository whose published tables end
-`_umdl`, `_gdi`, `_final` or anything else, and every real finding is still
-found, still listed and still counted — but nothing is *called* production
-impact, so the top of the report reads far calmer than the truth.
+**The best answer is the list itself.** Paste the real table names into the box
+on the Settings screen — one per line, or however they arrive from Excel, Slack,
+Confluence or a query result. Bullets, numbering, backticks, code fences,
+quotes, heading rows, trailing commas, duplicates, mixed capitalisation, and
+fully qualified names next to bare ones are all read without being tidied up
+first. A paste from Excel with several columns has the column holding the table
+names picked out, and the screen says which one it took.
+
+Then it says what it did, because a silently misread list here is worse than no
+list at all: how many names it recognised, what it ignored and why, and — the
+one that matters — **which of the tables on your list it has never seen anywhere
+in the repository**. Paste fifty and have six come back unknown, and those six
+are either misspelled or built somewhere Ripple could not read. Either way a
+clean result for them means nothing until that is settled.
+
+A naming pattern still works exactly as it did, alongside the list, so nothing
+already set breaks. It ships as `_PROD, _PRD, _PUBLISHED`, because that is a
+common convention and there is no way to guess. Point Ripple at a repository
+whose published tables end `_umdl`, `_gdi`, `_final` or anything else, and every
+real finding is still found, still listed and still counted — but nothing is
+*called* production impact, so the top of the report reads far calmer than the
+truth.
 
 Ripple no longer hides those findings behind that. When a chain ends at a table
 the rule does not match, the table is listed under **Chain ends here**, the rule
@@ -212,9 +229,22 @@ is quoted beside it, and the summary says the assessment is unfinished rather
 than clean. Correcting the rule and scanning again turns them into production
 tables — nothing else changes.
 
-A plain word matches the end of a name (`_PROD` matches `sales_prod`). `*`
-matches anything (`PROD_*` matches `prod_sales`; `*` on its own treats every
-table as published, which is the safe setting if you are not sure).
+How each entry is read, and it is the same rule in all three places the setting
+can be given:
+
+| What you write | How it is matched |
+|---|---|
+| `cust360_customer_demographics` | that table, exactly |
+| `foundation.cust360_customer_demographics` | the same table — SQL only ever says the last part of a name, so the qualifier is shown back but not matched on |
+| `_PROD` | the **end** of a name: matches `sales_prod` |
+| `PROD_*` | the whole name, with `*` standing for anything: matches `prod_sales` |
+| `*` | every table is published — the safe setting if you are not sure |
+
+An entry that is a real table name is matched exactly, so a staging copy called
+`stg_sales_daily` is *not* counted as the published `sales_daily`. If a name on
+your list matches nothing but is the ending of tables that do exist, Ripple says
+so and asks whether you meant it as a pattern, rather than quietly deciding for
+you.
 
 ---
 

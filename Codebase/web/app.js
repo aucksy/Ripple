@@ -124,6 +124,250 @@ function emailField(value, onchange, opts = {}) {
   return wrap;
 }
 
+/* ── the tables your team publishes ───────────────────────────────────────
+   The most expensive setting in Ripple: a finding only counts as production
+   impact when the table it ends at is on this list, so a list that is wrong
+   turns a change that really breaks three published tables into a calm "no
+   production impact". The same control is used on both settings screens —
+   online it is held by the running server, offline it is written to the
+   settings file beside the program — so there is one of it, here.
+
+   The list can be pasted from wherever it lives: an Excel column, a Slack
+   message, a Confluence page, a query result. Nothing is tidied silently:
+   whatever the reader declined to use comes back with a reason, and every
+   table on the list that Ripple has never seen in the repository is said out
+   loud, because that is the one thing that has to be known before a result
+   from this list is believed. */
+function productionState() {
+  if (!S.prod) {
+    S.prod = { text: S.health?.productionRule?.text ?? '', report: null,
+               checking: false, msg: null, loaded: false, timer: null };
+  }
+  return S.prod;
+}
+
+const PROD_HELP =
+  'Paste the real list of tables your team publishes — one per line, or however it '
+  + 'arrives from Excel, Slack or Confluence. Ripple reads it as written. A naming '
+  + 'pattern still works alongside: a word starting with an underscore matches the end '
+  + 'of a table name (_PROD matches sales_prod), * matches anything (PROD_*), and * on '
+  + 'its own means treat every table as published.';
+
+function productionCard(opts = {}) {
+  const p = productionState();
+  const card = el('div', { className: 'card pad lg' });
+  card.append(el('span', { className: 'lbl', textContent: 'The tables your team publishes' }));
+  card.append(el('div', { className: 'small faint', style: 'margin-top:6px;line-height:1.55',
+    textContent: PROD_HELP }));
+
+  const ta = el('textarea', { className: 'mono', rows: 8, value: p.text,
+    placeholder: 'cust360_customer_demographics\nfoundation.cust360_customer_address\n_PROD',
+    style: 'margin-top:12px;font-size:12.5px;line-height:1.6;resize:vertical' });
+  card.append(ta);
+
+  const out = el('div', { style: 'margin-top:14px' });
+  const paint = () => { out.innerHTML = ''; out.append(productionReport(p, opts)); };
+
+  const check = () => {
+    p.checking = true; paint();
+    api('/api/production/read', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: p.text }),
+    }).then(r => { p.report = r; })
+      .catch(e => { p.report = null; p.msg = { ok: false, text: e.message }; })
+      .finally(() => { p.checking = false; paint(); });
+  };
+
+  ta.oninput = () => {
+    p.text = ta.value; p.msg = null;
+    // Checked as it is typed rather than behind a button, but not on every
+    // keystroke: the check walks the repository, which is not free.
+    clearTimeout(p.timer);
+    p.timer = setTimeout(check, 600);
+  };
+  if (opts.onSave) {
+    const row = el('div', { className: 'foot', style: 'margin-top:14px' });
+    const save = el('button', { className: 'pri', textContent: 'Save and use this list' });
+    save.onclick = () => run(async () => {
+      try {
+        await opts.onSave(p.text);
+        p.msg = { ok: true, text: opts.savedNote || 'Saved. Every scan from now on uses this list.' };
+      } catch (e) { p.msg = { ok: false, text: e.message }; }
+      p.report = null; p.loaded = false;
+    });
+    row.append(save);
+    if (opts.persistNote) row.append(el('span', { className: 'small faint', textContent: opts.persistNote }));
+    card.append(row);
+  }
+  card.append(out);
+  // The list already in force is checked the moment the screen opens, rather
+  // than waiting for somebody to touch the box. A rule that matches nothing is
+  // worth knowing about before it is edited, not after.
+  if (!p.loaded) { p.loaded = true; check(); } else { paint(); }
+  return card;
+}
+
+/* What Ripple made of the list: what it read, what it ignored and why, and —
+   the point of the whole thing — which of these tables it has never seen. */
+function productionReport(p, opts = {}) {
+  const box = el('div');
+  if (p.msg) {
+    box.append(el('div', { className: 'note ' + (p.msg.ok ? 'good' : 'bad'), style: 'margin-bottom:12px' },
+      p.msg.text));
+  }
+  if (p.checking && !p.report) {
+    box.append(el('div', { className: 'foot' }, el('span', { className: 'spin' }),
+      el('span', { className: 'small muted', textContent: 'Reading the list and checking it against the repository…' })));
+    return box;
+  }
+  const r = p.report;
+  if (!r) return box;
+  if (p.checking) {
+    box.append(el('div', { className: 'small faint', style: 'margin-bottom:8px' },
+      el('span', { className: 'spin' }), ' Re-checking…'));
+  }
+
+  if (!r.entries.length) {
+    box.append(el('div', { className: 'note bad' },
+      el('b', { textContent: 'Nothing in that box was read as a table name. ' }),
+      'Ripple falls back to its own guess — names ending _PROD, _PRD or _PUBLISHED — which '
+      + 'is almost certainly not how your tables are named. Paste the list again, one table '
+      + 'per line.'));
+    if (r.notes.length) box.append(productionNotes(r));
+    return box;
+  }
+
+  // ── what was read ──
+  const head = el('div', { style: 'display:flex;gap:10px;align-items:baseline;flex-wrap:wrap' });
+  head.append(el('b', { style: 'font-size:14px', textContent:
+    r.nameCount
+      ? `${r.nameCount} table name${r.nameCount === 1 ? '' : 's'} read`
+      : 'No exact table names — patterns only' }));
+  if (r.patternCount) {
+    head.append(el('span', { className: 'badge sm violet',
+      textContent: `${r.patternCount} pattern${r.patternCount === 1 ? '' : 's'}` }));
+  }
+  box.append(head);
+
+  const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
+  r.entries.forEach(e => {
+    const chip = el('span', { className: 'chip mono' + (e.isPattern ? ' pattern' : ''),
+      textContent: e.given });
+    if (e.isPattern) chip.title = e.kind === 'glob'
+      ? 'A pattern — matched against the whole table name'
+      : 'A pattern — matches the end of a table name';
+    chips.append(chip);
+  });
+  box.append(chips);
+  if (r.patternCount) {
+    box.append(el('div', { className: 'small faint', style: 'margin-top:8px;line-height:1.5',
+      textContent: 'The outlined ones are patterns, not table names. Everything else is matched exactly.' }));
+  }
+
+  if (r.notes.length) box.append(productionNotes(r));
+  box.append(productionCheck(r));
+  return box;
+}
+
+function productionNotes(r) {
+  const wrap = el('div', { className: 'note info', style: 'margin-top:12px' });
+  wrap.append(el('b', { style: 'display:block', textContent: 'What was left out of that paste' }));
+  r.notes.forEach(n => {
+    const line = el('div', { style: 'margin-top:6px;line-height:1.55' }, n.text);
+    if (n.examples && n.examples.length) {
+      line.append(el('span', { className: 'small faint',
+        textContent: ' — ' + n.examples.join(' · ') }));
+    }
+    wrap.append(line);
+  });
+  return wrap;
+}
+
+/* The important one. If fifty tables are pasted and Ripple has only ever seen
+   forty-four of them, the other six are either misspelled or built somewhere it
+   could not read — and either way a clean result for those six means nothing. */
+function productionCheck(r) {
+  const c = r.check;
+  const wrap = el('div');
+  if (!c || !c.checked) {
+    wrap.append(el('div', { className: 'note warn', style: 'margin-top:12px' },
+      el('b', { textContent: 'This list has not been checked against a repository. ' }),
+      'Nothing has been read yet, so Ripple cannot say whether these tables exist. '
+      + 'Choose the repository, then come back to this box.'));
+    return wrap;
+  }
+  const missing = c.missing || [];
+  const total = c.foundCount + missing.length;
+  if (total) {
+    wrap.append(el('div', { className: 'note ' + (missing.length ? 'bad' : 'good'), style: 'margin-top:12px' },
+      el('b', { style: 'display:block;font-size:14px', textContent: missing.length
+        ? `${missing.length} of the ${total} table${total === 1 ? '' : 's'} on this list `
+          + `${missing.length === 1 ? 'is' : 'are'} not in this repository`
+        : `All ${total} table${total === 1 ? '' : 's'} on this list were found in this repository` }),
+      el('div', { style: 'margin-top:6px;line-height:1.55', textContent: missing.length
+        ? `Ripple read ${c.tablesKnown.toLocaleString()} table names out of the code it could `
+          + 'understand, and these are not among them. Either the name is spelled differently '
+          + 'here, or the table is built somewhere Ripple could not read. Until that is settled, '
+          + 'a clean result for these tables means nothing.'
+        : `Checked against the ${c.tablesKnown.toLocaleString()} table names Ripple read out of `
+          + 'this repository.' })));
+    // Grouped rather than listed one sentence at a time. Sixty rows each saying
+    // the same thing is a page nobody scrolls to the end of, and the two groups
+    // send a person to two completely different places.
+    [['nowhere', 'Not written anywhere in this repository',
+      'A misspelling, a table from another repository, or one no code here names at all.'],
+     ['written', 'The name is here, but nothing Ripple could read builds it',
+      'Something creates these somewhere it could not follow — a procedure, a generated statement, or a job it has never seen.'],
+    ].forEach(([state, title, why]) => {
+      const group = missing.filter(m => m.state === state);
+      if (!group.length) return;
+      wrap.append(el('div', { style: 'margin-top:12px' },
+        el('span', { className: 'lbl', textContent: `${title} — ${group.length}` }),
+        el('div', { className: 'small faint', style: 'margin-top:4px;line-height:1.5', textContent: why })));
+      const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:8px' });
+      group.forEach(m => chips.append(el('span', { className: 'chip mono', textContent: m.given })));
+      wrap.append(chips);
+    });
+    // A name nobody uses as a table may have been meant as a naming rule. Said
+    // rather than guessed at: quietly re-reading it as a pattern is how a rule
+    // stops meaning what it says.
+    const meant = missing.filter(m => m.endsWith);
+    if (meant.length) {
+      const note = el('div', { className: 'note warn', style: 'margin-top:12px' },
+        el('b', { style: 'display:block', textContent: meant.length === 1
+          ? `No table is called ${meant[0].given} — but ${meant[0].endsWith} table`
+            + `${meant[0].endsWith === 1 ? '' : 's'} end with it`
+          : `${meant.length} of those names are the end of a real table name here` }),
+        el('div', { style: 'margin-top:6px;line-height:1.55', textContent:
+          'Ripple is treating them as exact table names, so they match nothing. If they were '
+          + 'meant as a naming rule, write each one with an underscore or a star in front — '
+          + `${meant.slice(0, 3).map(m => '_' + m.given).join(', ')} — and it will match the `
+          + 'end of a name instead.' }));
+      wrap.append(note);
+    }
+  }
+  const dead = (c.patterns || []).filter(x => !x.matches);
+  if (dead.length) {
+    wrap.append(el('div', { className: 'note warn', style: 'margin-top:12px' },
+      el('b', { style: 'display:block', textContent: dead.length === 1
+        ? `The pattern ${dead[0].given} matches no table in this repository`
+        : `${dead.length} of your patterns match no table in this repository` }),
+      el('div', { style: 'margin-top:6px;line-height:1.55',
+        textContent: (dead.length === 1 ? 'It is' : `They are (${dead.map(d => d.given).join(', ')})`)
+          + ' doing nothing at all. If your published tables are not named that way, '
+          + 'every finding will be reported as reaching a table Ripple cannot call production — '
+          + 'the headline will read far calmer than the truth.' })));
+  }
+  const live = (c.patterns || []).filter(x => x.matches);
+  if (live.length) {
+    live.forEach(x => wrap.append(el('div', { className: 'small muted', style: 'margin-top:8px;line-height:1.55' },
+      el('span', { className: 'chip mono pattern', textContent: x.given }),
+      ` matches ${x.matches} table${x.matches === 1 ? '' : 's'} here — ${x.examples.join(', ')}`
+        + (x.matches > x.examples.length ? ' and others' : ''))));
+  }
+  return wrap;
+}
+
 async function api(path, opts = {}) {
   const r = await fetch(path, opts);
   if (!r.ok) {
@@ -567,6 +811,16 @@ function step3(root) {
         ? `${h.repo.files} file${h.repo.files === 1 ? '' : 's'} ready to scan.`
         : 'check the repository folder in Settings & checks.'))));
   ready.append(neverOpenedNote(h.repo.heldOnline || 0, h.repo.pathTooLong || 0));
+  if (h.repo.inSkippedDirs) {
+    ready.append(el('div', { className: 'note warn', style: 'margin-top:12px' },
+      el('b', { style: 'display:block',
+        textContent: `${h.repo.inSkippedDirs} file${h.repo.inSkippedDirs === 1 ? '' : 's'} skipped `
+          + 'because of the folder they are in' }),
+      el('div', { style: 'margin-top:6px;line-height:1.55', textContent:
+        'Ripple walks past folders called ' + (h.repo.skippedDirNames || []).join(', ')
+        + ' — in most repositories those hold generated output. If yours holds real pipeline '
+        + 'code, none of it has been read.' })));
+  }
 
   // what kinds of file are in the index — counted, not assumed
   const kinds = x(root, 'kinds'); kinds.innerHTML = '';
@@ -651,7 +905,7 @@ function step3(root) {
        || 'Reading every file. On a repository of a few thousand files this takes '
           + 'a few minutes — the count appears as soon as the first files are read.')
     : repoOk
-      ? `Scanning ${h.repo.label}.`
+      ? `The scan will search ${h.repo.label}.`
       : 'Nothing is indexed, so a scan would find nothing.';
   // Both halves matter. Files can be indexed from a folder that has since been
   // moved or deleted, and offering to scan it would be scanning a memory.
@@ -676,11 +930,14 @@ function repoFacts(h) {
   const facts = [
     ['Files indexed', String(h.repo.files)],
     // Only when there are some. "Files indexed 1,770" is the number somebody
-    // reads to decide the whole folder was covered, so when it was not, the
-    // row saying so has to sit directly underneath it.
+    // reads to decide the whole folder was covered, so when it was not, every
+    // row saying otherwise has to sit directly underneath it.
     ...(((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0))
       ? [['Files never opened', String((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0))]]
       : []),
+    ...(h.repo.unreadable ? [['Files that would not parse', String(h.repo.unreadable)]] : []),
+    ...(h.repo.inSkippedDirs
+      ? [['Files in folders Ripple skips', String(h.repo.inSkippedDirs)]] : []),
     ['Statements understood', String(h.repo.statements)],
     // A folder that was never a git checkout has no branch, and an empty row
     // would read as a missing answer rather than as "there isn't one".
@@ -813,7 +1070,12 @@ function runScan() {
 function step4(root) {
   const sc = S.scan;
   if (!sc) { x(root, 'progress').append(el('div', { className: 'note info', textContent: 'No scan yet.' })); return; }
-  const [cls, label] = RISK[sc.risk] || RISK.none;
+  // Nothing was read, so there is no result to grade. A green "No impact" over
+  // an empty folder is a statement about the folder wearing the clothes of a
+  // statement about the pipeline.
+  const nothingRead = !sc.filesScanned;
+  const [cls, label] = nothingRead ? ['amber', 'Nothing was scanned']
+    : (RISK[sc.risk] || RISK.none);
   x(root, 'risk').append(el('span', { className: 'badge ' + cls, textContent: label }));
   // The line under the title has to be true of the screen underneath it, and
   // "grouped under the production table" is not true when there is not one.
@@ -831,9 +1093,11 @@ function step4(root) {
     // A folder that was never a git checkout has no branch, and an empty chip
     // sitting there reads as something that failed to load.
     S.health.repo.branch ? el('span', { className: 'chip', textContent: S.health.repo.branch }) : null,
-    el('span', { textContent: sc.stats.filesWithImpact
-      ? `Scan complete — ${sc.stats.filesWithImpact} file${sc.stats.filesWithImpact === 1 ? '' : 's'} with impact`
-      : 'Scan complete — nothing carries these attributes',
+    el('span', { textContent: nothingRead
+      ? 'No files were read'
+      : sc.stats.filesWithImpact
+        ? `Scan complete — ${sc.stats.filesWithImpact} file${sc.stats.filesWithImpact === 1 ? '' : 's'} with impact`
+        : 'Scan complete — nothing carries these attributes',
       style: 'margin-left:auto;font-size:13px;font-weight:600;color:var(--blued)' })));
   done.append(el('div', { style: 'display:flex;align-items:baseline;gap:9px;margin-top:18px;flex-wrap:wrap' },
     el('span', { className: 'big', textContent: String(sc.filesScanned) }),
@@ -842,30 +1106,71 @@ function step4(root) {
 
   const st = sc.stats;
   const reached = sc.reached || [], other = sc.other || [];
-  const cards = [
-    ['Production tables at risk', st.productionTables, st.productionTables ? 'var(--red)' : 'var(--green)', 'Matched your published-table rule'],
-    ['Other tables reached', st.tablesReached ?? 0, (st.tablesReached ? 'var(--amber)' : ''), 'The chain ends at these'],
-    ['Attributes impacted', st.attributesImpacted, '', 'Of those you confirmed'],
-    ['Files to change', st.filesWithImpact, '', `Of ${sc.filesScanned} scanned`],
-    ['Breaking usages', st.breakingUsages, st.breakingUsages ? 'var(--amber)' : '', 'Filters, joins, ranking'],
+  // Two rows under two headings, rather than seven cards in one row that wraps
+  // six-and-one. They are not the same kind of number: the first row is the
+  // answer, the second is how much of the repository the answer covers — and
+  // the second one is the one that decides whether the first can be believed.
+  const box = x(root, 'stats');
+  const statCard = ([l, v, colour, sub]) => el('div', { className: 'stat' },
+    el('span', { className: 'lbl', textContent: l }),
+    el('div', { className: 'v', textContent: String(v), style: colour ? `color:${colour}` : '' }),
+    el('div', { className: 's', textContent: sub }));
+
+  box.append(el('span', { className: 'lbl', style: 'display:block;margin-bottom:10px',
+    textContent: 'What the change reaches' }));
+  const reach = el('div', { className: 'stats five' });
+  [['Production tables at risk', st.productionTables, st.productionTables ? 'var(--red)' : 'var(--green)', 'On your published-table list'],
+   ['Other tables reached', st.tablesReached ?? 0, (st.tablesReached ? 'var(--amber)' : ''), 'The chain ends at these'],
+   ['Attributes impacted', st.attributesImpacted, '', 'Of those you confirmed'],
+   ['Files to change', st.filesWithImpact, '', `Of ${sc.filesScanned} scanned`],
+   ['Breaking usages', st.breakingUsages, st.breakingUsages ? 'var(--amber)' : '', 'Filters, joins, ranking'],
+  ].forEach(c => reach.append(statCard(c)));
+  box.append(reach);
+
+  const uncovered = [
     ['To check by hand', st.couldNotRead, st.couldNotRead ? 'var(--amber)' : '', 'Ripple could not follow these'],
   ];
   // Only ever shown when there are some. A "0 never opened" card would be a
-  // reassurance nobody asked for, taking room from the six that carry a result.
+  // reassurance nobody asked for.
   if (st.neverOpened) {
-    cards.push(['Never opened', st.neverOpened, 'var(--red)', 'Not on this machine, or path too long']);
+    uncovered.push(['Never opened', st.neverOpened, 'var(--red)', 'Not on this machine, or path too long']);
   }
-  const box = x(root, 'stats');
-  cards.forEach(([l, v, colour, sub]) => box.append(el('div', { className: 'stat' },
-    el('span', { className: 'lbl', textContent: l }),
-    el('div', { className: 'v', textContent: String(v), style: colour ? `color:${colour}` : '' }),
-    el('div', { className: 's', textContent: sub }))));
+  if (S.health?.repo?.inSkippedDirs) {
+    uncovered.push(['In folders Ripple skips', S.health.repo.inSkippedDirs, 'var(--amber)',
+      (S.health.repo.skippedDirNames || []).join(', ')]);
+  }
+  box.append(el('span', { className: 'lbl', style: 'display:block;margin:22px 0 10px',
+    textContent: 'What this result does not cover' }));
+  const gaps3 = el('div', { className: 'stats three' });
+  uncovered.forEach(c => gaps3.append(statCard(c)));
+  box.append(gaps3);
+  // Only a reassurance when there was something to be reassured about. "Every
+  // file was opened and read" is true of no files at all, and reads as a clean
+  // bill of health for a repository that was never there.
+  if (!st.couldNotRead && uncovered.length === 1 && !nothingRead) {
+    gaps3.append(el('div', { className: 'note good', style: 'grid-column:span 2;align-self:stretch;display:flex;align-items:center' },
+      el('div', {}, el('b', { style: 'display:block', textContent: 'Every file was opened and read.' }),
+        'Nothing was skipped, and nothing was left for a person to follow by hand.')));
+  }
+
+  // Before the findings, not after them: this is the card that says how much of
+  // the repository the findings are a statement about.
+  renderNeverOpened(box, sc);
 
   const groups = x(root, 'groups');
+  groups.append(el('span', { className: 'lbl', style: 'display:block;margin-bottom:2px',
+    textContent: 'The findings' }));
   // The clean result is only ever offered when there is genuinely nothing:
   // no production table, no other table, and no loose usage anywhere. Anything
   // less than that and a green tick is the tool lying to your face.
-  if (!sc.groups.length && !reached.length && !other.length) {
+  if (nothingRead) {
+    groups.append(el('div', { className: 'note bad', style: 'padding:18px 22px' },
+      el('b', { style: 'display:block;font-size:15px', textContent: 'No files were read, so nothing was searched' }),
+      el('div', { style: 'margin-top:5px', textContent:
+        'This is not a result about your pipeline — it is a result about an empty folder. '
+        + 'Point Ripple at the folder holding the code on the settings screen, then run the '
+        + 'scan again.' })));
+  } else if (!sc.groups.length && !reached.length && !other.length) {
     groups.append(el('div', { className: 'note good', style: 'display:flex;align-items:center;gap:14px;padding:18px 22px' },
       el('span', { textContent: '✓', style: 'width:30px;height:30px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0' }),
       el('div', {}, el('b', { textContent: 'Nothing in this repository uses these attributes', style: 'display:block' }),
@@ -875,7 +1180,8 @@ function step4(root) {
   // the most important thing on the screen, so it opens rather than sitting
   // shut behind a caret like a footnote.
   if (!sc.groups.length && reached.length && S.openGroup === 'p0') S.openGroup = 'r0';
-  sc.groups.forEach((g, gi) => groups.append(groupCard(g, `p${gi}`, 'Production table', '')));
+  drawGroups(groups, sc.groups, 'p', 'Production table', '',
+             'production table', 'production tables');
 
   if (reached.length) {
     // These used to be thrown away. A chain that ends at a table nobody has
@@ -883,17 +1189,20 @@ function step4(root) {
     groups.append(el('div', { className: 'note warn', style: 'margin-top:20px' },
       el('b', { textContent: `The change reaches ${reached.length} more table${reached.length === 1 ? '' : 's'}, `
         + `${sc.groups.length ? 'beyond the ones above' : 'none of them on your published list'}. ` }),
-      'Ripple decides which tables are the ones your team publishes from a naming rule — '
-      + `currently ${S.health?.production || 'not set'}. Nothing below matches it, so Ripple `
+      'Ripple only calls a table production when it is on the published-table list — '
+      + `currently ${S.health?.production || 'not set'}. Nothing below is on it, so Ripple `
       + 'cannot tell you whether anyone outside your team reads these. If they are your published '
-      + 'tables, correct the rule on the settings screen and run the scan again.'));
-    reached.forEach((g, gi) => groups.append(groupCard(g, `r${gi}`, 'Chain ends here', 'background:var(--amber);color:#fff')));
+      + 'tables, add them on the settings screen and run the scan again.'));
+    drawGroups(groups, reached, 'r', 'Chain ends here', 'background:var(--amber);color:#fff',
+               'table the chain ends at', 'tables the chain ends at');
   }
 
   if (other.length) {
     const card = el('div', { className: 'card clip', style: 'margin-top:20px' });
     card.append(el('div', { className: 'chead' },
-      el('b', { textContent: `${other.length} more usage${other.length === 1 ? '' : 's'} that build no table` })));
+      el('b', { textContent: other.length === 1
+        ? '1 more usage that builds no table'
+        : `${other.length} more usages that build no table` })));
     const p = el('div', { className: 'pad lg' });
     p.append(el('div', { className: 'prose', textContent:
       'The attribute is read here, but this code does not write a table Ripple can name — a bare query, or a job whose destination is set somewhere it cannot see. Real usages all the same.' }));
@@ -911,10 +1220,42 @@ function step4(root) {
     groups.append(card);
   }
 
-  x(root, 'gaps').innerHTML = '';
-  renderChecks(x(root, 'gaps'), sc);
-  renderGaps(x(root, 'gaps'), sc);
+  const gapBox = x(root, 'gaps');
+  gapBox.innerHTML = '';
+  gapBox.append(el('span', { className: 'lbl', style: 'display:block;margin:26px 0 2px',
+    textContent: 'How to check this result' }));
+  renderChecks(gapBox, sc);
+  renderGaps(gapBox, sc);
   x(root, 'next').onclick = () => goto(5);
+}
+
+/* A run of table cards, with a readable number of them drawn.
+
+   Measured on a repository the size of the one this was built for: following a
+   key column reaches over two hundred tables, and two hundred identical
+   collapsed cards is a page nobody scrolls to the end of — so the tables at the
+   bottom of it are, in practice, hidden. Nothing is dropped: the ones with the
+   most impacts are drawn (they are sorted that way), and every remaining table
+   is named, with its count, in a list underneath. */
+const GROUPS_DRAWN = 20;
+
+function drawGroups(box, list, prefix, tag, tagStyle, one, many) {
+  list.slice(0, GROUPS_DRAWN).forEach((g, gi) =>
+    box.append(groupCard(g, `${prefix}${gi}`, tag, tagStyle)));
+  const rest = list.slice(GROUPS_DRAWN);
+  if (!rest.length) return;
+  const card = el('div', { className: 'card pad lg', style: 'margin-top:16px' });
+  card.append(el('span', { className: 'lbl', textContent:
+    `${rest.length} more ${rest.length === 1 ? one : many}` }));
+  card.append(el('div', { className: 'small muted', style: 'margin-top:6px;line-height:1.55',
+    textContent: `The ${GROUPS_DRAWN} with the most impacts are shown above, opened one at a `
+      + 'time. The rest are named here with their counts — nothing has been left out of the '
+      + 'analysis, only out of the cards.' }));
+  const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
+  rest.forEach(g => chips.append(el('span', { className: 'chip mono',
+    textContent: `${g.prod} · ${g.rows.length}` })));
+  card.append(chips);
+  box.append(card);
 }
 
 /* One production table, or one table a chain ends at. The same rows either
@@ -938,9 +1279,20 @@ function groupCard(g, key, tag, tagStyle) {
   g.rows.forEach((r, ri) => {
     const rowKey = `${key}-${ri}`, ro = S.openRow === rowKey;
     const row = el('div', { className: 'row' + (ro ? ' open' : '') });
+    // Two hops down the chain the column is no longer called what the person
+    // typed into the notification, so a row can read "mc" on a scan of three
+    // attributes with nothing to say which of them it belongs to. The
+    // attribute that was asked about is named whenever it differs.
+    const other = (r.roots || []).filter(n => n.toUpperCase() !== (r.attr || '').toUpperCase());
     row.append(
       el('span', { className: 'mono', textContent: r.inter, style: 'font-weight:600;font-size:13px;min-width:0;overflow-wrap:break-word' }),
-      el('span', { className: 'mono', textContent: r.attr, style: 'font-size:13px;font-weight:600;color:var(--blued);min-width:0;overflow-wrap:break-word' }),
+      el('span', { style: 'min-width:0' },
+        el('span', { className: 'mono', textContent: r.attr,
+          style: 'font-size:13px;font-weight:600;color:var(--blued);overflow-wrap:break-word' }),
+        other.length
+          ? el('span', { className: 'small faint', style: 'display:block;margin-top:3px',
+              textContent: 'from ' + other.join(', ') })
+          : null),
       el('span', {}, el('span', { className: 'chip alias', textContent: r.alias })),
       // The second badge goes inside the same cell rather than adding a column,
       // so a row that has it lines up with the rows that do not.
@@ -1107,22 +1459,45 @@ function neverOpenedNote(heldOnline, tooLong) {
   return note;
 }
 
-/* The honest half of the report: what Ripple could NOT account for. Styled to
-   stand out, never to shrink — a clean finding list is only worth what was read. */
-function renderGaps(box, sc) {
+/* Files that were never opened. Drawn directly under the counts rather than at
+   the bottom of the page, because it is the one card that decides whether every
+   number above it can be believed — and the bottom of a long page is where a
+   caveat goes to be missed. */
+function renderNeverOpened(box, sc) {
   if (sc.heldOnline?.length || sc.pathTooLong?.length) {
     const card = el('div', { className: 'card pad lg', style: 'margin-top:20px;border-color:var(--amberln)' });
     card.append(neverOpenedNote(sc.heldOnline?.length || 0, sc.pathTooLong?.length || 0));
     const names = [...(sc.heldOnline || []), ...(sc.pathTooLong || [])];
-    const chips = el('div', { className: 'chips', style: 'margin-top:12px' });
-    names.slice(0, 200).forEach(f => chips.append(el('span', { className: 'chip mono', textContent: f })));
+    const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
+    names.slice(0, 300).forEach(f => chips.append(el('span', { className: 'chip mono', textContent: f })));
     card.append(chips);
-    if (names.length > 200) {
+    if (names.length > 300) {
       card.append(el('div', { className: 'small muted', style: 'margin-top:8px',
-        textContent: `and ${names.length - 200} more, not listed here to keep this page readable.` }));
+        textContent: `and ${names.length - 300} more, not listed here to keep this page readable.` }));
     }
     box.append(card);
   }
+  // A whole folder of code walked past because of what it is called. In most
+  // repositories "build" and "target" hold generated output; in a few they hold
+  // the pipeline, and then this is a scan of half a repository with a green
+  // tick on it.
+  const skipped = S.health?.repo?.inSkippedDirs || 0;
+  if (skipped) {
+    box.append(el('div', { className: 'note warn', style: 'margin-top:16px' },
+      el('b', { style: 'display:block;font-size:14px',
+        textContent: `${skipped} file${skipped === 1 ? '' : 's'} Ripple can read `
+          + `${skipped === 1 ? 'was' : 'were'} skipped because of the folder ${skipped === 1 ? 'it is' : 'they are'} in` }),
+      el('div', { style: 'margin-top:6px;line-height:1.55', textContent:
+        'Ripple walks past folders called '
+        + (S.health.repo.skippedDirNames || []).join(', ')
+        + ', because in most repositories those hold generated output. If yours holds real '
+        + 'pipeline code, nothing in it has been read and nothing in it can appear in a result.' })));
+  }
+}
+
+/* The honest half of the report: what Ripple could NOT account for. Styled to
+   stand out, never to shrink — a clean finding list is only worth what was read. */
+function renderGaps(box, sc) {
   if (sc.unreadable?.length) {
     const card = el('div', { className: 'card clip', style: 'margin-top:20px;border-color:var(--amberln)' });
     card.append(el('div', { className: 'chead', style: 'background:var(--amberbg);border-bottom-color:var(--amberln)' },
@@ -1131,6 +1506,15 @@ function renderGaps(box, sc) {
     const p = el('div', { className: 'pad lg' });
     p.append(el('div', { className: 'prose', textContent:
       'Ripple either could not read these, or found your name in them somewhere it cannot follow — inside a procedure call, a loop, or written as text. They are not covered by the findings above, and a clean result is only as good as what could be followed.' }));
+    // The advice is usually the same sentence on every entry — "this repository
+    // is being read as generic SQL", on sixty-eight files. Printed sixty-eight
+    // times it stops being advice and becomes wallpaper the eye skips, taking
+    // the file names with it. Anything said more than once is said once, here.
+    const counts = {};
+    sc.unreadable.forEach(u => { if (u.hint) counts[u.hint] = (counts[u.hint] || 0) + 1; });
+    const shared = Object.keys(counts).filter(h => counts[h] > 1);
+    shared.forEach(h => p.append(el('div', { className: 'note info', style: 'margin-top:12px' },
+      el('b', { textContent: `Applies to ${counts[h]} of these files. ` }), h)));
     // The point of this list is that somebody opens those files and checks
     // them, so it gives them the line to open at and the line itself. "Could
     // not parse" sends a person hunting through a thousand-line file.
@@ -1146,7 +1530,7 @@ function renderGaps(box, sc) {
             + 'border-radius:6px;overflow-x:auto;white-space:pre' },
           `line ${u.line} · ${u.snippet}`));
       }
-      if (u.hint) {
+      if (u.hint && !shared.includes(u.hint)) {
         item.append(el('div', { className: 'small muted', style: 'margin-top:6px;line-height:1.55', textContent: u.hint }));
       }
       p.append(item);
@@ -1171,6 +1555,14 @@ function renderGaps(box, sc) {
 function step5(root) {
   const gs = S.scan?.graphs || [];
   const tabs = x(root, 'tabs'), map = x(root, 'map');
+  // The line under the title has to be true of the picture underneath it, and
+  // "to the production tables it feeds" is not true of a branch that ends at a
+  // table Ripple has not been told is published — which is most of them when
+  // the published-table list is wrong, exactly when it matters most.
+  const anyProd = gs.some(g => (g.branches || []).length);
+  x(root, 'sub').textContent = anyProd
+    ? 'Where the changed attribute travels, what it is called at each step, and which published tables it reaches.'
+    : 'Where the changed attribute travels, and what it is called at each step. None of these branches reach a table on your published list.';
   if (!gs.length) {
     map.append(el('div', { className: 'note good', style: 'max-width:600px;padding:22px 26px' },
       el('b', { textContent: 'No downstream lineage found', style: 'display:block;font-size:15px' }),
@@ -1232,8 +1624,9 @@ function step5(root) {
   map.append(card);
   if (ends.length) {
     map.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
-      el('b', { textContent: `${ends.length} of these branch${ends.length === 1 ? ' ends' : 'es end'} at a table `
-        + 'that does not match your published-table rule. ' }),
+      el('b', { textContent: ends.length === 1
+        ? 'One of these branches ends at a table that is not on your published list. '
+        : `${ends.length} of these branches end at a table that is not on your published list. ` }),
       'They are drawn because the change reaches them either way — Ripple simply cannot say '
       + 'whether anyone outside your team reads them.'));
   }
@@ -1437,8 +1830,12 @@ function historyView(root) {
   const kept = S.health?.limits?.historyKept !== false;
   root.append(el('div', { className: 'head' }, el('div', {},
     el('h2', { textContent: 'Past analyses' }),
+    // "On this server" is wrong in the copy that runs as a program on somebody's
+    // own laptop, where there is no server and nothing is shared with anyone.
     el('p', { textContent: kept
-      ? 'Everything saved on this server, newest first.'
+      ? (S.health?.offline
+        ? 'Everything saved on this machine, newest first. They stay in the folder beside Ripple.'
+        : 'Everything saved on this server, newest first.')
       : 'Newest first — but this list does not last on this host. See the note below.' }))));
   // A hosted copy is replaced constantly and takes its saved rows with it.
   // An empty list would otherwise look like a bug or like lost work.
@@ -1496,8 +1893,28 @@ function settingsView(root) {
   root.append(el('div', { className: 'head' }, el('div', {},
     el('h2', { textContent: 'Settings & checks' }),
     el('p', { textContent: 'What Ripple is connected to, and whether it is working.' }))));
-  const grid = el('div', { className: 'grid2 even' });
 
+  // First, and on its own: the one setting on this screen that can turn a real
+  // impact into a clean result.
+  root.append(productionCard({
+    onSave: (text) => api('/api/production', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    }).then(out => { S.health = out; }),
+    persistNote: 'Held by this server while it runs. Set RIPPLE_PROD_TABLES to keep it after a restart.',
+    savedNote: 'Saved. Every scan from now on uses this list — until this server restarts.',
+  }));
+  if (h.productionFrom === 'default') {
+    root.append(el('div', { className: 'note warn', style: 'margin:14px 0 24px' },
+      el('b', { textContent: 'Nobody has said which tables you publish. ' }),
+      'Ripple is guessing from names ending _PROD, _PRD or _PUBLISHED. If your published '
+      + 'tables are not named that way, every finding will be reported as reaching a table '
+      + 'Ripple cannot call production, and the headline will read far calmer than the truth.'));
+  } else {
+    root.append(el('div', { style: 'height:24px' }));
+  }
+
+  const grid = el('div', { className: 'grid2 even' });
   const left = el('div', { className: 'card pad lg' });
   left.append(el('span', { className: 'lbl', textContent: 'Repository' }));
   [['Folder', h.repo.path], ['Label', h.repo.label], ['Files indexed', String(h.repo.files)],
@@ -1507,19 +1924,11 @@ function settingsView(root) {
      : []),
    ['SQL dialect', h.sqlDialect], ['Renames followed', `${h.maxHops} hops`],
    ['Tables you publish', h.production || 'not set']].forEach(([k, v]) =>
-    left.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },
-      el('span', { className: 'small muted', textContent: k, style: 'width:150px;flex-shrink:0' }),
-      el('span', { className: 'small', textContent: v, style: 'font-weight:600;word-break:break-all' }))));
-  // The one setting on this screen that can turn a real impact into a clean
-  // result, so it is explained rather than listed.
-  left.append(el('div', { className: 'note warn', style: 'margin-top:18px' },
-    el('b', { textContent: 'What "tables you publish" decides. ' }),
-    'A finding counts as production impact only if the table it ends at matches that rule. '
-    + 'If your published tables are not named that way, Ripple will still list every table the '
-    + 'change reaches — but it will not call any of them production, and the headline will read '
-    + 'far calmer than the truth.'));
+    left.append(el('div', { className: 'factrow' },
+      el('span', { className: 'small muted', textContent: k }),
+      el('span', { className: 'small', textContent: v }))));
   left.append(el('div', { className: 'note info', style: 'margin-top:14px' },
-    'Change any of these with environment variables — ',
+    'Set on the host with environment variables — ',
     el('span', { className: 'mono', textContent: 'RIPPLE_REPO' }), ', ',
     el('span', { className: 'mono', textContent: 'RIPPLE_SQL_DIALECT' }), ', ',
     el('span', { className: 'mono', textContent: 'RIPPLE_PROD_TABLES' }), ', ',
@@ -1688,7 +2097,8 @@ function render() {
 
   if (S.view === 'history') {
     setHeader('Past analyses', S.health?.limits?.historyKept === false
-      ? 'Kept only until this host is replaced' : 'Saved on this server');
+      ? 'Kept only until this host is replaced'
+      : S.health?.offline ? 'Saved beside Ripple, on this machine' : 'Saved on this server');
     historyView(view); return;
   }
   if (S.view === 'settings') { setHeader('Settings & checks', 'Connections and health'); settingsView(view); return; }

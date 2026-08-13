@@ -77,6 +77,12 @@ class Finding:
     lang: str
     lines: list[dict]
     hop: int
+    # The attribute the person actually asked about, which two hops down the
+    # chain is no longer the column name on this row. A row saying "mc" is
+    # unattributable on a scan of three attributes -- and it is the row somebody
+    # has to act on. Not part of what makes two findings the same finding: one
+    # usage can be on the path of more than one attribute.
+    roots: list[str] = field(default_factory=list, compare=False)
     # Whether the statement said which table this column came from. False means
     # the usage is real and on that line, but the same column name is in more
     # than one table the statement reads and the SQL did not say whose it is.
@@ -264,6 +270,8 @@ def trace(
                     )
                     findings_by_key.setdefault(f.key(), f)
                     f = findings_by_key[f.key()]
+                    if attr not in f.roots:
+                        f.roots.append(attr)
                     if f not in attr_findings:
                         attr_findings.append(f)
                     new_chain = chain + [f]
@@ -348,13 +356,20 @@ def trace(
             )
 
     res.graphs = graphs
+    # Most impacts first, then by name. On a real repository this is hundreds of
+    # tables long, and alphabetical order puts whichever table happens to start
+    # with an "a" at the top of the page -- so the one thing somebody reads
+    # first is decided by the alphabet rather than by how much of it is broken.
+    def _worst_first(groups: dict[str, list[Finding]]) -> list[tuple[str, list[Finding]]]:
+        return sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0].upper()))
+
     res.groups = [
         {
             "prod": prod,
             "note": f"Published by this team - {_kind_of_node(prod, cfg).lower()} table",
             "rows": [_finding_row(f) for f in fs],
         }
-        for prod, fs in sorted(prod_groups.items())
+        for prod, fs in _worst_first(prod_groups)
     ]
     placed = {f.key() for fs in prod_groups.values() for f in fs}
     res.reached = [
@@ -363,7 +378,7 @@ def trace(
             "note": "Last table in the chain - not matched by your production naming rule",
             "rows": [_finding_row(f) for f in fs],
         }
-        for table, fs in sorted(end_groups.items())
+        for table, fs in _worst_first(end_groups)
     ]
     placed |= {f.key() for fs in end_groups.values() for f in fs}
     res.other = [_finding_row(f) for f in res.findings if f.key() not in placed]
@@ -452,12 +467,13 @@ def _named_out_of_reach(
     for record in parsed.opaque.get(path, []):
         match = pattern.search(record.get("sql") or record.get("text") or "")
         if match:
-            line, text = _line_naming(src, match.group(1))
+            line, text, places = _line_naming(src, match.group(1))
             return {
                 "file": path,
                 "reason": "the name is used in a statement Ripple cannot follow",
                 "line": line,
                 "snippet": text,
+                "places": places,
                 "hint": "A procedure call, a loop, or SQL built as text and run later. "
                         "Ripple can see the name in it but not what it does with it, so "
                         "this one has to be read by a person.",
@@ -472,12 +488,18 @@ def _named_out_of_reach(
             match = pattern.search(str(literal.this))
             if not match:
                 continue
-            line, text = _line_naming(src, match.group(1))
+            line, text, places = _line_naming(src, match.group(1))
+            # How many lines of the file do this, not merely whether any does.
+            # A real file sets one tag per column and runs to sixty of them; a
+            # report naming one line reads as one thing to check, and sends
+            # somebody to fix one line out of sixty.
+            where = f" - on {places} lines of this file" if places > 1 else ""
             return {
                 "file": path,
-                "reason": f'the name appears as text inside a call - "{match.group(1)}"',
+                "reason": f'the name appears as text inside a call - "{match.group(1)}"{where}',
                 "line": line,
                 "snippet": text,
+                "places": places,
                 "hint": "Written as a quoted string rather than used as a column, which is "
                         "how in-house helpers take a column or table name. Ripple cannot "
                         "follow what the helper does with it.",
@@ -485,23 +507,31 @@ def _named_out_of_reach(
     return None
 
 
-def _line_naming(src, name: str) -> tuple[int, str]:
-    """The line of the real file where this name is written, and that line.
+def _line_naming(src, name: str) -> tuple[int, str, int]:
+    """Where this name is written as text, that line, and how many such lines.
 
     Quoted occurrences win: that is the one being reported, and it is the line
-    somebody has to open the file at.
+    somebody has to open the file at. The count matters as much as the line --
+    one file can name the same column on sixty lines in a row.
     """
     if src is None:
-        return 1, ""
+        return 1, "", 0
     quoted = re.compile(r"['\"]" + re.escape(name) + r"['\"]", re.IGNORECASE)
     plain = re.compile(r"\b" + re.escape(name) + r"\b", re.IGNORECASE)
-    fallback = None
+    first = fallback = None
+    places = 0
     for number, line in enumerate(src.lines, start=1):
         if quoted.search(line):
-            return number, line.strip()[:140]
-        if fallback is None and plain.search(line):
+            places += 1
+            if first is None:
+                first = (number, line.strip()[:140])
+        elif fallback is None and plain.search(line):
             fallback = (number, line.strip()[:140])
-    return fallback or (1, "")
+    if first is not None:
+        return first[0], first[1], places
+    if fallback is not None:
+        return fallback[0], fallback[1], 1
+    return 1, "", 0
 
 
 def _longest_only(branches: list[list[dict]]) -> list[list[dict]]:
@@ -558,6 +588,10 @@ def _finding_row(f: Finding) -> dict:
         "inter": f.target_table or f.source_table,
         "from": f.source_table,
         "attr": f.source_column,
+        # Which of the attributes on the notification this row belongs to. Two
+        # renames down, the column on this row is not called what the person
+        # typed, and without this the row cannot be traced back to the question.
+        "roots": list(f.roots),
         "alias": f.alias,
         "logic": f.logic,
         "mode": f.mode,

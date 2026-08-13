@@ -140,8 +140,12 @@ def test_the_change_reaches_the_production_table(repo):
     that anybody acts on.
     """
     _, _, _, _, out = scan(repo, "bigquery")
-    assert [g["prod"] for g in out["groups"]] == ["customer_profile_prod",
-                                                  "final_targeting_prod"]
+    # Listed worst first, so the order is by how many impacts each carries
+    # rather than by the alphabet -- on a real scan this list is hundreds long.
+    assert {g["prod"] for g in out["groups"]} == {"customer_profile_prod",
+                                                  "final_targeting_prod"}
+    counts = [len(g["rows"]) for g in out["groups"]]
+    assert counts == sorted(counts, reverse=True)
     files = {r["file"] for g in out["groups"] for r in g["rows"]}
     assert "etl/customer_snapshot.sql" in files
     assert "odl/customer_profile_prod.sql" in files

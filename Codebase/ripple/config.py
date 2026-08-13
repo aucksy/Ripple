@@ -6,10 +6,16 @@ network lives here, so nothing has to be hunted for in code.
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass, field
-from fnmatch import fnmatch
 from pathlib import Path
+
+from .production import (           # noqa: F401  (re-exported for older callers)
+    DEFAULT_PRODUCTION,
+    DEFAULT_TEXT as DEFAULT_PRODUCTION_TEXT,
+    ProductionRule,
+    parse as parse_production_text,
+    parse_production_rule,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -20,15 +26,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # purely because the tables are not called _PROD. So it is a setting, it is on
 # screen, and findings that reach nothing on this list are still shown.
 #
-# A pattern with no * matches the end of a table name, which is how naming
-# conventions usually work (_PROD, _UMDL, _PUBLISHED). A pattern with a * is
-# matched in full, so PROD_* works too, and * on its own means every table.
-DEFAULT_PRODUCTION = ("_PROD", "_PRD", "_PUBLISHED")
-
-
-def parse_production_rule(text: str) -> tuple[str, ...]:
-    """The list a person typed into one box, as separate patterns."""
-    return tuple(p.strip() for p in re.split(r"[,;\n]+", text or "") if p.strip())
+# Two shapes are accepted, side by side. A pasted list of the real table names
+# is read as written -- that is the answer rather than a guess about it. A
+# pattern is still a pattern, unchanged: a word beginning with an underscore
+# matches the end of a table name (_PROD, _UMDL, _PUBLISHED), and one with a *
+# is matched in full, so PROD_* works too and * on its own means every table.
+# See ripple/production.py for how a paste is read.
 
 # The models Ripple offers on the Settings screen. Only Groq's production
 # models are listed -- preview ones get withdrawn without notice, and a model
@@ -151,11 +154,20 @@ class Settings:
     # How many renames deep to follow a column.
     max_hops: int = field(default_factory=lambda: int(_env("RIPPLE_MAX_HOPS", "4")))
 
-    # Which tables count as the ones this team publishes. See DEFAULT_PRODUCTION
-    # above for why this is a setting and not a constant.
+    # Which tables count as the ones this team publishes. See the note at the
+    # top of this file for why this is a setting and not a constant.
+    #
+    # Two fields, and both matter. ``production_patterns`` is what is matched
+    # against: every entry Ripple recognised, whether a real table name or a
+    # pattern. ``production_text`` is what was actually pasted, kept exactly as
+    # it arrived so the box can be opened and edited again rather than being
+    # handed back a tidied-up version of somebody's list.
     production_patterns: tuple[str, ...] = field(
         default_factory=lambda: parse_production_rule(_env("RIPPLE_PROD_TABLES", ""))
         or DEFAULT_PRODUCTION
+    )
+    production_text: str = field(
+        default_factory=lambda: _env("RIPPLE_PROD_TABLES", "") or DEFAULT_PRODUCTION_TEXT
     )
 
     # File types worth reading at all.
@@ -199,24 +211,53 @@ class Settings:
     def ai_available(self) -> bool:
         return bool(self.groq_api_key)
 
+    # ── the published-table rule ───────────────────────────────────────────
+    def production(self) -> ProductionRule:
+        """The rule, read. Rebuilt only when the entries themselves change.
+
+        Asked once per table visited on every hop of every scan, and a real
+        list is hundreds of names long, so the answer is worked out once and
+        kept rather than re-parsed each time.
+        """
+        entries = tuple(self.production_patterns)
+        cached = getattr(self, "_production_cache", None)
+        if cached is None or cached[0] != entries:
+            rule = ProductionRule(text=self.production_text,
+                                  entries=parse_production_text(
+                                      "\n".join(entries)).entries)
+            object.__setattr__(self, "_production_cache", (entries, rule))
+            return rule
+        return cached[1]
+
+    def set_production(self, text: str) -> ProductionRule:
+        """Take a pasted list, in whatever shape it arrived. Returns what was read.
+
+        An empty box would mean "no table is ever production", which reports
+        every repository as clean whatever it does. Falling back to the shipped
+        default is the only safe reading of one.
+        """
+        rule = parse_production_text(text or "")
+        if rule.is_empty():
+            rule = parse_production_text(DEFAULT_PRODUCTION_TEXT)
+            self.production_text = DEFAULT_PRODUCTION_TEXT
+        else:
+            self.production_text = str(text or "")
+        self.production_patterns = tuple(e.given for e in rule.entries)
+        object.__setattr__(self, "_production_cache",
+                           (self.production_patterns, rule))
+        return rule
+
     def is_production_table(self, table: str) -> bool:
-        t = (table or "").upper()
-        if not t:
-            return False
-        for raw in self.production_patterns:
-            pattern = raw.strip().upper()
-            if not pattern:
-                continue
-            if "*" in pattern or "?" in pattern:
-                if fnmatch(t, pattern):
-                    return True
-            elif t.endswith(pattern):
-                return True
-        return False
+        return self.production().matches(table)
 
     def production_rule(self) -> str:
-        """The rule as one line, for showing on screen and saving."""
-        return ", ".join(self.production_patterns)
+        """The rule as one short line, for a status row rather than a screen.
+
+        Two hundred pasted table names do not fit on a line, and pretending
+        otherwise produces a row of dots that says nothing. A long list is
+        counted instead; a short one is still shown in full.
+        """
+        return self.production().one_line()
 
 
 settings = Settings()

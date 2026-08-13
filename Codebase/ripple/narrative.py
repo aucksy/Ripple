@@ -24,6 +24,19 @@ def days_until(iso: str) -> int | None:
         return None
 
 
+def _names(items: list[str], limit: int = 6) -> str:
+    """A readable list of table names, however many there really are.
+
+    On a real repository one key column reaches hundreds of tables. Joining
+    them all into a sentence produces a paragraph nobody reads, in the one place
+    on the screen written to be read -- and the count, which is the fact that
+    matters, disappears into the middle of it.
+    """
+    if len(items) <= limit:
+        return ", ".join(items)
+    return ", ".join(items[:limit]) + f" and {len(items) - limit} more"
+
+
 def _unique(groups: list[dict]) -> list[dict]:
     """Rows across groups, listed once. A finding upstream of two tables appears
     in both groups; counting it twice makes the actions read like a stutter."""
@@ -57,6 +70,24 @@ def summarise(scan: dict, vals: dict) -> dict:
     ) or "the changed attributes"
     when = vals.get("effectiveLabel") or "the effective date"
 
+    # How much of the repository this answer does NOT cover. A headline is a
+    # sentence somebody quotes in a meeting and pastes into a reply, so it must
+    # never claim more than was read: "no impact" over four hundred files that
+    # were never opened is the exact answer this tool exists to stop anybody
+    # giving, and so is "all fixable in code" over a list of files nobody could
+    # follow -- the fix that is missing may well be in one of them.
+    files_scanned = scan.get("filesScanned", 0)
+    never_opened = stats.get("neverOpened", 0)
+    blind = never_opened + len(unreadable)
+
+    def _blind_phrase() -> str:
+        bits = []
+        if never_opened:
+            bits.append(f"{_plural(never_opened, 'file')} could not be opened at all")
+        if unreadable:
+            bits.append(f"{_plural(len(unreadable), 'file')} could not be followed")
+        return " and ".join(bits)
+
     if not groups and elsewhere:
         # Found, and consumed -- but nothing it feeds is on the list of tables
         # this team publishes. That is either a genuinely internal chain or a
@@ -68,7 +99,7 @@ def summarise(scan: dict, vals: dict) -> dict:
         narrative = (
             f"{attrs} is used in {_plural(len({r.get('file') for r in elsewhere}), 'file')} "
             f"of the {scan.get('filesScanned', 0)} scanned. "
-            + (f"Those chains end at {', '.join(end_names)}. " if end_names else "")
+            + (f"Those chains end at {_names(end_names)}. " if end_names else "")
             + "None of those names match the rule Ripple has been given for a table this "
               "team publishes, so this is not a clean result - it is an unfinished one. "
               "Check the rule on the settings screen before replying."
@@ -81,33 +112,64 @@ def summarise(scan: dict, vals: dict) -> dict:
             "are really named, then run the scan again.",
             "Until then, treat the tables listed above as impacted.",
         ]
+    elif not files_scanned:
+        # Nothing was read at all. "No impact" here is a statement about an
+        # empty folder dressed up as a statement about a pipeline.
+        headline = "Nothing was scanned - there was no code to search"
+        narrative = (
+            f"Ripple read no files at all, so it has looked for {attrs} in nothing. This is not "
+            f"a result about your pipeline; it is a result about an empty repository. Choose the "
+            f"folder holding the code on the settings screen and run the scan again."
+        )
+        bullets = ["No file was read, so nothing can be said about the change either way."]
+        actions = [
+            "Point Ripple at the folder holding the code, on the settings screen.",
+            "Run the scan again once files have been read.",
+        ]
     elif not groups:
-        headline = "No impact - nothing in this repository consumes the attribute"
+        if blind:
+            headline = (f"No usage found in the {_plural(files_scanned, 'file')} that could be "
+                        f"read - {_plural(blind, 'other file')} could not be")
+        else:
+            headline = "No impact - nothing in this repository consumes the attribute"
         narrative = (
             f"The scan read {stats.get('filesWithImpact', 0) or 0} of "
-            f"{scan.get('filesScanned', 0)} files looking for {attrs}, and found no path from it "
+            f"{files_scanned} files looking for {attrs}, and found no path from it "
             f"to any production table this team publishes."
+            + (f" It is not a clean result for the whole repository: {_blind_phrase()}, "
+               f"so nothing in those is covered either way." if blind else "")
         )
         bullets = [
             f"No production table depends on {attrs}.",
             f"{_plural(scan.get('filesMatched', 0), 'file')} mentioned the name, none of them in a way that carries it downstream.",
         ]
-        actions = [
-            "Reply to the upstream team confirming no impact.",
+        actions = (["Read the files below by hand before replying - this result does not cover them."]
+                   if blind else []) + [
+            "Reply to the upstream team confirming no impact." if not blind
+            else "Reply only once those files have been checked.",
             "Re-run the scan if this repository takes on the table later.",
         ]
     else:
         if no_fix:
             headline = "Ranking logic has no replacement - escalate before the date"
+        elif breaking and blind:
+            # "All fixable in code" is a promise about the whole repository. The
+            # fix that has no substitute may well be inside one of the files
+            # nobody could follow, and that is not a promise to make on a
+            # headline somebody forwards.
+            headline = (f"{_plural(len(prod_names), 'production table')} at risk, and "
+                        f"{_plural(blind, 'file')} Ripple could not follow")
         elif breaking:
             headline = f"{_plural(len(prod_names), 'production table')} at risk, all fixable in code"
+        elif blind:
+            headline = (f"Labels change - and {_plural(blind, 'file')} could not be checked")
         else:
             headline = "Labels change, but nothing breaks"
         narrative = (
             f"{attrs} changes on {when}. "
             f"{_plural(len(rows), 'pipeline object')} consume it across "
             f"{_plural(stats.get('filesWithImpact', 0), 'file')}, feeding "
-            f"{', '.join(prod_names)}. "
+            f"{_names(prod_names)}. "
             + (
                 f"{_plural(len(breaking), 'of those usages breaks', 'of those usages break')} outright."
                 if breaking
@@ -143,7 +205,6 @@ def summarise(scan: dict, vals: dict) -> dict:
     # harder, because every other number on the page is a number about the files
     # that WERE opened. Left unsaid, this reads as an answer about the whole
     # repository when it is an answer about part of one.
-    never_opened = stats.get("neverOpened", 0)
     if never_opened:
         bullets.insert(0, (
             f"{_plural(never_opened, 'file')} in this repository could not even be opened, so "
@@ -178,7 +239,7 @@ def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
     if not groups and elsewhere:
         # This draft is a letter somebody sends. It must never say "no impact"
         # while the analysis behind it is holding a list of usages.
-        end_names = ", ".join(g["prod"] for g in reached) or "tables in our own pipeline"
+        end_names = _names([g["prod"] for g in reached], 10) or "tables in our own pipeline"
         subject = f"RE: {subject_base} - assessment in progress"
         body = (
             f"Hi {first},\n\n"
@@ -189,18 +250,51 @@ def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
             f"We will come back to you with a firm answer before the effective date.\n\n"
             f"Thanks,\nData Engineering"
         )
-    elif not groups:
-        subject = f"RE: {subject_base} - no impact"
+    elif not scan.get("filesScanned", 0):
+        # There was nothing to read. A letter saying "no impact" here is a
+        # letter about an empty folder, sent to somebody who will act on it.
+        subject = f"RE: {subject_base} - assessment not yet run"
         body = (
             f"Hi {first},\n\n"
-            f"We have completed our impact analysis.\n\n"
-            f"No impact. Our repository scan found no usage of {attrs} in any SQL, Spark job, view "
-            f"or ETL script, and no production table traces back to it.\n\n"
-            f"No action required from our side. Please proceed as planned.\n\n"
+            f"We are not able to give you an answer yet. Our impact analysis read no files at "
+            f"all, so nothing has actually been checked.\n\n"
+            f"We will come back to you with a firm answer before the effective date.\n\n"
             f"Thanks,\nData Engineering"
         )
+    elif not groups:
+        # "No impact, proceed as planned" is the single most consequential
+        # sentence this tool writes. It is only ever sent when the whole
+        # repository really was read.
+        blind = (scan.get("stats", {}).get("neverOpened", 0)
+                 + len(scan.get("unreadable", [])))
+        if blind:
+            subject = f"RE: {subject_base} - no impact found so far"
+            body = (
+                f"Hi {first},\n\n"
+                f"We have run our impact analysis and are still confirming the result.\n\n"
+                f"No usage of {attrs} was found in the "
+                f"{_plural(scan.get('filesScanned', 0), 'file')} we were able to read, and no "
+                f"production table traces back to it.\n\n"
+                f"{_plural(blind, 'further file')} could not be read or followed automatically "
+                f"and {'is' if blind == 1 else 'are'} being checked by hand, so we are not "
+                f"confirming no impact yet.\n\n"
+                f"We will come back to you with a firm answer before the effective date.\n\n"
+                f"Thanks,\nData Engineering"
+            )
+        else:
+            subject = f"RE: {subject_base} - no impact"
+            body = (
+                f"Hi {first},\n\n"
+                f"We have completed our impact analysis.\n\n"
+                f"No impact. Our repository scan found no usage of {attrs} in any SQL, Spark job, "
+                f"view or ETL script, and no production table traces back to it.\n\n"
+                f"No action required from our side. Please proceed as planned.\n\n"
+                f"Thanks,\nData Engineering"
+            )
     else:
-        prod = ", ".join(g["prod"] for g in groups)
+        # Capped like every other list of table names here: this is a letter
+        # somebody sends, and a paragraph of two hundred names is not read.
+        prod = _names([g["prod"] for g in groups], 10)
         lines = [f"Hi {first},", "", "We have completed our impact analysis.", ""]
         lines.append(
             f"Impact confirmed. {attrs} is consumed by {_plural(len(rows), 'pipeline object')} "
