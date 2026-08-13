@@ -133,7 +133,11 @@ class RepoIndex:
     too_long: list[str] = field(default_factory=list)
 
     @classmethod
-    def build(cls, root: Path | str, cfg: Settings | None = None) -> "RepoIndex":
+    def build(cls, root: Path | str, cfg: Settings | None = None,
+              on_progress=None) -> "RepoIndex":
+        """Read the repository. ``on_progress(done, total, label)`` is called as
+        it goes, with real counts -- a repository this size takes minutes, and a
+        screen that says nothing for four of them looks broken."""
         cfg = cfg or default_settings
         root = Path(root)
         idx = cls(root=root)
@@ -142,9 +146,11 @@ class RepoIndex:
             return idx
 
         walk = _walk_root(root)
-        for p in sorted(walk.rglob("*")):
-            if not p.is_file():
-                continue
+        candidates = [p for p in sorted(walk.rglob("*")) if p.is_file()]
+        total = len(candidates)
+        for seen, p in enumerate(candidates, start=1):
+            if on_progress is not None and (seen % 25 == 0 or seen == total):
+                on_progress(seen, total, "Reading the files")
             # Judged on the path *inside* the repository, never the whole path.
             # Otherwise a repository that merely happens to live under a folder
             # called build, dist, target or venv has every one of its files
@@ -268,6 +274,46 @@ def statements_for(f: SourceFile) -> list[tuple[str, int]]:
     if ext in EMBEDDED_SQL_EXTS:
         return extract_sql_blocks(f)
     return [(f.text, 0)]
+
+
+# ── a program that runs SQL kept somewhere else ────────────────────────────
+# His pipeline has two folders of Airflow DAGs. Some hold their SQL as a string,
+# which is read above. Plenty of others name a .sql file and run that -- either
+# by opening it, or by handing Airflow a filename and letting template_searchpath
+# find it. Ripple got nothing out of those files and said nothing about them, so
+# a DAG that runs the most important query in the pipeline looked identical to an
+# empty file.
+#
+# Both shapes come down to the same thing: a string ending in .sql.
+_SQL_FILE_REF = re.compile(r"""["']([^"'\n]*?[A-Za-z0-9_\-]+\.sql)["']""")
+
+
+def sql_file_refs(f: SourceFile) -> list[dict]:
+    """Every .sql file this program names, with the line it names it on."""
+    if f.abs_path.suffix.lower() not in EMBEDDED_SQL_EXTS:
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for m in _SQL_FILE_REF.finditer(f.text):
+        ref = m.group(1).strip()
+        if not ref or ref.lower() in seen:
+            continue
+        seen.add(ref.lower())
+        out.append({"ref": ref, "line": f.text[: m.start()].count("\n") + 1})
+    return out
+
+
+def looks_like_unread_sql(f: SourceFile, blocks: list[tuple[str, int]]) -> bool:
+    """SQL is plainly written in this file, and none of it could be taken out.
+
+    The shape that does this is SQL built by adding short strings together --
+    no single piece long enough to be recognised, and the statement never
+    existing as text anywhere. Worth reporting, because the alternative is a
+    file with a CREATE TABLE in it that Ripple treats as empty.
+    """
+    if f.abs_path.suffix.lower() not in EMBEDDED_SQL_EXTS or blocks:
+        return False
+    return bool(_LOOKS_SQL.search(f.text))
 
 
 # A Spark or Scala job usually runs a bare SELECT and then writes the result
