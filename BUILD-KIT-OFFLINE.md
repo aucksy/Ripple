@@ -1,8 +1,8 @@
 # Building Ripple where nothing can be installed
 
 **Which kit to use.** Use **BUILD-KIT.md** if the machine you are building on can
-install Python packages — that is the shorter road and it uses the same stack the
-working copy of Ripple runs on. Use **this kit** if it cannot: if `pip` times out,
+install Python packages — that is the shorter road, and it is the one to try
+first. Use **this kit** only if it cannot: if `pip` times out,
 if the package site is blocked, or if you do not have permission to install
 anything. This kit needs one copied folder and nothing else, and it is written for
 Python 3.10. Phase 0 below decides which of the two you are in, and it is the
@@ -211,28 +211,6 @@ prints, Phase 0 is done and you never think about it again.
 
 ---
 
-## What is already known about the laptop, as of 13 August 2026
-
-**There is an internal mirror and it works, so this kit is now the backup rather
-than the plan.** It was found at `artifactory.aexp.com`, and everything Ripple
-needs installs from it. **Build with BUILD-KIT.md.** Come back here only if that
-mirror is taken away, or refuses something that cannot be worked around.
-
-One thing it did refuse, and it is worth knowing before you conclude the mirror is
-useless: a single package came back with a 403 because that version had been
-published the day before, and a mirror will normally hold back anything that new
-until it has been scanned. Everything around it downloaded perfectly. Pinning that
-one package to an older release fixed it — the same trick will fix the next one.
-`sqlglot` 25.24.0 is from September 2024, so it is nowhere near new enough for any
-rule of that kind to touch it.
-
-If the mirror does disappear, the way in is Phase 0 below and the route is B:
-GitHub opens in that browser, so it takes one download and about five minutes,
-with nothing carried from home. Files can also be moved across online — OneDrive,
-Teams, or email — so Routes C and D work as well.
-
----
-
 ## Route A — an internal company mirror. **Try this first, because it changes which kit you use.**
 
 Many companies run their own copy of the package site inside the network, so that
@@ -282,7 +260,7 @@ python -m pip install --proxy http://YOUR-PROXY:PORT sqlglot==25.24.0
 
 > **If Route A worked: stop here.** Close this file, open **BUILD-KIT.md**, and
 > install the rest: `python -m pip install fastapi uvicorn pydantic python-multipart pytest`.
-> That kit is shorter and it matches the copy of Ripple that already runs.
+> That kit is shorter and it is the one to build from whenever installing works.
 
 ---
 
@@ -343,7 +321,9 @@ __version_tuple__ = version_tuple = (25, 24, 0)
 Try this third. It gives the best result of the three remaining: a properly
 installed package that works from any folder, not just this project.
 
-**On your home machine** (the one with internet), get the file:
+**On any machine that can reach the internet** — a home laptop, a phone
+tethered to a spare machine, anything outside the corporate network — fetch the
+file:
 
 ```
 python -m pip download sqlglot==25.24.0 --no-deps --dest D:\ripple-parts
@@ -380,23 +360,23 @@ outside `ripple-build`, which is a good sign you got the best outcome available.
 The last route, and the one that cannot fail for any reason involving pip, because
 pip is not involved. Use it if pip refuses to install even from a local file.
 
-**On your home machine**, the parser is already sitting in the working copy of
-Ripple:
+**On any machine that can reach the internet**, install it there first, then find
+where it landed:
 
 ```
-D:\Apps\Ripple\Codebase\.venv\Lib\site-packages\sqlglot
+python -m pip install sqlglot==25.24.0
 ```
 
-Copy that folder, then **delete every `__pycache__` folder inside the copy**. Those
-hold code compiled for your home machine's Python version, they are useless to the
-office laptop, and they are more than half the size. This does both:
+```
+python -c "import sqlglot,os;print(os.path.dirname(sqlglot.__file__))"
+```
+
+That prints a folder called `sqlglot`. Copy it, then **delete every `__pycache__`
+folder inside the copy**. Those hold code compiled for that machine's Python
+version, they are useless anywhere else, and they are more than half the size:
 
 ```powershell
-Copy-Item D:\Apps\Ripple\Codebase\.venv\Lib\site-packages\sqlglot -Destination D:\ripple-parts\sqlglot -Recurse
-```
-
-```powershell
-Get-ChildItem D:\ripple-parts\sqlglot -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+Get-ChildItem <your copy>\sqlglot -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
 ```
 
 You should be left with **71 files and 1.8 MB**. Move that folder across, and drop
@@ -1632,13 +1612,10 @@ Python's own downloader instead.)
 
 Build web/index.html and web/styles.css. No framework, no CDN, no build step.
 
-BEFORE YOU PASTE THIS, READ THIS PARAGRAPH. This is the one phase where a
-description cannot give you back a design you already have. If you have the
-finished stylesheet -- 341 lines -- paste it into this window and tell the chat
-to use it exactly as written rather than composing its own. The screens then
-match the design instead of resembling it, and this window becomes ten minutes
-instead of an hour. Everything below is what to do when you do not have it: the
-colours are then exact and the layout is the chat's own work.
+This phase builds how it looks, and it is the one phase where the words below are
+a specification rather than a suggestion. The colour values are exact. Use them as
+given.
+
 The page is served by our own server at http://localhost:8000, and it asks
 that server for /static/styles.css and /static/app.js, so use absolute paths
 beginning /static/ and never a relative one.
@@ -1658,7 +1635,7 @@ fills in. Keep the templates dumb: no text that changes, only the frame.
 
 STYLE
 The palette is not a matter of taste. It is the design, already settled, and
-it is taken from the prototype. Define exactly these CSS variables at the top
+it is settled already. Define exactly these CSS variables at the top
 and use them everywhere -- never a colour written inline:
 
   --navy:#00175A; --blue:#006FCF; --blued:#005CAD; --pale:#E3F0FC;
