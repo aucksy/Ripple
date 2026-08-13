@@ -16,16 +16,41 @@ the contract card below.
 Four things decide whether this is worth beginning.
 
 **1. Can you run Python there, and can you install packages?**
-Ripple needs three things that do not come with Python: `sqlglot` (reads the
-SQL), `fastapi` and `uvicorn` (serve the page). Check both:
+Ripple needs a handful of things that do not come with Python, and one of them —
+`sqlglot`, which reads the SQL — is not something a chat window can write for
+you. Check Python first:
 
 ```
 python --version
-pip install sqlglot fastapi uvicorn pydantic pytest
 ```
 
-If `pip` is blocked, stop and say so — the plan changes completely, because
-`sqlglot` is not something a chat window can write for you.
+Then pip. Three things go wrong on a managed laptop, in this order, and each has
+a fix:
+
+- **"pip is not recognized as an internal or external command."** Nothing is
+  blocked. Typing `pip` makes Windows hunt for a file it has not been told
+  about. Type `python -m pip` instead, always, and it works.
+- **"No module named pip."** Python was installed without it. Python carries a
+  spare copy inside itself, needing no internet and no admin rights:
+  `python -m ensurepip --upgrade --user`
+- **Timeouts reaching pypi.org.** Your network blocks the public package site.
+  Almost every large firm runs an internal mirror instead — ask whoever sits
+  near you "how do you pip install here?", then point pip at it once and forget
+  about it: `python -m pip config set global.index-url <their address>`
+
+Then install, pinned to the versions these phase prompts were written against:
+
+```
+python -m pip install --user sqlglot==25.24.0 fastapi==0.115.0 uvicorn==0.30.6 python-multipart==0.0.9 extract-msg==0.48.7 httpx==0.27.2 pytest==8.3.3
+```
+
+`python-multipart` is what lets a notification file be uploaded. `extract-msg`
+opens Outlook `.msg` files, which is how most notifications actually arrive.
+`httpx` is only used if you later turn on the optional AI reader, and can be
+left out.
+
+If there is no mirror and no route in at all, stop and say so — the plan changes,
+because `sqlglot` has to get onto the machine somehow.
 
 **2. Will the chat take a long prompt and give back a long answer?**
 Two of these files are 800 lines. Test it before you invest an evening: paste
@@ -147,7 +172,9 @@ When in doubt the more cautious wording wins. A tidier screen that says less
 is a worse screen.
 
 STACK
-Python 3.11+. FastAPI + uvicorn + pydantic for the service. sqlglot for SQL.
+Python 3.10 or newer — assume 3.10, so put "from __future__ import annotations"
+at the top of every module. FastAPI + uvicorn + pydantic for the service, and
+sqlglot 25.24.0 for the SQL: write against how that version behaves.
 The front end is plain HTML, CSS and JavaScript in three files — no build
 step, no framework, no npm, no CDN, no TypeScript, no inline event handlers.
 Tests with pytest.
