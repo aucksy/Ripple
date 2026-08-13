@@ -34,6 +34,9 @@ from ripple_offline.engine import SHARED_DIR, SHARED_ENGINE          # noqa: E40
 APP_NAME = "Ripple Offline"
 WORK = HERE / "build"
 DIST = HERE / "dist"
+# Committed to the repository, so it has to be rebuilt every time or it starts
+# telling somebody something the code no longer does.
+ZIP = HERE / "dist.zip"
 WEB_OUT = WORK / "web"
 ICON = HERE / "assets" / "ripple.ico"
 SAMPLES = SHARED_DIR / "samples"
@@ -239,6 +242,20 @@ def main() -> int:
 
     note = write_it_note(out, exe)
     say(f"for IT     : {note.name} - the page to send if the program is blocked")
+
+    # ── the zip that gets handed to somebody ──────────────────────────────
+    # dist.zip is committed to the repository, and it used to be made by hand.
+    # It went four commits out of date without anything saying so, which is the
+    # worst possible state for a file whose whole job is to BE the program:
+    # somebody downloads it, gets a build from before the fixes, and every
+    # answer it gives is one this code no longer gives. Rebuilt here so the zip
+    # beside the source can never disagree with the source.
+    say("zip        : packing dist.zip")
+    if ZIP.exists():
+        ZIP.unlink()
+    made = Path(shutil.make_archive(str(ZIP.with_suffix("")), "zip",
+                                    root_dir=DIST, base_dir=APP_NAME))
+    say(f"zip        : {made.name} - {made.stat().st_size / 1_000_000:.0f} MB")
 
     if not args.keep_work:
         shutil.rmtree(WORK / "pyinstaller", ignore_errors=True)
