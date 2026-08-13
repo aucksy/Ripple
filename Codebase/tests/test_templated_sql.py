@@ -316,6 +316,126 @@ def test_a_loop_still_shows_the_table_it_loops_over(tmp_path):
     assert any("sor_mapping" in {x.lower() for x in s.sources} for s in parsed.statements)
 
 
+def test_a_case_written_across_lines_survives_the_scripting_stripper(tmp_path):
+    """The fix for BEGIN was quietly breaking real statements.
+
+    ELSE and a bare END are scripting keywords. They are also how anybody writes
+    a CASE expression down the page. Cutting those two lines out put a semicolon
+    in the middle of a CASE, so the whole CREATE TABLE around it was refused --
+    and in this pipeline that is a 600-line statement, with every table and every
+    column in it, gone. Reported on screen as a file to "check by hand", which
+    reads like a small thing and is not.
+    """
+    _, _, parsed = _repo(tmp_path, {"job.sql": """
+        BEGIN
+          CREATE OR REPLACE TABLE `{{tgt}}.{{stage}}.card_demographics` AS
+          SELECT
+            cm13,
+            CASE
+              WHEN status = 'A' THEN 'Active'
+              WHEN status = 'C' THEN 'Closed'
+              ELSE
+                'Unknown'
+            END
+              AS status_desc
+          FROM `{{src}}.{{raw}}.account_main`;
+        EXCEPTION WHEN ERROR THEN
+          RAISE USING MESSAGE = @@error.message;
+        END;
+    """})
+    assert "card_demographics" in {s.target for s in parsed.statements}
+    assert any("account_main" in {x.lower() for x in s.sources} for s in parsed.statements)
+    assert parsed.unreadable == []
+
+
+def test_raise_does_not_put_the_whole_file_on_the_check_by_hand_list(tmp_path):
+    """Every generated file in this pipeline ends with the same two lines, and a
+    parser refuses both. One unreadable line is enough to list the file -- so the
+    honest "check these by hand" list filled up with hundreds of files where
+    there is nothing to check, and a list that long is a list nobody opens."""
+    _, _, parsed = _repo(tmp_path, {"job.sql": """
+        BEGIN
+          CREATE OR REPLACE TABLE `{{tgt}}.{{stage}}.enrollment` AS
+          SELECT cm11 FROM `{{src}}.{{raw}}.enrollment_src`;
+        EXCEPTION WHEN ERROR THEN
+          RAISE USING MESSAGE = @@error.message;
+        END;
+    """})
+    assert "enrollment" in {s.target for s in parsed.statements}
+    assert parsed.unreadable == []
+
+
+@pytest.mark.parametrize("raise_line", [
+    "RAISE USING MESSAGE = @@error.message;",
+    'RAISE USING MESSAGE = "No latest cstone_feed_key data to be processed";',
+    "RAISE USING MESSAGE = msg;",
+    "RAISE;",
+])
+def test_every_shape_of_raise_seen_in_the_real_repository(tmp_path, raise_line):
+    _, _, parsed = _repo(tmp_path, {"job.sql": f"""
+        BEGIN
+          CREATE OR REPLACE TABLE `{{{{t}}}}.{{{{s}}}}.made_here` AS
+          SELECT cm13 FROM `{{{{t}}}}.{{{{s}}}}.source_table`;
+        EXCEPTION WHEN ERROR THEN
+          {raise_line}
+        END;
+    """})
+    assert "made_here" in {s.target for s in parsed.statements}, raise_line
+    assert parsed.unreadable == [], raise_line
+
+
+def test_a_procedure_signature_does_not_cost_the_body(tmp_path):
+    """No SQL parser reads a procedure signature, and there is nothing in one to
+    read. The BEGIN ... END body underneath it is ordinary SQL, and that is where
+    the tables are."""
+    _, _, parsed = _repo(tmp_path, {"proc.sql": """
+        CREATE OR REPLACE PROCEDURE `{{p}}.foundation.get_last_source_time`(
+          IN tbl_name STRING,
+          OUT last_ts TIMESTAMP)
+        BEGIN
+          CREATE OR REPLACE TABLE `{{p}}.{{d}}.load_status` AS
+          SELECT MAX(creat_ts) AS creat_ts FROM `{{p}}.{{d}}.sor_load_audit`;
+        END;
+    """})
+    assert "load_status" in {s.target for s in parsed.statements}
+    assert any("sor_load_audit" in {x.lower() for x in s.sources} for s in parsed.statements)
+    assert parsed.unreadable == []
+
+
+def test_a_loop_header_written_across_lines_still_names_its_table(tmp_path):
+    """Same loop as above with the DO on its own line, which is how it is
+    actually written in the file this came from."""
+    _, _, parsed = _repo(tmp_path, {"loop.sql": """
+        BEGIN
+          FOR tbl IN
+          (
+            SELECT table_name FROM `{{p}}.{{d}}.sor_mapping`
+          )
+          DO
+            EXECUTE IMMEDIATE v_sql;
+          END FOR;
+        END;
+    """})
+    assert any("sor_mapping" in {x.lower() for x in s.sources} for s in parsed.statements)
+
+
+def test_a_scripting_word_inside_a_string_is_not_scripting(tmp_path):
+    """A 600-line statement is exactly where a stray 'END' inside a quoted string
+    turns up, and cutting that line would break the statement holding it."""
+    _, _, parsed = _repo(tmp_path, {"job.sql": """
+        BEGIN
+          CREATE OR REPLACE TABLE `{{t}}.{{s}}.notes` AS
+          SELECT cm13, '''
+        ELSE
+        END
+        ''' AS note
+          FROM `{{t}}.{{s}}.note_source`;
+        END;
+    """})
+    assert "notes" in {s.target for s in parsed.statements}
+    assert any("note_source" in {x.lower() for x in s.sources} for s in parsed.statements)
+
+
 def test_a_scripting_block_does_not_hide_the_statements_inside_it(tmp_path):
     """Every file in this pipeline is wrapped in DECLARE ... BEGIN ... END, with
     the real work inside. If the block swallowed its contents, Ripple would read
