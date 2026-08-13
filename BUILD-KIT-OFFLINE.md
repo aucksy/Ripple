@@ -62,6 +62,12 @@ up is all in the workshop, not the product:
   paste box — which loses nothing, because pasted text goes through exactly the same
   reader afterwards. This is not a cost of being offline: the original kit says to
   write it by hand too.
+- **You cannot package it as a `.exe`.** Turning a Python project into a
+  double-clickable program needs PyInstaller, which is itself an install, so on a
+  machine that can install nothing this is out of reach. Ripple runs perfectly as
+  `python run.py`; what you lose is being able to hand it to somebody who has no
+  Python. If that matters, it is one more reason to keep trying Phase 0 Route A
+  and get onto the other kit.
 - **The AI email reader and the GitHub connection are out of reach.** Both need an
   internet library and a network. Neither is in either kit's twelve phases; the
   rules-based reader fills the same screens.
