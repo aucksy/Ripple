@@ -1545,7 +1545,14 @@ otherwise in a comment.
 --- run.py, at the project root
 
 Print the repository, the dialect and the address, then start the server on
-port 8000, honouring a --no-browser flag. No uvicorn: make a
+host 127.0.0.1, port 8000, honouring a --no-browser flag.
+
+BIND TO 127.0.0.1 AND NEVER TO 0.0.0.0. The two look interchangeable and are
+not. 127.0.0.1 is the machine talking to itself and cannot be reached from
+outside it. 0.0.0.0 offers the whole application to everyone on the office
+network, which would put an analysis of internal source code on a port any
+colleague could open, with no password on it. Tutorials are full of 0.0.0.0
+because they are written for containers. This is a laptop. No uvicorn: make a
 ThreadingHTTPServer and call serve_forever(). Print the address before
 starting it, because serve_forever() never returns.
 
