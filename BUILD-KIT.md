@@ -41,13 +41,31 @@ a fix:
 Then install, pinned to the versions these phase prompts were written against:
 
 ```
-python -m pip install --user sqlglot==25.24.0 fastapi==0.115.0 uvicorn==0.30.6 python-multipart==0.0.9 extract-msg==0.48.7 httpx==0.27.2 pytest==8.3.3
+python -m pip install --user sqlglot==25.24.0 fastapi==0.115.0 uvicorn==0.30.6 pydantic==2.13.4 typing-inspection==0.4.2 python-multipart==0.0.9 extract-msg==0.48.7 httpx==0.27.2 pytest==8.3.3
 ```
 
 `python-multipart` is what lets a notification file be uploaded. `extract-msg`
 opens Outlook `.msg` files, which is how most notifications actually arrive.
 `httpx` is only used if you later turn on the optional AI reader, and can be
 left out.
+
+`pydantic` and `typing-inspection` are not needed by name — FastAPI brings them
+along by itself — but they are pinned here because of the one thing that really
+does go wrong on a company mirror.
+
+**If a single package is refused with a 403 while everything around it downloads
+perfectly, the mirror is not broken.** A mirror routinely holds back a version
+published in the last few days, because nothing has scanned it for security yet.
+The fix is to pin that one package a few versions back and run the whole command
+again: whatever asked for it almost always wants a minimum version rather than an
+exact one, so an older release satisfies it just as well. That is the whole story
+of `typing-inspection` above — `pydantic` asks for 0.4.2 or newer, the newest was
+published the day before and was blocked, and 0.4.2 itself is ten months old and
+comes straight through.
+
+A refusal is not a rollback, either. pip downloads everything before it installs
+anything, so one 403 near the end means nothing at all was installed, however much
+of it you watched come down. Fix the pin and run the same command again.
 
 If there is no mirror and no route in at all, stop and say so — the plan changes,
 because `sqlglot` has to get onto the machine somehow.
