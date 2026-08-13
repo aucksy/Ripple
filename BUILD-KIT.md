@@ -284,6 +284,7 @@ Every phase says where its files go, and the contract card makes the chat repeat
 back to you at the end of every reply. **If a reply does not end with a SAVE THESE
 FILES block, ask for one before you save anything.** One file in the wrong folder
 makes the next window fail for a reason that looks like bad code.
+
 ---
 
 # PHASE 0 — the contract card
