@@ -1,107 +1,262 @@
-# Building Ripple from scratch, one chat at a time
+# Building Ripple, one chat window at a time
 
-A kit for rebuilding Ripple on a machine where the only help available is a chat
-window — Copilot with a good model, but no ability to read your files, run your
-tests or edit anything itself. You do the saving and the running; the chat does
-the writing.
+**What this is.** A kit for building a working piece of software using nothing but
+a chat assistant — Copilot chat on your own laptop — and about two evenings. You
+do not need to know how to code. The chat writes the code; you save it into files
+and type one command to check it worked. This document is every prompt you will
+paste, in order, and every command you will type, in order.
 
-Twelve chat windows, one file or two each, in order. Every window is a stranger
-who has never met the others, which is the whole difficulty and the reason for
-the contract card below.
+**What Ripple does.** An upstream data team sends an email: *"we are changing
+MARKET_CODE in CUSTOMER_DEMOGRAPHICS on 18 September."* Somebody then has to
+answer: what does that break on our side, where, and what do we tell them. Today
+that means searching the code for the word MARKET_CODE — and that search is close
+to useless, because a column almost never keeps its name as it travels through a
+pipeline. MARKET_CODE becomes `mc`, then `mkt_cd`. The search comes back empty
+while the change quietly breaks three published tables. Ripple reads the SQL
+properly, follows the renames from one table to the next, and reports what actually
+breaks, in which file, on which line.
+
+**Why twelve chat windows and not one.** A chat can hold only so much at once, and
+Ripple is about six thousand lines. So it is built one file at a time, twelve
+windows, each producing one or two finished files. The catch is that every window
+is a stranger: it cannot see the other eleven and has no memory of them. That is
+the whole difficulty of this approach, and the contract card further down is the
+answer to it — the same page of rules pasted at the top of every window, so that
+all twelve build the same product.
 
 ---
 
-## Before you start
+## What the chat can and cannot do
 
-Four things decide whether this is worth beginning.
+It cannot see your screen, your files or your folders. It cannot run anything, test
+anything, or check whether what it just wrote works. It does not remember the other
+windows. Everything it knows is what you paste into it.
 
-**1. Can you run Python there, and can you install packages?**
-Ripple needs a handful of things that do not come with Python, and one of them —
-`sqlglot`, which reads the SQL — is not something a chat window can write for
-you. Check Python first:
+So your side of the job is small and mechanical, and it is the same four moves
+every time: **paste the contract card, paste the phase prompt, save the files it
+gives you, run one command to check.** Nothing in this kit is harder than that.
+
+---
+
+## Before you start — getting the machine ready
+
+A one-off, about twenty minutes. Five steps, in order.
+
+**Step 1 — open a Command Prompt.** Press the Windows key, type `cmd`, press
+Enter. A black window opens. Everything in this kit that looks like a command gets
+typed into that window, followed by Enter.
+
+**Step 2 — check Python is there.**
 
 ```
 python --version
 ```
 
-Then pip. Three things go wrong on a managed laptop, in this order, and each has
-a fix:
+It should print something like `Python 3.10.4`. Ripple needs 3.10 or newer.
+
+- **"python is not recognized..."** — Python is installed but Windows was never
+  told where it lives. Use the full path instead, quotes and all, everywhere this
+  kit says `python`: `"C:\Program Files\Python310\python.exe"`
+- **Nothing at all, or "not found"** — Python is not installed. That is a request
+  to whoever manages your laptop.
+
+**Step 3 — check pip.** pip is the thing that fetches ready-made pieces of code, so
+that nobody has to write them again.
+
+```
+python -m pip --version
+```
+
+Three things go wrong here on a managed laptop. Every one of them looks like a
+locked door and none of them is:
 
 - **"pip is not recognized as an internal or external command."** Nothing is
-  blocked. Typing `pip` makes Windows hunt for a file it has not been told
-  about. Type `python -m pip` instead, always, and it works.
+  blocked. Typing `pip` on its own makes Windows hunt for a file it was never told
+  about. Type `python -m pip` instead — always, everywhere — and it works.
 - **"No module named pip."** Python was installed without it. Python carries a
   spare copy inside itself, needing no internet and no admin rights:
   `python -m ensurepip --upgrade --user`
-- **Timeouts reaching pypi.org.** Your network blocks the public package site.
-  Almost every large firm runs an internal mirror instead — ask whoever sits
-  near you "how do you pip install here?", then point pip at it once and forget
-  about it: `python -m pip config set global.index-url <their address>`
+- **It hangs, then times out reaching pypi.org.** The public package site is
+  blocked. Almost every large firm runs its own internal copy instead. Ask whoever
+  sits near you *"how do you pip install here?"*, then point pip at their address
+  once and forget about it:
+  `python -m pip config set global.index-url <their address>`
 
-Then install, pinned to the versions these phase prompts were written against:
+**Step 4 — install the pieces Ripple needs.** One command. It is long; copy the
+whole line.
 
 ```
 python -m pip install --user sqlglot==25.24.0 fastapi==0.115.0 uvicorn==0.30.6 pydantic==2.13.4 typing-inspection==0.4.2 python-multipart==0.0.9 extract-msg==0.48.7 httpx==0.27.2 pytest==8.3.3
 ```
 
-`python-multipart` is what lets a notification file be uploaded. `extract-msg`
-opens Outlook `.msg` files, which is how most notifications actually arrive.
-`httpx` is only used if you later turn on the optional AI reader, and can be
-left out.
+What each one is for, so nothing on that line is a mystery:
 
-`pydantic` and `typing-inspection` are not needed by name — FastAPI brings them
-along by itself — but they are pinned here because of the one thing that really
-does go wrong on a company mirror.
+| Piece | What it does |
+|---|---|
+| `sqlglot` | **Reads SQL properly.** The one piece that cannot be replaced, and the one a chat cannot write for you. It is what makes Ripple more than a word search. |
+| `fastapi`, `uvicorn` | Serve the screens to your browser |
+| `pydantic`, `typing-inspection` | Come along with FastAPI. Pinned here so they cannot drift |
+| `python-multipart` | Lets you upload the notification email. Leave it out and that screen fails the moment the app starts |
+| `extract-msg` | Opens Outlook `.msg` files, which is how most notifications actually arrive |
+| `httpx` | Only used if you later switch on the optional AI reader. Safe to leave out |
+| `pytest` | Runs the check at the end of each phase |
 
-**If a single package is refused with a 403 while everything around it downloads
-perfectly, the mirror is not broken.** A mirror routinely holds back a version
-published in the last few days, because nothing has scanned it for security yet.
-The fix is to pin that one package a few versions back and run the whole command
-again: whatever asked for it almost always wants a minimum version rather than an
-exact one, so an older release satisfies it just as well. That is the whole story
-of `typing-inspection` above — `pydantic` asks for 0.4.2 or newer, the newest was
-published the day before and was blocked, and 0.4.2 itself is ten months old and
-comes straight through.
+The versions are pinned on purpose. Left unpinned, the install takes whatever was
+published this morning, and these phase prompts are written against how these
+particular versions behave.
 
-A refusal is not a rollback, either. pip downloads everything before it installs
-anything, so one 403 near the end means nothing at all was installed, however much
-of it you watched come down. Fix the pin and run the same command again.
+**If one package alone is refused with a 403** while everything around it downloads
+perfectly, the mirror is not broken. A company mirror routinely holds back a
+version published in the last few days, because nothing has scanned it for security
+yet. Pin that one package a few versions back and run the whole command again:
+whatever asked for it almost always wants a minimum version rather than an exact
+one, so an older release satisfies it just as well. A refusal is not a partial
+install either — pip downloads everything before it installs anything, so one
+refusal near the end means nothing was installed, however much of it you watched
+come down.
 
-If there is no mirror and no route in at all, stop and say so — the plan changes,
-because `sqlglot` has to get onto the machine somehow.
+**Step 5 — check they all arrived.**
 
-**2. Will the chat take a long prompt and give back a long answer?**
-Two of these files are 800 lines. Test it before you invest an evening: paste
-Phase 1 and see whether you get a complete file or something that trails off
-into "... rest of the implementation". If it truncates, ask it for the file in
-labelled parts and paste them together.
+```
+python -c "import sqlglot,fastapi,uvicorn,pydantic,multipart,extract_msg,httpx,pytest;print('all set - sqlglot',sqlglot.__version__)"
+```
 
-**3. Build the core first.** The core is: read the folder, follow the column,
-show the findings, write the reply. The AI email reader and the packaged Windows
-program are extras. Neither is needed for the thing to be useful.
+You want `all set - sqlglot 25.24.0`. If instead it names one thing it could not
+find, install that one on its own and run this again.
 
-**4. Budget the time.** Twelve windows is two focused evenings if it goes well.
-Phases 4 and 5 are most of the difficulty; if you only get that far you already
-have the part that no other tool does.
+---
+
+## Making the folders
+
+One command builds every folder. It does not matter which folder you are standing
+in when you run it, because every path is written out in full.
+
+```
+mkdir C:\ripple-build\ripple\scanner C:\ripple-build\web C:\ripple-build\tests C:\ripple-build\mockrepo
+```
+
+Then two empty files. They look pointless and they are not: Python refuses to find
+your code without them.
+
+```
+type nul > C:\ripple-build\ripple\__init__.py
+```
+
+```
+type nul > C:\ripple-build\ripple\scanner\__init__.py
+```
+
+From here on, every command in this kit is run from that folder, so start by going
+there. The `/d` matters if your Command Prompt opened on a different drive:
+
+```
+cd /d C:\ripple-build
+```
+
+**Why `C:\ripple-build` rather than Documents or Desktop.** Those two are usually
+synced to OneDrive on a work laptop, and OneDrive leaves files listed on disk while
+their contents are still up in the cloud. Ripple has an entire rule about detecting
+that in *other* people's folders, because it makes a half-read repository look like
+a clean result — you do not want your own project living in it. A short path also
+keeps you clear of Windows' 260-character limit once the folders get deep.
+
+This is what you are building towards. Every phase says exactly which of these
+files it produces:
+
+```
+C:\ripple-build\
+  run.py                   <- the one you type to start Ripple
+  ripple\
+    __init__.py            <- empty, but it must exist
+    config.py  production.py  catalog.py  notification.py
+    narrative.py  progress.py  store.py  api.py
+    scanner\
+      __init__.py          <- empty, but it must exist
+      repo.py  templating.py  sqlread.py  lineage.py
+  web\
+    index.html  styles.css  app.js
+  tests\
+    test_production.py  test_repo.py  test_templating.py
+    test_sqlread.py  test_lineage.py  test_notification.py
+    test_narrative.py
+  mockrepo\                <- a small fake pipeline to test against (Phase 12)
+```
+
+---
+
+## Saving a file the chat gives you
+
+This is the step that trips people up, and there is a trick that makes it
+foolproof.
+
+**The problem.** Notepad quietly adds `.txt` to whatever you name a file. You save
+`config.py` and you actually get `config.py.txt`, which Python cannot see. Nothing
+warns you. The next command fails and it looks like broken code.
+
+**The trick: create the empty file from the command line first, then open that file
+and paste into it.** The name is then already correct and Notepad cannot change it.
+Two commands per file — this is the pattern for every file in the kit:
+
+```
+type nul > C:\ripple-build\ripple\config.py
+```
+
+```
+notepad C:\ripple-build\ripple\config.py
+```
+
+Notepad opens, empty. Go to the chat and **use the copy button at the top of the
+code block** rather than selecting it with the mouse — dragging across a long block
+loses the last line more often than you would believe, and a Python file missing
+its last line fails in a way that reads as the chat's fault. Paste, press Ctrl+S,
+close the window. That is one file done.
+
+**Two things not to do.** Never retype code by hand, and never tidy up the
+indentation. In Python the spacing at the start of a line is not decoration — it is
+what tells the language which lines belong inside which. Paste it exactly as given.
+
+---
+
+## Checking that a phase worked
+
+Every phase ends with one command, run from `C:\ripple-build`. You are reading it
+for one word.
+
+```
+python -m pytest tests/test_production.py -q
+```
+
+- A row of dots and then **`passed`** — green. Move on to the next phase.
+- **`failed`** or **`error`** — copy the whole red block and paste it straight back
+  into the same chat window with *"this is what happened when I ran it"*. That
+  window still has everything it wrote in front of it and will usually fix it in
+  one go. Never start a fresh window for a failure; a fresh one knows nothing.
+- **`no tests ran`** — the file is not where the command is looking. Almost always
+  the `.txt` problem above, or the file went into the wrong folder.
 
 ---
 
 ## The two ways this goes wrong
 
 **Drift.** Window 6 invents its own names for what window 4 already built, and
-nothing fits together. The fix is the contract card: paste it at the top of
-*every* window, every time, before the phase prompt. It is the shared memory the
-chats do not have.
+nothing fits together. The fix is the contract card: paste it at the top of *every*
+window, every time, before the phase prompt. It is the shared memory the chats do
+not have.
 
 **Confident wrong answers.** A chat asked to build "a SQL impact analyser" will
 build one that gives a clean green result whenever it fails to understand
 something, because that is the obvious thing to build and it looks better in a
-demo. The rules that stop it are in the contract card under **THE ONE RULE**. Do
-not trim them to save space. They are the product.
+demo. A tool that reports "no impact" when what it means is "I could not read half
+of this" is worse than no tool at all, because somebody will act on it. The rules
+that stop it are in the contract card under **THE ONE RULE**. Do not trim them to
+save space. They are the product.
 
 ---
 
 ## The build order
+
+Two evenings if it goes well. Phases 4, 5 and 8 are the hard ones. If you get only
+as far as Phase 5, you already have the part that no other tool does.
 
 | # | The window builds | Roughly |
 |---|---|---|
@@ -119,42 +274,16 @@ not trim them to save space. They are the product.
 | 11 | The screens: findings, map, summary, reply, settings | 1,000 lines |
 | 12 | Starting it up, and the checklist that says it works | — |
 
-Folder layout you are building towards. **Make these folders first**, before
-window 1, and put an empty `__init__.py` in both `ripple/` and `ripple/scanner/`
-— Python will not find the code without them.
+**One thing to test before you invest an evening.** Two of these files are 800
+lines long. Paste Phase 1 into a window and see whether you get complete files back
+or something that trails off into "... rest of the implementation". If it
+truncates, ask for the file in clearly labelled parts and paste them together — and
+ask it to tell you the total line count first, so you know when you have all of it.
 
-```
-ripple-build/
-  run.py
-  ripple/
-    __init__.py            <- empty, but it must exist
-    config.py  production.py  catalog.py  notification.py
-    narrative.py  progress.py  store.py  api.py
-    scanner/
-      __init__.py          <- empty, but it must exist
-      repo.py  templating.py  sqlread.py  lineage.py
-  web/
-    index.html  styles.css  app.js
-  tests/
-    test_production.py  test_repo.py  test_templating.py
-    test_sqlread.py  test_lineage.py  test_notification.py
-    test_narrative.py
-  mockrepo/                <- a tiny fake pipeline to test against (Phase 12)
-```
-
-On Windows, in the folder you want the project in:
-
-```bash
-mkdir ripple-build ripple-build\ripple ripple-build\ripple\scanner ripple-build\web ripple-build\tests
-type nul > ripple-build\ripple\__init__.py
-type nul > ripple-build\ripple\scanner\__init__.py
-```
-
-Every phase below says where its files go, and the contract card makes the chat
-repeat it back to you at the end of every reply. If a reply does not end with a
-**SAVE THESE FILES** block, ask for one before you save anything — one file in
-the wrong folder and the next window fails for a reason that looks like bad code.
-
+Every phase says where its files go, and the contract card makes the chat repeat it
+back to you at the end of every reply. **If a reply does not end with a SAVE THESE
+FILES block, ask for one before you save anything.** One file in the wrong folder
+makes the next window fail for a reason that looks like bad code.
 ---
 
 # PHASE 0 — the contract card
@@ -432,10 +561,17 @@ Write these tests, using only invented table names:
   the one-line form counts a long list instead of printing it
 ````
 
-**Check it worked:** `python -m pytest tests/test_production.py -q` — all green. Then in a
-Python prompt, paste a messy list and print the notes. If the notes are empty on
-a paste that clearly had junk in it, the honesty half is missing and you should
-push back in the same chat.
+**Check it worked.** From `C:\ripple-build`:
+
+```
+python -m pytest tests/test_production.py -q
+```
+
+You want `passed`. The test to insist on is the one where a messy paste — bullets,
+a heading row, a line of ordinary prose — comes back with notes saying what was
+ignored and why. If the chat only wrote tests for tidy lists, ask for the messy
+ones. This file decides whether "no production table is impacted" is a real answer
+or an accident.
 
 ---
 
@@ -529,9 +665,14 @@ string with the right line offset, a .sql reference found, a write target
 found, and whole-word search not matching a substring.
 ````
 
-**Check it worked:** `python -m pytest tests/test_repo.py -q`. Then point it at a folder on
-your machine and print `len(idx.files)`, `idx.skipped_dir_names`,
-`len(idx.held_online)`.
+**Check it worked.** From `C:\ripple-build`:
+
+```
+python -m pytest tests/test_repo.py -q
+```
+
+You want `passed`. You will point this at a real folder of your own in Phase 12,
+where you can see the counts on screen rather than having to ask for them.
 
 ---
 
@@ -644,8 +785,15 @@ it; a procedure body is kept; a loop header keeps its table; a multi-line
 RAISE is consumed whole.
 ````
 
-**Check it worked:** `python -m pytest tests/test_templating.py -q`. Then paste one of your
-own real files into a Python prompt and confirm `sqlglot.parse(unwrap_blocks(fill_placeholders(text)), read="bigquery")` does not raise.
+**Check it worked.** From `C:\ripple-build`:
+
+```
+python -m pytest tests/test_templating.py -q
+```
+
+You want `passed`. The test to insist on is the one where a CASE written down the
+page survives intact. Without it, this file quietly destroys 600-line statements
+and everything downstream reports a clean result over code nobody read.
 
 ---
 
@@ -799,10 +947,15 @@ column of the same name is not reported; where the SQL does not say, the
 usage is kept with certain=False; a window ORDER BY is a ranking.
 ````
 
-**Check it worked:** `python -m pytest tests/test_sqlread.py -q`. Then run it over one of
-your own real folders and print how many files parsed versus how many landed in
-the unreadable list. If almost everything is unreadable, the dialect is wrong or
-Phase 3 is not being applied.
+**Check it worked.** From `C:\ripple-build`:
+
+```
+python -m pytest tests/test_sqlread.py -q
+```
+
+You want `passed`. Later, when you point Ripple at real code and most of it comes
+back unreadable, the cause is almost never this file — it is the SQL dialect being
+set wrong, or Phase 3 not being applied on the way in.
 
 ---
 
@@ -917,10 +1070,16 @@ result is still clean; a name inside a quoted string is reported even in a
 file that has findings, with a count of lines; groups come back worst first.
 ````
 
-**Check it worked:** `python -m pytest tests/test_lineage.py -q`. The one test to insist
-on: *findings are reported even when nothing matches the published rule*. If the
-chat quietly returns an empty result there, it has rebuilt the exact bug this
-tool exists to prevent.
+**Check it worked.** From `C:\ripple-build`:
+
+```
+python -m pytest tests/test_lineage.py -q
+```
+
+You want `passed`. The one test to insist on: *findings are reported even when
+nothing matches the published-table rule, and the risk is not "none"*. If the chat
+quietly returns an empty result there, it has rebuilt the exact bug this tool
+exists to prevent, and no amount of green elsewhere makes up for it.
 
 ---
 
@@ -976,8 +1135,14 @@ time into a form; they paste an Outlook To line — "Priya Raman
 Tests with invented names and a fabricated .eml built in the test.
 ````
 
-**Check it worked:** `python -m pytest tests/test_notification.py -q`, then feed it a real
-notification you have and print what came out.
+**Check it worked.** From `C:\ripple-build`:
+
+```
+python -m pytest tests/test_notification.py -q
+```
+
+You want `passed`. You will feed it a real notification email in Phase 12, on the
+screen, where you can see what it made of it.
 
 ---
 
@@ -1052,9 +1217,16 @@ Tests, and these are the ones that matter:
   a genuinely clean result still says no impact, in both
 ````
 
-**Check it worked:** `python -m pytest tests/test_narrative.py -q`. Read the four drafted
-replies out loud. If any of them would embarrass you when forwarded, say so in
-the same chat and have it rewritten.
+**Check it worked.** From `C:\ripple-build`:
+
+```
+python -m pytest tests/test_narrative.py -q
+```
+
+You want `passed`. Then read the four drafted replies in the test file out loud.
+These are the words that leave the building and get forwarded to another team, so
+if any of them would embarrass you, say so in the same chat and have it
+rewritten.
 
 ---
 
@@ -1129,14 +1301,22 @@ Also write run.py at the project root: print the repository, the dialect and
 the address, then start uvicorn on port 8000, with a --no-browser flag.
 ````
 
-**Check it worked:**
+**Check it worked.** From `C:\ripple-build`:
 
-```bash
+```
 python run.py --no-browser
 ```
 
-Then in another terminal, `curl http://127.0.0.1:8000/api/health` should return
-JSON with real counts in it.
+It prints the folder it will read, the SQL dialect and an address, and then sits
+there doing nothing. That is correct — it is waiting for a browser. **Leave it
+running** and open a second Command Prompt, then:
+
+```
+curl http://127.0.0.1:8000/api/health
+```
+
+A wall of text starting with `{"ok":true` is a pass. To stop the server when you
+are done, go back to the first window and hold Ctrl and press C.
 
 ---
 
@@ -1149,13 +1329,9 @@ JSON with real counts in it.
 
 Build web/index.html and web/styles.css. No framework, no CDN, no build step.
 
-BEFORE YOU PASTE THIS, READ THIS PARAGRAPH. This is the one phase where a
-description cannot give you back a design you already have. If you have the
-finished stylesheet -- 341 lines -- paste it into this window and tell the chat
-to use it exactly as written rather than composing its own. The screens then
-match the design instead of resembling it, and this window becomes ten minutes
-instead of an hour. Everything below is what to do when you do not have it: the
-colours are then exact and the layout is the chat's own work.
+This phase builds how it looks, and it is the one phase where the words below are
+a specification rather than a suggestion. The colour values are exact. Use them as
+given.
 
 LAYOUT
 A fixed dark navy sidebar 288px wide: the product name, a numbered list of the
@@ -1172,7 +1348,7 @@ fills in. Keep the templates dumb: no text that changes, only the frame.
 
 STYLE
 The palette is not a matter of taste. It is the design, already settled, and
-it is taken from the prototype. Define exactly these CSS variables at the top
+it is settled already. Define exactly these CSS variables at the top
 and use them everywhere -- never a colour written inline:
 
   --navy:#00175A; --blue:#006FCF; --blued:#005CAD; --pale:#E3F0FC;
@@ -1228,8 +1404,17 @@ Three rules that keep it usable with real data:
   looking like an afterthought.
 ````
 
-**Check it worked:** open the page. The sidebar and header should be there and the
-content area empty. Nothing else works yet.
+**Check it worked.** From `C:\ripple-build`:
+
+```
+python run.py
+```
+
+Your browser opens by itself. You should see the dark navy sidebar down the left
+and the header strip across the top, **in colour**, with an empty area in the
+middle. Nothing else works yet, and that is expected — the screens arrive in the
+next two phases. If what you get is black text on a plain white page with no
+layout at all, the stylesheet did not load rather than being wrong.
 
 ---
 
@@ -1308,8 +1493,10 @@ repository, and saying "a few seconds" and then taking four minutes is how a
 working program gets reported as hung.
 ````
 
-**Check it worked:** the wizard should walk from step 1 to step 3 and show real
-counts from your folder. The scan button will not do anything yet.
+**Check it worked.** Start it with `python run.py` and click through. You should be
+able to walk from step 1 to step 3, and step 3 should show real counts from a real
+folder. The "Run impact analysis" button will not do anything yet — that arrives in
+the next phase.
 
 ---
 
@@ -1451,10 +1638,17 @@ Give me every file complete, and end with the SAVE THESE FILES block giving
 the full path of each one under ripple-build/mockrepo/.
 ````
 
-**Then run it:**
+**Then run everything.** First the whole test suite, from `C:\ripple-build`:
 
-```bash
-python run.py --no-browser
+```
+python -m pytest -q
+```
+
+Then start it, and this time let it open the browser, because every line of the
+checklist is something to look at on screen:
+
+```
+python run.py
 ```
 
 **The checklist. Each line is one thing to look at on screen.**
@@ -1489,7 +1683,7 @@ back and insist on.
 
 ---
 
-## When a window goes wrong
+## When the chat goes wrong
 
 **It gives you a shorter, "simpler" version.** Reply: *"That drops the case where
 X. Put it back and keep everything in the contract card."* Chats optimise for a
@@ -1510,3 +1704,46 @@ show the count and no fraction."*
 it, because dropping things makes the demo look better. Reply: *"Anything the
 reader could not follow is listed on screen with the file and the line, never
 dropped."*
+
+**It writes code for a newer Python than you have.** The giveaway is an error
+mentioning a version, or a line the chat swears is fine. Reply: *"This is Python
+3.10. Write it the 3.10 way."*
+
+**It asks you to install something new.** Reply: *"Use only what is already
+installed."* Every phase in this kit is buildable with the nine pieces from the
+setup step, and an extra one is a habit rather than a need.
+
+---
+
+## When your own machine goes wrong
+
+These are not code problems, they are the four things that actually stop people.
+Each looks like broken code and none of them is.
+
+**"python is not recognized" or "pip is not recognized".** Windows was never told
+where those live. Use `python -m pip` instead of `pip`, and if `python` itself is
+not recognised, use the full path in quotes:
+`"C:\Program Files\Python310\python.exe"`
+
+**"No module named ripple", or "no tests ran".** You are standing in the wrong
+folder. Every command in this kit runs from the project folder:
+
+```
+cd /d C:\ripple-build
+```
+
+**A file you definitely saved cannot be found.** It is almost certainly named
+`config.py.txt` rather than `config.py`, because Notepad added the ending. This
+lists what is really there, endings and all:
+
+```
+dir C:\ripple-build\ripple
+```
+
+If you see a `.txt` on the end, delete that file and save it again using the
+two-command trick in *Saving a file the chat gives you* above.
+
+**"Port 8000 is already in use".** A copy of Ripple is still running in another
+Command Prompt window from earlier. Find that window and hold Ctrl and press C, or
+close it.
+
