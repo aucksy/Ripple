@@ -38,6 +38,32 @@ gives you, run one command to check.** Nothing in this kit is harder than that.
 
 ---
 
+## What you are actually running
+
+Somebody will ask, and it is a fair question. Ripple has screens, so something has
+to put them in front of your browser. The plain answer is that this is not a server
+in the sense the word usually carries: nothing is hosted, nothing is published, and
+nothing is reachable by anybody else.
+
+- **It listens only to the laptop it is running on.** The address is 127.0.0.1,
+  which is the machine talking to itself, and it is not reachable from the office
+  network. A colleague who typed your machine name and the port would find nothing,
+  because there is nothing there to find.
+- **It runs only while the window is open.** Close the Command Prompt and it is
+  gone. Nothing is installed as a Windows service and nothing starts at boot.
+- **Nothing leaves the machine.** Ripple reads a folder of code you already have
+  access to, works the answer out on your laptop, and shows it in your browser.
+  Nothing is sent anywhere.
+- **This is the ordinary shape of a desktop tool that has screens.** A Jupyter
+  notebook works exactly this way. The browser is being used as the window, and
+  that is the whole of it.
+
+Two things worth saying out loud rather than being asked later: it reads the source
+code of whatever repository you point it at, and it keeps one small file on your
+laptop holding the analyses you chose to save. Both of those stay on the machine.
+
+---
+
 ## Before you start — getting the machine ready
 
 A one-off, about twenty minutes. Five steps, in order.
@@ -1299,7 +1325,15 @@ the difference between seeing a change and staring at yesterday's page. Cache
 the fonts, if any, for a month.
 
 Also write run.py at the project root: print the repository, the dialect and
-the address, then start uvicorn on port 8000, with a --no-browser flag.
+the address, then start uvicorn on host 127.0.0.1, port 8000, with a
+--no-browser flag.
+
+BIND TO 127.0.0.1 AND NEVER TO 0.0.0.0. The two look interchangeable and are
+not. 127.0.0.1 is the machine talking to itself and cannot be reached from
+outside it. 0.0.0.0 offers the whole application to everyone on the office
+network, which would put an analysis of internal source code on a port any
+colleague could open, with no password on it. Tutorials are full of 0.0.0.0
+because they are written for containers. This is a laptop.
 ````
 
 **Check it worked.** From `C:\ripple-build`:
@@ -1681,6 +1715,39 @@ python run.py
 If 3, 5, 7, 8 or 9 fails, the honesty half has not been built and the tool will
 give you a confident wrong answer on your real code. Those are the ones to go
 back and insist on.
+
+---
+
+## Starting it with a double-click
+
+Once it all works you will not want to open a Command Prompt every time. Two
+commands, once:
+
+```
+type nul > C:\ripple-build\start-ripple.bat
+```
+
+```
+notepad C:\ripple-build\start-ripple.bat
+```
+
+Put these two lines in it, save, and close:
+
+```
+cd /d C:\ripple-build
+python run.py
+```
+
+Now double-clicking **start-ripple.bat** starts Ripple and opens the browser. To
+have it on your desktop, right-click it and choose *Send to → Desktop (create
+shortcut)*. To stop Ripple, close the black window that opened with it.
+
+**Why not a packaged .exe?** It can be done, and it is deliberately not in this
+kit. On a managed laptop, an unsigned program you built yourself, which then opens
+a network port, is close to the worst possible shape as far as endpoint security is
+concerned — it tends to be quarantined, and explaining it afterwards costs more
+time than it ever saved. The batch file gives you the same double-click and none of
+that.
 
 ---
 
