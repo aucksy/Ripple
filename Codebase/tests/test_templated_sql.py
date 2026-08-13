@@ -164,9 +164,12 @@ def test_findings_are_reported_even_when_nothing_matches_the_production_rule(tmp
 
 def test_correcting_the_rule_turns_them_into_production_tables(tmp_path):
     out = scan(tmp_path, production="_UMDL, _GDI")
-    assert [g["prod"] for g in out["groups"]] == ["card_pub_pvt_guid_umdl",
-                                                  "transaction_billed_gdi"]
+    assert {g["prod"] for g in out["groups"]} == {"card_pub_pvt_guid_umdl",
+                                                  "transaction_billed_gdi"}
     assert out["stats"]["productionTables"] == 2
+    # Worst first: the table with the most impacts heads the page.
+    counts = [len(g["rows"]) for g in out["groups"]]
+    assert counts == sorted(counts, reverse=True)
 
 
 def test_the_summary_does_not_say_no_impact_over_a_list_of_findings(tmp_path):
@@ -181,13 +184,50 @@ def test_the_summary_does_not_say_no_impact_over_a_list_of_findings(tmp_path):
 
 
 def test_a_genuinely_clean_result_still_says_no_impact(tmp_path):
-    """The honest half of the same rule: nothing found really is nothing."""
+    """The honest half of the same rule: nothing found really is nothing.
+
+    "Genuinely" is doing work here. Every file has to have been read as well as
+    found - see the test below, which is the same repository with one file left
+    on the "check by hand" list.
+    """
     cfg, idx, parsed = build(tmp_path)
     out = trace(idx, parsed, [{"table": "nowhere", "attrs": ["not_a_column"]}],
                 change_type="removal", cfg=cfg).to_dict()
     assert out["groups"] == [] and out["reached"] == [] and out["other"] == []
+    out["unreadable"] = []
+    out["stats"]["couldNotRead"] = 0
     s = narrative.summarise(out, {"upstream": []})
     assert "No impact" in s["headline"]
+    r = narrative.draft_reply(out, {"upstream": [], "pocName": "Priya Raman"}, s)
+    assert "No impact" in r["body"]
+
+
+def test_no_impact_is_never_claimed_over_files_that_could_not_be_read(tmp_path):
+    """The headline and the letter are quoted in meetings and forwarded to the
+    upstream team. Neither may say "no impact, proceed as planned" about a
+    repository Ripple only managed to read part of."""
+    cfg, idx, parsed = build(tmp_path)
+    out = trace(idx, parsed, [{"table": "nowhere", "attrs": ["not_a_column"]}],
+                change_type="removal", cfg=cfg).to_dict()
+    assert out["unreadable"], "this repository has a file that cannot be followed"
+    s = narrative.summarise(out, {"upstream": []})
+    r = narrative.draft_reply(out, {"upstream": [], "pocName": "Priya Raman"}, s)
+    assert "No impact" not in s["headline"]
+    assert "could not be" in s["headline"]
+    assert "proceed as planned" not in r["body"]
+    assert "checked by hand" in r["body"]
+
+
+def test_nothing_scanned_is_never_reported_as_no_impact(tmp_path):
+    """An empty folder produces a scan with nothing in it, and "no impact" over
+    nothing at all is a statement about an empty folder, not about a pipeline."""
+    empty = {"groups": [], "reached": [], "other": [], "unreadable": [],
+             "filesScanned": 0, "filesMatched": 0, "stats": {}}
+    s = narrative.summarise(empty, {"upstream": []})
+    r = narrative.draft_reply(empty, {"upstream": [], "pocName": "Priya Raman"}, s)
+    assert "no impact" not in s["headline"].lower()
+    assert "Nothing was scanned" in s["headline"]
+    assert "no impact" not in r["body"].lower()
 
 
 # ── the answer to "how do I check this?" ───────────────────────────────────

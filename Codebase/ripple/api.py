@@ -6,6 +6,7 @@ runs from the command line, from a test, or from this API.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 
 from dataclasses import replace
 
-from . import ai, narrative, progress, store
+from . import ai, narrative, production, progress, store
 from .catalog import Catalog, build_catalog
 from .config import AI_MODELS, Settings, model_label, settings
 from .notification import Notification, extract_by_rules, read_pasted, read_upload
@@ -39,6 +40,10 @@ _state: dict[str, Any] = {
     # The AI key is a secret on exactly the same terms as the GitHub token:
     # held here while the process runs, and nowhere else, ever.
     "aiKey": "", "aiModel": "",
+    # Whether the published-table list in play was typed into the screen rather
+    # than set on the host. It changes one thing worth saying out loud: a typed
+    # list is gone when this server restarts.
+    "prodEntered": False,
 }
 
 
@@ -172,6 +177,10 @@ class AIKeyIn(BaseModel):
     model: str = ""          # blank means keep the model already selected
 
 
+class ProductionIn(BaseModel):
+    text: str = ""
+
+
 class ConnectIn(BaseModel):
     repo: str = ""          # owner/repository, or the address pasted from GitHub
     branch: str = ""        # blank means the repository's default branch
@@ -245,6 +254,9 @@ def health() -> dict:
             # sentence from "1,770 files read".
             "heldOnline": len(idx.held_online),
             "pathTooLong": len(idx.too_long),
+            # Code files Ripple walked past because of the folder they sit in.
+            "inSkippedDirs": len(idx.in_skipped_dirs),
+            "skippedDirNames": list(idx.skipped_dir_names),
             # Programs that run SQL kept in a separate .sql file. Two folders of
             # DAGs are written that way, and without this they read as empty.
             "runsSqlFrom": len([r for r in parsed.runs_sql_from if r["runs"]]),
@@ -259,10 +271,25 @@ def health() -> dict:
         "maxHops": settings.max_hops,
         # Which table names count as the ones this team publishes. On screen so
         # that "no production table is impacted" can be checked rather than
-        # believed -- it is only ever as true as this rule is.
+        # believed -- it is only ever as true as this rule is. The one-line form
+        # is for a status row; the full one is what the settings screen shows.
         "production": settings.production_rule(),
+        "productionRule": settings.production().to_dict(),
+        # Where the list came from, so "I set that and it is gone" has an
+        # answer. Online it survives a restart only as an environment variable.
+        "productionFrom": _production_origin(),
         "ai": _ai_facts(),
     }
+
+
+def _production_origin() -> str:
+    """Where the published-table list in play came from -- typed, set on the
+    host, or nothing at all yet."""
+    if _state["prodEntered"]:
+        return "entered"
+    if os.environ.get("RIPPLE_PROD_TABLES", "").strip():
+        return "environment"
+    return "default"
 
 
 @app.get("/api/progress")
@@ -324,6 +351,41 @@ def ai_forget() -> dict:
     """Forget a key typed into the screen. One set in the environment stays."""
     _state["aiKey"] = ""
     _state["aiModel"] = ""
+    return health()
+
+
+# ── the tables this team publishes ─────────────────────────────────────────
+# The most expensive setting in Ripple, so it gets its own routes: one to read
+# a paste and say what was made of it before anything is committed to, and one
+# to actually use it. Both answer the question that matters -- which of the
+# tables on the list Ripple has never seen in this repository.
+def _production_report(rule: production.ProductionRule) -> dict:
+    idx, parsed, _ = repo_state()
+    return {**rule.to_dict(), "check": production.check_against_repo(rule, idx, parsed)}
+
+
+@app.post("/api/production/read")
+def production_read(payload: ProductionIn) -> dict:
+    """Read a pasted list without saving it, and say exactly what was made of it."""
+    return _production_report(production.parse(payload.text or ""))
+
+
+@app.get("/api/production")
+def production_now() -> dict:
+    """The list in play, checked against the repository that is loaded."""
+    return _production_report(settings.production())
+
+
+@app.post("/api/production")
+def production_set(payload: ProductionIn) -> dict:
+    """Use this list from now on.
+
+    Held in this process, exactly like the GitHub token and the AI key: online
+    there is nowhere to write it. The screen says so rather than letting a list
+    somebody spent ten minutes assembling quietly vanish on the next restart.
+    """
+    settings.set_production(payload.text or "")
+    _state["prodEntered"] = bool((payload.text or "").strip())
     return health()
 
 

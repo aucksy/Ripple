@@ -42,12 +42,14 @@ function offState() {
       path: (h && h.repo.path) || '',
       dialect: (h && h.sqlDialectId) || '',
       hops: (h && h.maxHops) || 4,
-      prod: (h && h.production) || '',
       check: null,        // the answer to "check this folder", before saving
       msg: null,          // the answer to the last save
       working: '',        // which button is busy: 'check', 'browse' or 'save'
     };
   }
+  // The published-table list lives in the shared control's own state, so that
+  // one box and one reading of it are used by both editions.
+  productionState();
   return S.off;
 }
 
@@ -88,35 +90,17 @@ function settingsView(root) {
   }
 
   const grid = el('div', { className: 'grid2 even' });
-  grid.append(el('div', {}, folderCard(h, o), dialectCard(h, o), productionCard(h, o), saveRow(h, o)),
+  const prod = el('div', { style: 'margin-top:18px' },
+    productionCard({ persistNote: '' }),
+    el('div', { className: 'note warn', style: 'margin-top:14px' },
+      el('b', { textContent: 'Get this wrong and a real impact reads as a clean result. ' }),
+      'A finding is only counted as production impact when the table it ends at is on this '
+      + 'list. Nothing is hidden either way — every table the change reaches is still listed — '
+      + 'but the headline, the risk level and the drafted reply all follow it. '
+      + 'Press Save below to use it.'));
+  grid.append(el('div', {}, folderCard(h, o), dialectCard(h, o), prod, saveRow(h, o)),
               el('div', { className: 'rail' }, whereCard(h), guardCard(), factsCard(h)));
   root.append(grid);
-}
-
-/* Which tables are the ones this team publishes.
-   The setting that decides whether "no production table is impacted" is a
-   result or an accident. Ripple ships knowing about names ending _PROD, and a
-   repository that names nothing _PROD gets a clean bill of health for a change
-   that breaks it. There is nobody here to set an environment variable, so it
-   is asked for on screen like the other two. */
-function productionCard(h, o) {
-  const card = el('div', { className: 'card pad lg', style: 'margin-top:18px' });
-  card.append(el('span', { className: 'lbl', textContent: 'The tables your team publishes' }));
-  card.append(el('div', { className: 'small faint', style: 'margin-top:6px;line-height:1.55',
-    textContent: 'How your published tables are named. Separate with commas. A plain word matches '
-      + 'the end of a table name, so _PROD matches sales_prod. Use * for anything else: '
-      + 'PROD_* matches prod_sales, and * on its own means treat every table as published.' }));
-  const inp = el('input', { type: 'text', className: 'mono', value: o.prod,
-    placeholder: '_PROD, _PRD, _PUBLISHED', style: 'margin-top:12px;padding:12px 14px' });
-  inp.oninput = () => { o.prod = inp.value; };
-  inp.onkeydown = (e) => { if (e.key === 'Enter') saveOfflineSettings(); };
-  card.append(inp);
-  card.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
-    el('b', { textContent: 'Get this wrong and a real impact reads as a clean result. ' }),
-    'A finding is only counted as production impact when the table it ends at matches this. '
-    + 'Nothing is hidden either way — every table the change reaches is still listed — but '
-    + 'the headline, the risk level and the drafted reply all follow this line.'));
-  return card;
 }
 
 /* The folder to scan. Typing a path always works; the picker is only offered
@@ -302,9 +286,9 @@ function factsCard(h) {
    ['SQL read as', h.sqlDialect],
    ['Renames followed', `${h.maxHops} hops`],
    ['Tables you publish', h.production || 'not set']].forEach(([k, v]) =>
-    card.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },
-      el('span', { className: 'small muted', textContent: k, style: 'flex:1' }),
-      el('span', { className: 'small', textContent: v, style: 'font-weight:700' }))));
+    card.append(el('div', { className: 'factrow' },
+      el('span', { className: 'small muted', textContent: k }),
+      el('span', { className: 'small', textContent: v }))));
   return card;
 }
 
@@ -329,14 +313,20 @@ function browseForFolder() {
 
 function saveOfflineSettings() {
   const o = offState();
+  const p = productionState();
   offRun('save', async () => {
     try {
       S.health = await api('/api/settings', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repoPath: o.path.trim(), sqlDialect: o.dialect,
-                               maxHops: o.hops, prodTables: o.prod.trim() }),
+                               maxHops: o.hops, prodTables: p.text }),
       });
-      o.prod = S.health.production || o.prod;
+      // The box keeps whatever was pasted, so it can be edited rather than
+      // handed back a tidied version of somebody's list. An empty box is the
+      // exception: the server falls back to the default rather than treating
+      // no table as published, and the box has to show what is really in force.
+      p.text = S.health.productionRule?.text ?? p.text;
+      p.report = null; p.loaded = false;
       // The saved message below says what happened. Leaving the "check this
       // folder" answer up as well puts an empty green box on screen, because
       // once it has been saved there is nothing left for it to report.

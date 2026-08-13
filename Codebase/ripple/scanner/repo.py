@@ -131,6 +131,13 @@ class RepoIndex:
     held_online: list[str] = field(default_factory=list)
     # Files whose path went past what Windows will open on this machine.
     too_long: list[str] = field(default_factory=list)
+    # Files Ripple never looked at because of the folder they sit in: build,
+    # dist, target, venv and the rest. Those names mean "generated output" in
+    # most repositories and "our SQL" in a few, and when they mean the second
+    # thing an entire folder of code is missing from every answer with nothing
+    # on screen to say so. Counted, and said.
+    in_skipped_dirs: list[str] = field(default_factory=list)
+    skipped_dir_names: list[str] = field(default_factory=list)
 
     @classmethod
     def build(cls, root: Path | str, cfg: Settings | None = None,
@@ -156,9 +163,17 @@ class RepoIndex:
             # called build, dist, target or venv has every one of its files
             # skipped, and the scan comes back clean because it read nothing.
             relative = p.relative_to(walk)
-            if any(part in cfg.skip_dirs for part in relative.parts):
-                continue
             ext = p.suffix.lower()
+            hit = next((part for part in relative.parts if part in cfg.skip_dirs), "")
+            if hit:
+                # Only worth mentioning when it is a file Ripple would otherwise
+                # have read. A folder of compiled output holds thousands of
+                # files nobody wants counted.
+                if ext in cfg.code_extensions:
+                    idx.in_skipped_dirs.append(relative.as_posix())
+                    if hit not in idx.skipped_dir_names:
+                        idx.skipped_dir_names.append(hit)
+                continue
             if ext not in cfg.code_extensions:
                 continue
             rel = relative.as_posix()

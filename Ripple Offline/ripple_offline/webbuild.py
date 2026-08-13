@@ -22,6 +22,7 @@ lets it replace the online settings screen cleanly.
 """
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -56,6 +57,14 @@ BANNER = """/* GENERATED — do not edit.
 
 HTML_BANNER = """<!-- GENERATED — do not edit. Built from Codebase/web/index.html. -->
 """
+
+
+_FUNCTION = re.compile(r"^\s*function\s+([A-Za-z_$][\w$]*)\s*\(", re.MULTILINE)
+
+
+def _functions(text: str) -> set[str]:
+    """Every function this script declares at the top level of a line."""
+    return set(_FUNCTION.findall(text))
 
 
 class BuildError(RuntimeError):
@@ -129,6 +138,19 @@ def build(out_dir: Path | None = None, shared_web: Path | None = None) -> Path:
             raise BuildError(
                 f"offline.js does not define {name}(). The shared script calls it, so the "
                 f"offline page would load and then fail on the first click.")
+
+    # Anything defined in both files silently replaces the shared one, because
+    # the offline file is appended and JavaScript keeps the last declaration.
+    # That is the whole mechanism for the three above -- and a trap for every
+    # other name, where the offline build would quietly run different code from
+    # the one that can be checked. Only the deliberate three are allowed.
+    clash = sorted(_functions(js) & _functions(offline_js) - set(REPLACED))
+    if clash:
+        raise BuildError(
+            f"offline.js and the shared front end both define {', '.join(clash)}. "
+            f"The offline copy would silently win, so the two editions would behave "
+            f"differently with nothing on screen to say so. Rename it, or add it to "
+            f"REPLACED in webbuild.py if replacing it is really the intention.")
 
     js = BANNER + js + "\n" + offline_js
     html = html.replace("<title>Ripple —", "<title>Ripple Offline —", 1)
