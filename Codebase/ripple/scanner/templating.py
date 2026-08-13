@@ -119,3 +119,55 @@ def fill_placeholders(text: str) -> str:
     out = _VAR.sub(_named, out)
     out = _DOLLAR.sub(_named, out)
     return _BRACE.sub(_named, out)
+
+
+# ── scripting blocks ───────────────────────────────────────────────────────
+# Every file in a real BigQuery pipeline is wrapped in DECLARE ... BEGIN ...
+# END, often with a FOR loop or an IF inside it. A SQL parser does not know
+# those keywords, hands back "BEGIN" as something it cannot read -- and, because
+# BEGIN has no semicolon of its own, swallows the statement that follows it.
+#
+# That is the quietest possible failure: the file parses, the reader reports no
+# problem, and the FIRST REAL STATEMENT OF EVERY FILE has vanished. In a
+# repository where every file opens with BEGIN, that is most of the lineage.
+#
+# These keywords carry no lineage themselves, so they are replaced with an empty
+# statement, on the copy going into the parser, keeping every line where it was.
+_BLOCK_LINE = re.compile(
+    r"""^\s*(?:
+          BEGIN(?:\s+TRANSACTION)?
+        | END(?:\s+(?:IF|FOR|WHILE|LOOP))?
+        | (?:COMMIT|ROLLBACK)(?:\s+TRANSACTION)?
+        | EXCEPTION\s+WHEN\s+.+?\s+THEN
+        | (?:ELSE\s*)?IF\b.*?\bTHEN
+        | ELSE
+        | LOOP
+        | (?:LEAVE|ITERATE|BREAK|CONTINUE)\b.*
+      )\s*;?\s*$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# A loop header names a real table. Keeping the query inside it costs one line
+# and is the difference between seeing that table read and not.
+_LOOP_HEADER = re.compile(r"^\s*(?:FOR\s+\w+\s+IN|WHILE)\s*(\(.*\))\s*(?:DO|LOOP)\s*$",
+                          re.IGNORECASE)
+_LOOP_PLAIN = re.compile(r"^\s*(?:FOR|WHILE)\b.*\b(?:DO|LOOP)\s*$", re.IGNORECASE)
+
+
+def unwrap_blocks(text: str) -> str:
+    """The same SQL with scripting keywords replaced by empty statements."""
+    out: list[str] = []
+    for line in text.splitlines():
+        loop = _LOOP_HEADER.match(line)
+        if loop:
+            out.append("SELECT * FROM " + loop.group(1) + ";")
+        elif _BLOCK_LINE.match(line) or _LOOP_PLAIN.match(line):
+            out.append(";")
+        else:
+            out.append(line)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def has_blocks(text: str) -> bool:
+    return any(_BLOCK_LINE.match(line) or _LOOP_PLAIN.match(line)
+               for line in text.splitlines())

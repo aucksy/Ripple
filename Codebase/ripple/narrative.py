@@ -132,10 +132,11 @@ def summarise(scan: dict, vals: dict) -> dict:
 
     if unreadable:
         bullets.append(
-            f"{_plural(len(unreadable), 'file')} could not be read and must be checked by hand."
+            f"{_plural(len(unreadable), 'file')} could not be followed and must be checked by hand."
         )
         actions.append(
-            f"Check the {_plural(len(unreadable), 'file')} in the 'could not read' list by hand."
+            f"Read the {_plural(len(unreadable), 'file')} in the 'check by hand' list yourself - "
+            f"Ripple could not read them, or found the name somewhere it cannot follow."
         )
 
     return {

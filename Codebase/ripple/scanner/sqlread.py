@@ -15,7 +15,13 @@ from sqlglot import exp
 
 from ..config import Settings, settings as default_settings
 from .repo import RepoIndex, SourceFile, statements_for, written_tables
-from .templating import describe as describe_templating, fill_placeholders, has_placeholders
+from .templating import (
+    describe as describe_templating,
+    fill_placeholders,
+    has_blocks,
+    has_placeholders,
+    unwrap_blocks,
+)
 
 # sqlglot narrates its fallbacks to the log; that noise is not useful here
 # because we surface every genuinely unreadable file ourselves.
@@ -81,9 +87,18 @@ class ParsedRepo:
     statements: list[Statement] = field(default_factory=list)
     unreadable: list[dict] = field(default_factory=list)
     parsed_files: set[str] = field(default_factory=set)
+    # Statements the reader could take in but not understand the shape of: a
+    # procedure call, a loop, an EXECUTE IMMEDIATE, a scripting block. They are
+    # kept per file rather than reported, because whether they matter depends
+    # entirely on what is being scanned for. A loop over a table list is
+    # nothing at all -- until the attribute you are chasing is named inside it.
+    opaque: dict[str, list[dict]] = field(default_factory=dict)
 
     def reading(self, table: str) -> list[Statement]:
         return [s for s in self.statements if s.reads_from(table)]
+
+    def statements_in(self, path: str) -> list[Statement]:
+        return [s for s in self.statements if s.file == path]
 
 
 # ── parsing ────────────────────────────────────────────────────────────────
@@ -106,9 +121,26 @@ def _target_of(stmt: exp.Expression) -> str | None:
     # Databricks it is the usual way a production table is loaded -- without it
     # the chain stops one step short of the table anyone actually reads, and
     # Ripple reports "no production impact" for a change that plainly has some.
-    if isinstance(stmt, (exp.Create, exp.Insert, exp.Merge)):
+    #
+    # DELETE and UPDATE matter for a different reason. They build nothing, so
+    # they look uninteresting -- but a DELETE whose WHERE clause filters on the
+    # attribute that is being decommissioned stops working on the day it goes,
+    # and the table it prunes quietly fills up instead. Naming the table they
+    # act on is what lets that be reported at all.
+    if isinstance(stmt, (exp.Create, exp.Insert, exp.Merge, exp.Delete, exp.Update)):
         return _table_name(stmt.this)
     return None
+
+
+def _cte_names(stmt: exp.Expression) -> set[str]:
+    """Names defined by WITH in this statement. Not tables -- a CTE is a name
+    for a query, and treating one as a table invents a link that is not there."""
+    out: set[str] = set()
+    for with_ in stmt.find_all(exp.With):
+        for cte in with_.expressions:
+            if cte.alias:
+                out.add(cte.alias.upper())
+    return out
 
 
 # ── splitting a file into separate statements ──────────────────────────────
@@ -166,15 +198,6 @@ def split_statements(sql: str) -> list[tuple[str, int]]:
             i += 1
     keep(sql[start:], start_line)
     return out
-
-
-# A statement sqlglot hands back as an opaque command, when it holds a query,
-# was not understood -- it just failed quietly instead of loudly. Counting it
-# as read would put the file in the clean pile with nothing to show for it.
-_LOOKS_LIKE_A_QUERY = re.compile(
-    r"\b(SELECT|MERGE\s+INTO|INSERT\s+INTO|CREATE\s+(OR\s+REPLACE\s+)?(TABLE|VIEW))\b",
-    re.IGNORECASE,
-)
 
 
 def _first_code_line(chunk: str) -> str:
@@ -238,13 +261,18 @@ def _why_not(f: SourceFile, cfg: Settings, failures: list[dict], understood: int
     }
 
 
-def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict]]:
-    """Parse one file into statements. Failures are reported, never swallowed."""
+def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict], list[dict]]:
+    """Parse one file into statements, failures, and statements not understood.
+
+    Failures are reported, never swallowed. The third list is the statements the
+    reader took in but could not make sense of; they are handed back rather than
+    reported, because whether they matter depends on the scan.
+    """
     out: list[Statement] = []
     problems: list[dict] = []
     blocks = statements_for(f)
     if not blocks:
-        return out, problems
+        return out, problems, []
 
     # For Spark/Scala jobs the destination is in the program, not the SQL.
     writes = written_tables(f)
@@ -262,23 +290,38 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
 
     dialect = cfg.sql_dialect or None
     failures: list[dict] = []
+    opaque: list[dict] = []
     for sql_text, offset in blocks:
-        # Templating is filled in on the way into the parser only. Everything
-        # shown on screen still comes from the file exactly as it is written.
+        # Templating is filled in and scripting keywords are dropped on the way
+        # into the parser only. Everything shown on screen still comes from the
+        # file exactly as it is written, on the line it is written on.
         text = fill_placeholders(sql_text) if has_placeholders(sql_text) else sql_text
+        text = unwrap_blocks(text) if has_blocks(text) else text
         parsed, bad = _parse_text(text, dialect, offset)
         failures.extend(bad)
         for stmt, line in parsed:
-            if isinstance(stmt, exp.Command) and _LOOKS_LIKE_A_QUERY.search(stmt.sql()):
-                failures.append({"line": line + 1, "text": _first_code_line(stmt.sql())})
+            # A scripting block, a loop, a procedure call, an EXECUTE IMMEDIATE.
+            # Kept, not reported: whether it matters depends on whether the name
+            # somebody is chasing turns up inside it, which is not known here.
+            if isinstance(stmt, exp.Command):
+                raw = stmt.sql()
+                opaque.append({"line": line + 1, "text": _first_code_line(raw),
+                               "sql": raw[:8000]})
                 continue
             select = stmt.find(exp.Select)
             target = _target_of(stmt) or implied_target
             sources: set[str] = set()
+            skip = _cte_names(stmt)
             if select is not None:
                 for t in select.find_all(exp.Table):
-                    if t.name and t.name.upper() != (target or "").upper():
+                    if t.name and t.name.upper() not in skip and t.name.upper() != (target or "").upper():
                         sources.add(t.name)
+            # A DELETE or an UPDATE reads the table it changes. Without this the
+            # statement has no source, so nothing ever looks at its WHERE clause
+            # -- and a filter on a column that is about to disappear is exactly
+            # the kind of thing this tool exists to find.
+            if isinstance(stmt, (exp.Delete, exp.Update)) and target:
+                sources.add(target)
             out.append(
                 Statement(
                     file=f.path,
@@ -294,7 +337,23 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
     if failures:
         failures.sort(key=lambda p: p["line"])
         problems.append(_why_not(f, cfg, failures, len(out)))
-    return out, problems
+    elif opaque and not out:
+        # Nothing in this file was understood. The reader did not fall over, it
+        # simply got nothing out -- which is the quietest way to lose a file and
+        # the reason the wrong SQL dialect used to look like a clean repository.
+        first = opaque[0]
+        problems.append({
+            "file": f.path,
+            "reason": f"read, but not one of its {len(opaque)} statements was understood",
+            "line": first["line"],
+            "snippet": first["text"],
+            "hint": ("Nothing was learned from this file at all - no table, no column, no "
+                     "lineage." + ("" if cfg.sql_dialect else
+                     " This repository is being read as generic SQL; if it is BigQuery, "
+                     "Snowflake or anything else in particular, choose that on the settings "
+                     "screen.")),
+        })
+    return out, problems, opaque
 
 
 def parse_repo(index: RepoIndex, cfg: Settings | None = None) -> ParsedRepo:
@@ -302,10 +361,12 @@ def parse_repo(index: RepoIndex, cfg: Settings | None = None) -> ParsedRepo:
     pr = ParsedRepo()
     problems: list[dict] = list(index.skipped)
     for f in index.files:
-        stmts, file_problems = parse_file(f, cfg)
+        stmts, file_problems, opaque = parse_file(f, cfg)
         if stmts:
             pr.statements.extend(stmts)
             pr.parsed_files.add(f.path)
+        if opaque:
+            pr.opaque[f.path] = opaque
         problems.extend(file_problems)
     pr.unreadable = _one_entry_per_file(problems)
     return pr
@@ -377,10 +438,31 @@ def output_name(stmt: Statement, column: str) -> str:
 
 def usages_of(stmt: Statement, column: str) -> list[Usage]:
     """Every way `column` is used by this statement, across all its subqueries."""
-    if stmt.expr is None or stmt.select is None:
+    if stmt.expr is None:
         return []
     found: list[Usage] = []
     alias_for_column = output_name(stmt, column)
+
+    # A DELETE or an UPDATE has a WHERE clause and no SELECT at all. Requiring a
+    # SELECT made both invisible, so "DELETE FROM stage WHERE market_code = 'US'"
+    # -- which stops working the day market_code goes, and silently stops pruning
+    # the table -- was reported as no usage whatsoever.
+    if isinstance(stmt.expr, (exp.Delete, exp.Update)):
+        for c in _cols_named(stmt.expr.args.get("where"), column):
+            found.append(Usage(kind="filter", column=column, alias=alias_for_column,
+                               detail=_literal_beside(stmt.expr, c)))
+        if isinstance(stmt.expr, exp.Update):
+            for e in stmt.expr.args.get("expressions") or []:
+                if _cols_named(e, column):
+                    found.append(Usage(kind="transform", column=column,
+                                       alias=alias_for_column, detail="SET"))
+        if not found:
+            for c in _cols_named(stmt.expr, column):
+                found.append(Usage(kind="select", column=column, alias=alias_for_column))
+                break
+
+    if stmt.select is None:
+        return _best_of(found)
 
     for sel in stmt.expr.find_all(exp.Select):
         # 1. the select list
@@ -428,7 +510,11 @@ def usages_of(stmt: Statement, column: str) -> list[Usage]:
                       detail=agg.__class__.__name__.upper())
             )
 
-    # keep the most informative reading of each kind, most consequential first
+    return _best_of(found)
+
+
+def _best_of(found: list[Usage]) -> list[Usage]:
+    """The most informative reading of each kind, most consequential first."""
     seen: dict[str, Usage] = {}
     for u in found:
         if u.kind not in seen or (u.detail and not seen[u.kind].detail):

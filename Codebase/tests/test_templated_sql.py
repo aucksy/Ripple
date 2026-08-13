@@ -228,6 +228,208 @@ def test_the_production_rule_matches_the_way_it_is_described(rule, table, expect
     assert cfg.is_production_table(table) is expected
 
 
+# ── the shapes real pipeline code is written in ────────────────────────────
+# Everything below came from reading actual files from the pipeline this tool
+# is for. Each one used to produce a quiet, confident nothing.
+def _repo(tmp_path: Path, files: dict, production: str = "") -> tuple:
+    for rel, text in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    cfg = Settings()
+    cfg.sql_dialect = "bigquery"
+    cfg.repo_path = tmp_path
+    if production:
+        cfg.production_patterns = parse_production_rule(production)
+    idx = RepoIndex.build(tmp_path, cfg)
+    return cfg, idx, parse_repo(idx, cfg)
+
+
+@pytest.mark.parametrize("sql,expected", [
+    # The whole three-part name inside one pair of backticks -- the commonest
+    # shape of all, and the one that would have broken every single chain.
+    ("SELECT a FROM `{{p}}.{{d}}.usmr_cm_status` x", "usmr_cm_status"),
+    ("SELECT a FROM `{{p}}`.{{d}}.promo_synch_up_data t", "promo_synch_up_data"),
+    ("SELECT a FROM `{{p}}.{{d}}`.medulla_product_detail AS pt", "medulla_product_detail"),
+    ("SELECT a FROM {{p}}.{{d}}.web_activity w", "web_activity"),
+])
+def test_every_way_the_name_is_written_still_names_the_table(sql, expected):
+    got = sqlglot_tables(fill_placeholders(sql))
+    assert expected in got
+
+
+def sqlglot_tables(sql: str) -> set[str]:
+    import sqlglot
+    from sqlglot import exp
+    return {t.name for s in sqlglot.parse(sql, read="bigquery") if s
+            for t in s.find_all(exp.Table)}
+
+
+def test_begin_does_not_swallow_the_statement_after_it(tmp_path):
+    """The quietest failure this reader had.
+
+    BEGIN has no semicolon of its own, so a SQL parser that does not know the
+    keyword takes the statement after it as part of the same thing -- and hands
+    back one blob it cannot read. Nothing errors. The file "parses". The FIRST
+    REAL STATEMENT OF THE FILE is simply gone, and in a repository where every
+    file opens with BEGIN, that is most of the lineage in it.
+    """
+    _, _, parsed = _repo(tmp_path, {"job.sql": """
+        DECLARE run_dt DATE;
+        BEGIN
+          CREATE OR REPLACE TABLE `{{p}}.{{d}}.first_thing` AS
+          SELECT market_code FROM `{{p}}.{{d}}.customer_demographics`;
+
+          CREATE OR REPLACE TABLE `{{p}}.{{d}}.second_thing` AS
+          SELECT market_code FROM `{{p}}.{{d}}.first_thing`;
+        END;
+    """})
+    assert {s.target for s in parsed.statements} >= {"first_thing", "second_thing"}
+    first = next(s for s in parsed.statements if s.target == "first_thing")
+    assert {x.lower() for x in first.sources} == {"customer_demographics"}
+
+
+@pytest.mark.parametrize("opener", [
+    "BEGIN", "BEGIN TRANSACTION", "IF x IS NULL THEN", "ELSE", "EXCEPTION WHEN ERROR THEN",
+])
+def test_no_scripting_keyword_swallows_the_next_statement(tmp_path, opener):
+    _, _, parsed = _repo(tmp_path, {"job.sql": f"""
+        DECLARE x STRING;
+        {opener}
+          CREATE OR REPLACE TABLE `{{{{p}}}}.{{{{d}}}}.made_here` AS
+          SELECT market_code FROM `{{{{p}}}}.{{{{d}}}}.customer_demographics`;
+        END;
+    """})
+    assert "made_here" in {s.target for s in parsed.statements}, opener
+
+
+def test_a_loop_still_shows_the_table_it_loops_over(tmp_path):
+    """The loop itself cannot be followed, but the query in its header is an
+    ordinary read of an ordinary table, and dropping the whole line lost it."""
+    _, _, parsed = _repo(tmp_path, {"loop.sql": """
+        BEGIN
+          FOR tbl IN (SELECT table_name FROM `{{p}}.{{d}}.sor_mapping`) DO
+            EXECUTE IMMEDIATE v_sql;
+          END FOR;
+        END;
+    """})
+    assert any("sor_mapping" in {x.lower() for x in s.sources} for s in parsed.statements)
+
+
+def test_a_scripting_block_does_not_hide_the_statements_inside_it(tmp_path):
+    """Every file in this pipeline is wrapped in DECLARE ... BEGIN ... END, with
+    the real work inside. If the block swallowed its contents, Ripple would read
+    the file happily and learn nothing at all from it."""
+    _, _, parsed = _repo(tmp_path, {"job.sql": """
+        DECLARE operation_str STRING;
+        BEGIN
+          SET operation_str = FORMAT_TIMESTAMP("%Y-%m-%d", CURRENT_TIMESTAMP());
+          CREATE OR REPLACE TABLE `{{tgt}}.{{stage}}.web_activity` AS
+          SELECT pub_guid FROM `{{src}}.{{anon}}.logon_activity`;
+        EXCEPTION WHEN ERROR THEN
+          SET msg = @@error.message;
+        END;
+    """})
+    reading = {s.target for s in parsed.statements}
+    assert "web_activity" in reading
+    assert any("logon_activity" in {x.lower() for x in s.sources} for s in parsed.statements)
+
+
+def test_a_delete_that_filters_on_the_column_is_a_finding(tmp_path):
+    """It builds nothing, so it looks uninteresting. But the day the column goes
+    the DELETE fails, the pruning silently stops, and the table fills up."""
+    cfg, idx, parsed = _repo(tmp_path, {"prune.sql": """
+        CREATE OR REPLACE TABLE `{{p}}.{{d}}.stage_tbl` AS
+        SELECT market_code FROM `{{p}}.{{d}}.customer_demographics`;
+        DELETE FROM `{{p}}.{{d}}.stage_tbl` WHERE market_code = 'US';
+    """})
+    out = trace(idx, parsed, [{"table": "customer_demographics", "attrs": ["market_code"]}],
+                change_type="removal", cfg=cfg).to_dict()
+    rows = [r for g in out["reached"] + out["groups"] for r in g["rows"]] + out["other"]
+    assert any(r["logic"] == "Filter" for r in rows), "the DELETE's WHERE clause must be seen"
+
+
+def test_an_update_that_filters_on_the_column_is_a_finding(tmp_path):
+    cfg, idx, parsed = _repo(tmp_path, {"fix.sql": """
+        CREATE OR REPLACE TABLE `{{p}}.{{d}}.stage_tbl` AS
+        SELECT market_code, cust_id FROM `{{p}}.{{d}}.customer_demographics`;
+        UPDATE `{{p}}.{{d}}.stage_tbl` SET cust_id = 0 WHERE market_code IS NULL;
+    """})
+    out = trace(idx, parsed, [{"table": "customer_demographics", "attrs": ["market_code"]}],
+                change_type="removal", cfg=cfg).to_dict()
+    rows = [r for g in out["reached"] + out["groups"] for r in g["rows"]] + out["other"]
+    assert any(r["logic"] == "Filter" for r in rows)
+
+
+def test_a_name_written_as_text_inside_a_call_is_not_called_harmless(tmp_path):
+    """In-house helpers take the column and the table as quoted strings. No
+    parser turns that back into lineage -- but filing it under "mentions the
+    name but carries it nowhere" reads as a reassurance, and this is the one
+    place somebody genuinely has to go and look."""
+    cfg, idx, parsed = _repo(tmp_path, {"tags.sql": """
+        DECLARE cm11_tag STRING;
+        BEGIN
+          SET cm11_tag = `{{src}}`.{{d}}.get_sde_tag('home_phone_no','customer_demographics');
+          CREATE OR REPLACE TABLE `{{p}}.{{d}}.unrelated` AS SELECT 1 AS x;
+        END;
+    """})
+    out = trace(idx, parsed, [{"table": "customer_demographics", "attrs": ["home_phone_no"]}],
+                change_type="removal", cfg=cfg).to_dict()
+    gap = next(u for u in out["unreadable"] if "tags.sql" in u["file"])
+    assert "appears as text" in gap["reason"] and "home_phone_no" in gap["reason"]
+    assert gap["line"] == 4 and "get_sde_tag" in gap["snippet"]
+    assert not out["mentionsOnly"], "it must not also sit in the reassuring list"
+
+
+def test_sql_built_as_text_and_run_later_is_flagged_with_its_line(tmp_path):
+    cfg, idx, parsed = _repo(tmp_path, {"refresh.sql": """
+        DECLARE v_sql STRING;
+        BEGIN
+          FOR tbl IN (SELECT table_name FROM `{{p}}.{{d}}.sor_mapping`) DO
+            SET v_sql = FORMAT(\"\"\"INSERT INTO %s SELECT market_code FROM %s\"\"\", a, b);
+            EXECUTE IMMEDIATE v_sql;
+          END FOR;
+        END;
+    """})
+    out = trace(idx, parsed, [{"table": "customer_demographics", "attrs": ["market_code"]}],
+                change_type="removal", cfg=cfg).to_dict()
+    gap = next(u for u in out["unreadable"] if "refresh.sql" in u["file"])
+    # The whole query lives inside one quoted string, so that is what it is
+    # reported as -- more specific than "somewhere I cannot follow", and it
+    # points at the line the query is written on.
+    assert "appears as text" in gap["reason"]
+    assert gap["line"] == 5 and "FORMAT" in gap["snippet"]
+
+
+def test_a_file_that_only_writes_the_name_in_a_comment_stays_reassuring(tmp_path):
+    """The other half of the same rule. If everything became "check by hand",
+    the list would be ignored within a week."""
+    cfg, idx, parsed = _repo(tmp_path, {"other.sql": """
+        -- market_code is not loaded here
+        CREATE OR REPLACE TABLE `{{p}}.{{d}}.unrelated` AS
+        SELECT cust_id FROM `{{p}}.{{d}}.something_else`;
+    """})
+    out = trace(idx, parsed, [{"table": "customer_demographics", "attrs": ["market_code"]}],
+                change_type="removal", cfg=cfg).to_dict()
+    assert [m["file"] for m in out["mentionsOnly"]] == ["other.sql"]
+    assert not out["unreadable"]
+
+
+def test_a_cte_is_not_reported_as_a_table(tmp_path):
+    """A name defined by WITH is a name for a query. Treating it as a table
+    invents a link between two files that have nothing to do with each other."""
+    _, _, parsed = _repo(tmp_path, {"cte.sql": """
+        CREATE OR REPLACE TABLE `{{p}}.{{d}}.out_tbl` AS (
+          WITH cardmember_raw AS (
+            SELECT cm_num FROM `{{src}}.{{anon}}.cm_status`
+          )
+          SELECT cm_num FROM cardmember_raw
+        );
+    """})
+    stmt = next(s for s in parsed.statements if s.target == "out_tbl")
+    assert {x.lower() for x in stmt.sources} == {"cm_status"}
+
+
 def test_an_empty_rule_is_not_read_as_every_table_being_safe():
     """An empty list would make is_production_table always false, which reports
     every repository in the world as clean."""

@@ -809,7 +809,7 @@ function step4(root) {
     ['Attributes impacted', st.attributesImpacted, '', 'Of those you confirmed'],
     ['Files to change', st.filesWithImpact, '', `Of ${sc.filesScanned} scanned`],
     ['Breaking usages', st.breakingUsages, st.breakingUsages ? 'var(--amber)' : '', 'Filters, joins, ranking'],
-    ['Could not read', st.couldNotRead, st.couldNotRead ? 'var(--amber)' : '', 'Must be checked by hand'],
+    ['To check by hand', st.couldNotRead, st.couldNotRead ? 'var(--amber)' : '', 'Ripple could not follow these'],
   ];
   const box = x(root, 'stats');
   cards.forEach(([l, v, colour, sub]) => box.append(el('div', { className: 'stat' },
@@ -993,9 +993,10 @@ function renderGaps(box, sc) {
     const card = el('div', { className: 'card clip', style: 'margin-top:20px;border-color:var(--amberln)' });
     card.append(el('div', { className: 'chead', style: 'background:var(--amberbg);border-bottom-color:var(--amberln)' },
       el('span', { className: 'tag', style: 'background:var(--amber);color:#fff', textContent: 'Check by hand' }),
-      el('b', { textContent: `${sc.unreadable.length} file${sc.unreadable.length === 1 ? '' : 's'} Ripple could not read` })));
+      el('b', { textContent: `${sc.unreadable.length} file${sc.unreadable.length === 1 ? '' : 's'} to check by hand` })));
     const p = el('div', { className: 'pad lg' });
-    p.append(el('div', { className: 'prose', textContent: 'These are not covered by the findings above. A clean result is only as good as what could be read.' }));
+    p.append(el('div', { className: 'prose', textContent:
+      'Ripple either could not read these, or found your name in them somewhere it cannot follow — inside a procedure call, a loop, or written as text. They are not covered by the findings above, and a clean result is only as good as what could be followed.' }));
     // The point of this list is that somebody opens those files and checks
     // them, so it gives them the line to open at and the line itself. "Could
     // not parse" sends a person hunting through a thousand-line file.

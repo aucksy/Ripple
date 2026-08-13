@@ -230,7 +230,7 @@ def test_actions_are_not_repeated(repo):
 def test_summary_mentions_what_could_not_be_read(repo):
     res = scan(repo, "customer_demographics", ["market_code"], "value_change")
     s = narrative.summarise(res.to_dict(), {"upstream": []})
-    assert any("could not be read" in b for b in s["bullets"])
+    assert any("checked by hand" in b for b in s["bullets"])
 
 
 def test_reply_asks_upstream_when_there_is_no_local_fix(repo):

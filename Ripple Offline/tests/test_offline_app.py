@@ -142,12 +142,14 @@ def test_a_folder_can_be_checked_before_it_is_saved(client):
     assert out["ok"] and out["files"] > 15
 
 
-def test_the_dialect_really_changes_what_is_read(client, tmp_path):
+def test_the_dialect_really_changes_what_is_read(clean_home, tmp_path):
     """The whole reason the setting is on screen. Read as generic SQL, a
     BigQuery file is not read less well -- it is not read at all.
 
-    Measured on BigQuery SQL, not on the plain-SQL mock repository. Plain SQL
-    reads the same either way, so proving the point there proved nothing.
+    Measured on BigQuery SQL, not on the plain-SQL mock repository: plain SQL
+    reads the same either way, so proving the point there proved nothing. On its
+    own client, too — changing the folder on the shared one leaves every test
+    after it reading a four-line temporary repository.
     """
     (tmp_path / "snapshot.sql").write_text(
         "CREATE OR REPLACE TABLE `acme.stage.snap` AS\n"
@@ -155,14 +157,18 @@ def test_the_dialect_really_changes_what_is_read(client, tmp_path):
         "FROM `acme.c360.customer_demographics` AS c\n"
         "QUALIFY ROW_NUMBER() OVER (PARTITION BY c.customer_id ORDER BY c.last_upd) = 1;\n",
         encoding="utf-8")
-    bq = client.post("/api/settings", json={"repoPath": str(tmp_path),
-                                            "sqlDialect": "bigquery", "maxHops": 4}).json()
-    generic = client.post("/api/settings", json={"repoPath": str(tmp_path),
-                                                 "sqlDialect": "", "maxHops": 4}).json()
-    assert bq["repo"]["statements"] == 1 and bq["repo"]["unreadable"] == 0
-    assert generic["repo"]["statements"] == 0 and generic["repo"]["unreadable"] == 1
-    client.post("/api/settings", json={"repoPath": str(MOCKREPO),
-                                       "sqlDialect": "bigquery", "maxHops": 4})
+    try:
+        with TestClient(app) as c:
+            bq = c.post("/api/settings", json={"repoPath": str(tmp_path),
+                                               "sqlDialect": "bigquery", "maxHops": 4}).json()
+            generic = c.post("/api/settings", json={"repoPath": str(tmp_path),
+                                                    "sqlDialect": "", "maxHops": 4}).json()
+        assert bq["repo"]["statements"] == 1 and bq["repo"]["unreadable"] == 0
+        assert generic["repo"]["statements"] == 0 and generic["repo"]["unreadable"] == 1
+    finally:
+        prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery",
+                                "maxHops": 4}))
+        reindex()
 
 
 # ── the whole flow ─────────────────────────────────────────────────────────
