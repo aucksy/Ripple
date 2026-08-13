@@ -432,7 +432,7 @@ Write these tests, using only invented table names:
   the one-line form counts a long list instead of printing it
 ````
 
-**Check it worked:** `pytest tests/test_production.py -q` — all green. Then in a
+**Check it worked:** `python -m pytest tests/test_production.py -q` — all green. Then in a
 Python prompt, paste a messy list and print the notes. If the notes are empty on
 a paste that clearly had junk in it, the honesty half is missing and you should
 push back in the same chat.
@@ -529,7 +529,7 @@ string with the right line offset, a .sql reference found, a write target
 found, and whole-word search not matching a substring.
 ````
 
-**Check it worked:** `pytest tests/test_repo.py -q`. Then point it at a folder on
+**Check it worked:** `python -m pytest tests/test_repo.py -q`. Then point it at a folder on
 your machine and print `len(idx.files)`, `idx.skipped_dir_names`,
 `len(idx.held_online)`.
 
@@ -644,7 +644,7 @@ it; a procedure body is kept; a loop header keeps its table; a multi-line
 RAISE is consumed whole.
 ````
 
-**Check it worked:** `pytest tests/test_templating.py -q`. Then paste one of your
+**Check it worked:** `python -m pytest tests/test_templating.py -q`. Then paste one of your
 own real files into a Python prompt and confirm `sqlglot.parse(unwrap_blocks(fill_placeholders(text)), read="bigquery")` does not raise.
 
 ---
@@ -799,7 +799,7 @@ column of the same name is not reported; where the SQL does not say, the
 usage is kept with certain=False; a window ORDER BY is a ranking.
 ````
 
-**Check it worked:** `pytest tests/test_sqlread.py -q`. Then run it over one of
+**Check it worked:** `python -m pytest tests/test_sqlread.py -q`. Then run it over one of
 your own real folders and print how many files parsed versus how many landed in
 the unreadable list. If almost everything is unreadable, the dialect is wrong or
 Phase 3 is not being applied.
@@ -917,7 +917,7 @@ result is still clean; a name inside a quoted string is reported even in a
 file that has findings, with a count of lines; groups come back worst first.
 ````
 
-**Check it worked:** `pytest tests/test_lineage.py -q`. The one test to insist
+**Check it worked:** `python -m pytest tests/test_lineage.py -q`. The one test to insist
 on: *findings are reported even when nothing matches the published rule*. If the
 chat quietly returns an empty result there, it has rebuilt the exact bug this
 tool exists to prevent.
@@ -976,7 +976,7 @@ time into a form; they paste an Outlook To line — "Priya Raman
 Tests with invented names and a fabricated .eml built in the test.
 ````
 
-**Check it worked:** `pytest tests/test_notification.py -q`, then feed it a real
+**Check it worked:** `python -m pytest tests/test_notification.py -q`, then feed it a real
 notification you have and print what came out.
 
 ---
@@ -1052,7 +1052,7 @@ Tests, and these are the ones that matter:
   a genuinely clean result still says no impact, in both
 ````
 
-**Check it worked:** `pytest tests/test_narrative.py -q`. Read the four drafted
+**Check it worked:** `python -m pytest tests/test_narrative.py -q`. Read the four drafted
 replies out loud. If any of them would embarrass you when forwarded, say so in
 the same chat and have it rewritten.
 
