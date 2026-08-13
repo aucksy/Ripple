@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import folderpick, nonet, paths, prefs
+from . import folderpick, nonet, paths, prefs, synced
 
 # The shared engine. Importing this package has already put it on the path.
 from ripple import narrative, store                                # noqa: E402
@@ -88,6 +88,11 @@ def _health() -> dict:
         "canBrowse": folderpick.available(),
         "settingsFile": str(paths.settings_file()),
         "historyFile": str(paths.history_file()),
+        # Whether Ripple's own folder is one something uploads to the cloud. It
+        # changes two things a person should know about rather than find out:
+        # the saved history is a database file in there, and the whole program
+        # is going up with it.
+        "syncedFolder": synced.detect(paths.app_dir()),
         "dialects": prefs.dialects(),
         "serverless": False,
         "limits": {
@@ -102,6 +107,11 @@ def _health() -> dict:
             "files": len(idx.files),
             "statements": len(parsed.statements),
             "unreadable": len(parsed.unreadable),
+            # Files never opened at all. This build is the one that meets them:
+            # it runs where there is no internet, so a file OneDrive is holding
+            # online-only can never be fetched.
+            "heldOnline": len(idx.held_online),
+            "pathTooLong": len(idx.too_long),
             "exists": folder["ok"],
             "kinds": [{"lang": k, "files": n}
                       for k, n in sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))],

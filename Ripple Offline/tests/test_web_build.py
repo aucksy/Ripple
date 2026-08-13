@@ -135,10 +135,13 @@ def test_a_lost_marker_around_the_key_form_stops_the_build(tmp_path):
     the form onto a locked-down machine."""
     fake = _copy_shared(tmp_path)
     lines = (SHARED_WEB / "app.js").read_text(encoding="utf-8").splitlines()
-    opens = next(i for i, l in enumerate(lines)
-                 if l.strip() == webbuild.JS_START
-                 and any("function aiCard" in n for n in lines[i:i + 40]))
-    closes = next(i for i in range(opens, len(lines)) if lines[i].strip() == webbuild.JS_END)
+    # The marker pair that encloses aiCard, found by walking back from aiCard
+    # rather than by looking a fixed number of lines forward from a marker.
+    # Editing anything above it used to push aiCard out of that window, and the
+    # test then failed for a reason that had nothing to do with the markers.
+    at = next(i for i, l in enumerate(lines) if "function aiCard" in l)
+    opens = max(i for i in range(at) if lines[i].strip() == webbuild.JS_START)
+    closes = next(i for i in range(at, len(lines)) if lines[i].strip() == webbuild.JS_END)
     (fake / "app.js").write_text(
         "\n".join(l for i, l in enumerate(lines) if i not in (opens, closes)), encoding="utf-8")
     with pytest.raises(webbuild.BuildError, match="aiCard"):

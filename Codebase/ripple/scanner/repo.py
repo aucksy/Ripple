@@ -5,6 +5,7 @@ as mentions the name. Understanding what the mention *means* happens later.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +14,69 @@ from ..config import Settings, settings as default_settings
 
 # Which files carry SQL inside string literals rather than being SQL themselves.
 EMBEDDED_SQL_EXTS = {".py", ".scala", ".java", ".sh"}
+
+# ── files that are not really on this machine ──────────────────────────────
+# OneDrive's Files On-Demand leaves a file in the folder listing, with its real
+# name and its real size, when the contents are still in the cloud. It looks
+# exactly like a file. Opening it asks OneDrive to fetch it, which needs the
+# network -- and Ripple Offline is for a machine that has none.
+#
+# This is the most dangerous thing that can happen to a scan. A repository half
+# of which was never read comes back with a short finding list and a green tick,
+# and the whole point of this tool is that the green tick can be trusted. So
+# these are found before anything is opened, counted, and said out loud.
+FILE_ATTRIBUTE_OFFLINE = 0x1000
+FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x40000
+FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x400000
+
+# The two recall flags are set by the cloud provider itself and mean one thing
+# only: the contents are not here. OFFLINE is older and much looser -- some
+# backup software sets it on files that are perfectly local -- so on its own it
+# is treated as a suspicion, and the file is still opened. Refusing to read a
+# repository because a backup tool touched a flag would be its own disaster.
+_DEFINITELY_ONLINE_ONLY = FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+
+ONLINE_ONLY_REASON = "not really on this machine - OneDrive is holding it online-only"
+
+# Windows still refuses a path over 260 characters unless long path support has
+# been switched on, and on a managed office laptop it usually has not been. His
+# real folders are about 140 characters before the filename even starts, so this
+# is not a theoretical limit. Prefixing the root with \\?\ opts this walk out of
+# the limit whatever the machine is set to.
+_LONG_PATH_LIMIT = 260
+
+
+def _walk_root(root: Path) -> Path:
+    """The same folder, in the form Windows will walk past 260 characters."""
+    if os.name != "nt":
+        return root
+    text = str(root)
+    if text.startswith("\\\\?\\"):
+        return root
+    absolute = os.path.abspath(text)
+    if absolute.startswith("\\\\"):                 # \\server\share\...
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
+
+
+def online_only(p: Path) -> int:
+    """Which placeholder flags this file carries, or 0 for an ordinary file."""
+    if os.name != "nt":
+        return 0
+    try:
+        attrs = p.stat().st_file_attributes            # type: ignore[attr-defined]
+    except (OSError, AttributeError):
+        return 0
+    return attrs & (_DEFINITELY_ONLINE_ONLY | FILE_ATTRIBUTE_OFFLINE)
+
+
+def _looks_like_a_cloud_error(exc: BaseException) -> bool:
+    """Did this read fail because the file was still in the cloud?
+
+    Matched on the words Windows itself uses rather than on error numbers, so a
+    number remembered wrongly cannot turn a real problem into a reassuring one.
+    """
+    return "cloud" in str(exc).lower()
 
 LANG_BY_EXT = {
     ".sql": "SQL",
@@ -62,6 +126,11 @@ class RepoIndex:
     files: list[SourceFile] = field(default_factory=list)
     skipped: list[dict] = field(default_factory=list)
     root: Path | None = None
+    # Files OneDrive is keeping in the cloud, which is a different thing from a
+    # file that would not parse and needs saying differently.
+    held_online: list[str] = field(default_factory=list)
+    # Files whose path went past what Windows will open on this machine.
+    too_long: list[str] = field(default_factory=list)
 
     @classmethod
     def build(cls, root: Path | str, cfg: Settings | None = None) -> "RepoIndex":
@@ -72,20 +141,34 @@ class RepoIndex:
             idx.skipped.append({"file": str(root), "reason": "repository folder not found"})
             return idx
 
-        for p in sorted(root.rglob("*")):
+        walk = _walk_root(root)
+        for p in sorted(walk.rglob("*")):
             if not p.is_file():
                 continue
             # Judged on the path *inside* the repository, never the whole path.
             # Otherwise a repository that merely happens to live under a folder
             # called build, dist, target or venv has every one of its files
             # skipped, and the scan comes back clean because it read nothing.
-            relative = p.relative_to(root)
+            relative = p.relative_to(walk)
             if any(part in cfg.skip_dirs for part in relative.parts):
                 continue
             ext = p.suffix.lower()
             if ext not in cfg.code_extensions:
                 continue
             rel = relative.as_posix()
+
+            # Held in the cloud: do not open it. Opening asks OneDrive to fetch
+            # it, which on a machine with no network hangs and then fails, once
+            # per file -- and there can be thousands.
+            # Counted here and nowhere else. A file that was never opened is not
+            # a file to "check by hand" -- there is nothing on this machine to
+            # open. Listing it in both places counts two problems where there is
+            # one, and tells somebody to go and read a file that is not there.
+            flags = online_only(p)
+            if flags & _DEFINITELY_ONLINE_ONLY:
+                idx.held_online.append(rel)
+                continue
+
             try:
                 size = p.stat().st_size
                 if size > cfg.max_file_bytes:
@@ -100,8 +183,17 @@ class RepoIndex:
                 except Exception as exc:  # pragma: no cover - defensive
                     idx.skipped.append({"file": rel, "reason": f"could not decode ({exc})"})
                     continue
-            except Exception as exc:  # pragma: no cover - defensive
-                idx.skipped.append({"file": rel, "reason": f"could not open ({exc})"})
+            except Exception as exc:
+                # A read that fails on a file already flagged OFFLINE, or that
+                # fails with Windows' own cloud wording, is the same problem as
+                # above -- said in the same words rather than as an error code
+                # nobody can act on.
+                if flags or _looks_like_a_cloud_error(exc):
+                    idx.held_online.append(rel)
+                elif len(str(p)) > _LONG_PATH_LIMIT:
+                    idx.too_long.append(rel)
+                else:
+                    idx.skipped.append({"file": rel, "reason": f"could not open ({exc})"})
                 continue
             idx.files.append(
                 SourceFile(path=rel, abs_path=p, text=text, lang=LANG_BY_EXT.get(ext, "Text"))

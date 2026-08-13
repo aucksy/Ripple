@@ -237,6 +237,11 @@ def health() -> dict:
             "files": len(idx.files),
             "statements": len(parsed.statements),
             "unreadable": len(parsed.unreadable),
+            # Files never opened at all. Shown next to the file count, because
+            # "1,770 files read" beside "412 never opened" is a different
+            # sentence from "1,770 files read".
+            "heldOnline": len(idx.held_online),
+            "pathTooLong": len(idx.too_long),
             "exists": True if on_github else settings.repo_path.exists(),
             "kinds": [
                 {"lang": k, "files": n}
