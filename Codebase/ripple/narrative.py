@@ -139,6 +139,21 @@ def summarise(scan: dict, vals: dict) -> dict:
             f"Ripple could not read them, or found the name somewhere it cannot follow."
         )
 
+    # Files that were never opened go first among the caveats and are worded
+    # harder, because every other number on the page is a number about the files
+    # that WERE opened. Left unsaid, this reads as an answer about the whole
+    # repository when it is an answer about part of one.
+    never_opened = stats.get("neverOpened", 0)
+    if never_opened:
+        bullets.insert(0, (
+            f"{_plural(never_opened, 'file')} in this repository could not even be opened, so "
+            f"nothing in them was read - this result covers the rest."
+        ))
+        actions.insert(0, (
+            f"Make the {_plural(never_opened, 'file')} that could not be opened available on this "
+            f"machine and read the repository again before trusting this result."
+        ))
+
     return {
         "headline": headline,
         "narrative": narrative,
@@ -208,6 +223,13 @@ def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
                 "",
                 f"For transparency: {_plural(len(unreadable), 'file')} in our repository could not be "
                 f"read automatically and are being checked by hand, so this assessment may still grow.",
+            ]
+        never_opened = scan.get("stats", {}).get("neverOpened", 0)
+        if never_opened:
+            lines += [
+                "",
+                f"Also for transparency: {_plural(never_opened, 'file')} could not be opened at all "
+                f"on the machine this was run on, so this assessment does not cover them.",
             ]
         lines += ["", "Thanks,", "Data Engineering"]
         subject = f"RE: {subject_base} - impact confirmed"

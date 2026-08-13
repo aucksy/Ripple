@@ -227,6 +227,26 @@ function whereCard(h) {
   card.append(el('div', { className: 'small faint', style: 'margin-top:12px;line-height:1.55',
     textContent: 'Both sit in the folder you copied across. Take that folder to another machine '
       + 'and your settings and saved analyses go with it. Delete it and Ripple is gone.' }));
+  const sync = h.syncedFolder;
+  if (sync && sync.synced) {
+    // Keeping everything beside the executable is what makes this copy portable.
+    // In an office where sync is on for everybody it also means the folder is
+    // being uploaded, and that is worth one plain paragraph rather than a
+    // surprise. Neither point is a reason to stop; both are a reason to say so.
+    card.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
+      el('b', { style: 'display:block', textContent: `${sync.client} is syncing this folder` }),
+      el('div', { style: 'margin-top:6px;line-height:1.55', textContent:
+        'Two things follow. Saved analyses are kept in a database file in here, and a sync '
+        + 'tool copies files whenever it likes — if Ripple ever says it could not save an '
+        + 'analysis, that is the most likely reason, and trying again usually works. And '
+        + 'everything in this folder is being uploaded to your company\u2019s cloud, including '
+        + 'the Ripple program itself, which is about 44 MB across roughly 1,770 files and is '
+        + 'not signed by a known publisher.' }),
+      el('div', { className: 'small', style: 'margin-top:8px;line-height:1.55', textContent:
+        'If you would rather neither happened, close Ripple and move this folder somewhere '
+        + 'that is not synced — C:\\Ripple, for example — then start it again from there. '
+        + 'Your settings and saved analyses move with it.' })));
+  }
   return card;
 }
 
@@ -269,9 +289,15 @@ function guardCard() {
 function factsCard(h) {
   const card = el('div', { className: 'card pad' });
   card.append(el('span', { className: 'lbl', textContent: 'What was read' }));
+  // "Files indexed 3, files unreadable 0" is the line somebody reads to decide
+  // whether the whole folder was covered, and on its own it answers yes. The
+  // row below it only appears when the answer is no, and then it has to appear,
+  // because this is the panel that gets believed.
+  const neverOpened = (h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0);
   [['Files indexed', String(h.repo.files)],
    ['Statements understood', String(h.repo.statements)],
    ['Files unreadable', String(h.repo.unreadable)],
+   ...(neverOpened ? [['Files never opened', String(neverOpened)]] : []),
    ['Tables found', String(h.catalog.tables)],
    ['SQL read as', h.sqlDialect],
    ['Renames followed', `${h.maxHops} hops`],

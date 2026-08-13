@@ -566,6 +566,7 @@ function step3(root) {
       (pin.length ? ' — ' : '') + (repoOk
         ? `${h.repo.files} file${h.repo.files === 1 ? '' : 's'} ready to scan.`
         : 'check the repository folder in Settings & checks.'))));
+  ready.append(neverOpenedNote(h.repo.heldOnline || 0, h.repo.pathTooLong || 0));
 
   // what kinds of file are in the index — counted, not assumed
   const kinds = x(root, 'kinds'); kinds.innerHTML = '';
@@ -601,6 +602,14 @@ function step3(root) {
       // never read.
       g.append(el('div', { className: 'note info',
         textContent: 'No table definitions were read, so there is no catalogue to check.' }));
+    } else if ((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0)) {
+      // The same trap one branch up, one step subtler. "Every table definition
+      // was readable" is true of the files that were opened, and sitting in
+      // green under a warning that some were not, it reads as a clean bill of
+      // health for the repository. It has to say which repository it means.
+      g.append(el('div', { className: 'note info', textContent:
+        'Every table definition in the files that could be opened was readable. '
+        + 'The files above were not opened, so nothing is known about them.' }));
     } else {
       g.append(el('div', { className: 'note good', textContent: 'Every table definition was readable.' }));
     }
@@ -642,6 +651,12 @@ function repoFacts(h) {
     style: 'margin-top:5px;word-break:break-all' }));
   const facts = [
     ['Files indexed', String(h.repo.files)],
+    // Only when there are some. "Files indexed 1,770" is the number somebody
+    // reads to decide the whole folder was covered, so when it was not, the
+    // row saying so has to sit directly underneath it.
+    ...(((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0))
+      ? [['Files never opened', String((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0))]]
+      : []),
     ['Statements understood', String(h.repo.statements)],
     // A folder that was never a git checkout has no branch, and an empty row
     // would read as a missing answer rather than as "there isn't one".
@@ -811,6 +826,11 @@ function step4(root) {
     ['Breaking usages', st.breakingUsages, st.breakingUsages ? 'var(--amber)' : '', 'Filters, joins, ranking'],
     ['To check by hand', st.couldNotRead, st.couldNotRead ? 'var(--amber)' : '', 'Ripple could not follow these'],
   ];
+  // Only ever shown when there are some. A "0 never opened" card would be a
+  // reassurance nobody asked for, taking room from the six that carry a result.
+  if (st.neverOpened) {
+    cards.push(['Never opened', st.neverOpened, 'var(--red)', 'Not on this machine, or path too long']);
+  }
   const box = x(root, 'stats');
   cards.forEach(([l, v, colour, sub]) => box.append(el('div', { className: 'stat' },
     el('span', { className: 'lbl', textContent: l }),
@@ -898,7 +918,13 @@ function groupCard(g, key, tag, tagStyle) {
       el('span', { className: 'mono', textContent: r.inter, style: 'font-weight:600;font-size:13px;min-width:0;overflow-wrap:break-word' }),
       el('span', { className: 'mono', textContent: r.attr, style: 'font-size:13px;font-weight:600;color:var(--blued);min-width:0;overflow-wrap:break-word' }),
       el('span', {}, el('span', { className: 'chip alias', textContent: r.alias })),
-      el('span', {}, el('span', { className: 'badge sm ' + (r.breaking ? 'red' : 'grey'), textContent: r.logic })),
+      // The second badge goes inside the same cell rather than adding a column,
+      // so a row that has it lines up with the rows that do not.
+      el('span', {}, el('span', { className: 'badge sm ' + (r.breaking ? 'red' : 'grey'), textContent: r.logic }),
+        r.certain === false
+          ? el('span', { className: 'badge sm grey', style: 'margin-left:6px',
+              textContent: 'table not stated' })
+          : null),
       el('span', {}, el('span', { className: 'badge sm ' + (r.mode === 'Direct pull' ? 'blue' : 'violet'), textContent: r.mode })),
       el('span', { className: 'caret', textContent: '›' }));
     row.onclick = () => { S.openRow = ro ? null : rowKey; render(); };
@@ -938,6 +964,27 @@ function renderChecks(box, sc) {
       (a.endsAt || []).length
         ? el('span', { className: 'small muted', textContent: 'ends at ' + a.endsAt.join(', ') })
         : null));
+    // How widely the name is used as a name. A scan for a column half the
+    // warehouse shares looks identical on screen to a scan for one only this
+    // table has, and the two are not remotely the same answer: the first
+    // produces a long list because the name is everywhere, the second because
+    // something is badly wrong. Only said when the name really is widespread —
+    // "this name is in 1 of 60 tables" is a fact nobody needs.
+    if (a.nameInTables > 1 && a.tablesRead) {
+      const share = a.nameInTables / a.tablesRead;
+      if (share >= 0.25) {
+        p.append(el('div', { className: 'small muted', style: 'margin:4px 0 0 4px;line-height:1.55',
+          textContent: `"${a.attr}" is a column name in ${a.nameInTables} of the ${a.tablesRead} `
+            + `tables Ripple could read. The findings below follow it out of ${a.table} only, `
+            + 'so a long list here is the name being common rather than the change being bigger.' }));
+      }
+    }
+    if (a.uncertain) {
+      p.append(el('div', { className: 'small muted', style: 'margin:4px 0 0 4px;line-height:1.55',
+        textContent: `${a.uncertain} of these are on a line where the SQL did not say which table `
+          + `the ${a.attr} came from, and more than one table in that statement has one. They are `
+          + 'marked "table not stated" below — real usages, on that line, with the table inferred.' }));
+    }
   });
   card.append(p);
   box.append(card);
@@ -959,6 +1006,16 @@ function detailFor(r) {
   d.append(el('div', { className: 'note ' + (r.noLocalFix ? 'bad' : r.breaking ? 'warn' : 'info') },
     el('b', { textContent: r.noLocalFix ? 'No local fix — the upstream team must supply a replacement. ' : r.breaking ? 'This breaks. ' : 'Changes, but does not break. ' }),
     r.impact));
+  // The usage is on that line and it is real. What is inferred is which table
+  // the column came from, and in a warehouse where the same key columns are in
+  // nearly every table that is worth stating rather than glossing.
+  if (r.certain === false) {
+    d.append(el('div', { className: 'note info', style: 'margin-top:10px' },
+      el('b', { textContent: 'The table is inferred here. ' }),
+      `This statement reads more than one table with a column called ${r.attr}, and the SQL `
+      + `does not say which one this is. Ripple has counted it as ${r.from}'s. Worth a look at `
+      + 'the code below before acting on it.'));
+  }
   const code = el('div', { className: 'code' });
   const head = el('div', { className: 'f' },
     el('span', { className: 'name', textContent: r.file }),
@@ -986,9 +1043,57 @@ function detailFor(r) {
   return d;
 }
 
+/* Files that were never opened at all.
+
+   Not the same thing as a file that was read and not understood, and much
+   worse. A file Ripple could not parse is on the "check by hand" list and
+   somebody goes and looks at it. A file that was never opened leaves no trace
+   anywhere: the finding list is shorter, the tick is green, and nothing on the
+   screen is false — it is just answering a question about half a repository.
+
+   So this says the number, says why, and says the one thing that fixes it. */
+function neverOpenedNote(heldOnline, tooLong) {
+  const total = (heldOnline || 0) + (tooLong || 0);
+  if (!total) return el('span', { className: 'hide' });
+  const note = el('div', { className: 'note warn', style: 'margin-top:12px' });
+  note.append(el('b', { style: 'display:block;font-size:14px',
+    textContent: `${total} file${total === 1 ? '' : 's'} here ${total === 1 ? 'was' : 'were'} never opened` }));
+  if (heldOnline) {
+    note.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      `${heldOnline} file${heldOnline === 1 ? ' is' : 's are'} not really on this machine — `
+      + 'OneDrive is holding them online-only, and this copy has no internet to fetch them. '
+      + 'Nothing in them was read, so nothing in them can appear in a result.' }));
+    note.append(el('div', { className: 'small', style: 'margin-top:6px;line-height:1.55', textContent:
+      'To fix it: in File Explorer, right-click the repository folder and choose '
+      + '"Always keep on this device", wait for OneDrive to finish, then read the repository again.' }));
+  }
+  if (tooLong) {
+    note.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      `${tooLong} file${tooLong === 1 ? ' has a path that is' : 's have paths that are'} `
+      + 'too long for Windows to open on this machine. Nothing in them was read.' }));
+    note.append(el('div', { className: 'small', style: 'margin-top:6px;line-height:1.55', textContent:
+      'To fix it: move the repository nearer the top of the drive — C:\\repo rather than a '
+      + 'deep folder inside Documents — then read it again.' }));
+  }
+  return note;
+}
+
 /* The honest half of the report: what Ripple could NOT account for. Styled to
    stand out, never to shrink — a clean finding list is only worth what was read. */
 function renderGaps(box, sc) {
+  if (sc.heldOnline?.length || sc.pathTooLong?.length) {
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px;border-color:var(--amberln)' });
+    card.append(neverOpenedNote(sc.heldOnline?.length || 0, sc.pathTooLong?.length || 0));
+    const names = [...(sc.heldOnline || []), ...(sc.pathTooLong || [])];
+    const chips = el('div', { className: 'chips', style: 'margin-top:12px' });
+    names.slice(0, 200).forEach(f => chips.append(el('span', { className: 'chip mono', textContent: f })));
+    card.append(chips);
+    if (names.length > 200) {
+      card.append(el('div', { className: 'small muted', style: 'margin-top:8px',
+        textContent: `and ${names.length - 200} more, not listed here to keep this page readable.` }));
+    }
+    box.append(card);
+  }
   if (sc.unreadable?.length) {
     const card = el('div', { className: 'card clip', style: 'margin-top:20px;border-color:var(--amberln)' });
     card.append(el('div', { className: 'chead', style: 'background:var(--amberbg);border-bottom-color:var(--amberln)' },
@@ -1353,6 +1458,9 @@ function settingsView(root) {
   left.append(el('span', { className: 'lbl', textContent: 'Repository' }));
   [['Folder', h.repo.path], ['Label', h.repo.label], ['Files indexed', String(h.repo.files)],
    ['Statements understood', String(h.repo.statements)], ['Files unreadable', String(h.repo.unreadable)],
+   ...(((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0))
+     ? [['Files never opened', String((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0))]]
+     : []),
    ['SQL dialect', h.sqlDialect], ['Renames followed', `${h.maxHops} hops`],
    ['Tables you publish', h.production || 'not set']].forEach(([k, v]) =>
     left.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },

@@ -61,6 +61,11 @@ class Usage:
     column: str            # the source column this usage refers to
     alias: str | None      # the name it is published as, when projected
     detail: str = ""       # e.g. the literal it is compared against
+    # Whether the statement actually said which table this column came from.
+    # In a warehouse where the same three key columns are in nearly every table,
+    # most joins have the name on both sides, and "cm13" on its own does not say
+    # whose. False means the usage is real and the table is a guess.
+    certain: bool = True
 
     @property
     def label(self) -> str:
@@ -390,6 +395,52 @@ def _one_entry_per_file(problems: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
+# ── which table a column came from ─────────────────────────────────────────
+# In this warehouse cm13, cm11 and pub_guid are columns in nearly every table,
+# so nearly every join has the same name on both sides. Matching on the name
+# alone meant a filter on the OTHER table's cm13 was reported as a usage of the
+# one being changed -- a finding about the wrong table, in a repository where
+# that is the ordinary case rather than an edge one.
+#
+# The statement usually says which is which, and when it does that is a fact
+# about the SQL rather than a guess: "a.cm13" belongs to whatever "a" is. Where
+# it does not say, nothing is thrown away -- the usage is kept and marked.
+
+
+def _sources_of(stmt: Statement) -> dict[str, str]:
+    """Every alias and table name this statement reads, pointing at its table."""
+    out: dict[str, str] = {}
+    if stmt.expr is None:
+        return out
+    for t in stmt.expr.find_all(exp.Table):
+        if not t.name:
+            continue
+        out.setdefault(t.name.upper(), t.name)
+        alias = t.alias
+        if alias:
+            out[alias.upper()] = t.name
+    return out
+
+
+def _belongs_to(col: exp.Column, stmt: Statement, table: str,
+                sources: dict[str, str], ctes: set[str]) -> str:
+    """'yes', 'no' or 'unknown' -- is this column reference `table`'s?"""
+    qualifier = col.table
+    if not qualifier:
+        # Unqualified. If the statement only reads one table it can only have
+        # come from there. If it reads several, the SQL has not said.
+        return "yes" if len(stmt.sources) <= 1 else "unknown"
+    resolved = sources.get(qualifier.upper())
+    if resolved is None:
+        return "unknown"                 # an alias from somewhere we cannot see
+    if resolved.upper() in ctes:
+        # It came out of a WITH block, which was itself built from something.
+        # That is exactly the chain being followed, so it is not a reason to
+        # rule the usage out.
+        return "unknown"
+    return "yes" if resolved.upper() == table.upper() else "no"
+
+
 # ── working out how a column is used ───────────────────────────────────────
 def _cols_named(node: exp.Expression | None, name: str) -> list[exp.Column]:
     if node is None:
@@ -410,56 +461,132 @@ def _literal_beside(node: exp.Expression, col: exp.Column) -> str:
     return ""
 
 
-def output_name(stmt: Statement, column: str) -> str:
-    """The name this column is published under once the statement is done.
+# How many names one column may be followed under out of a single statement.
+# Real SQL publishes a column under one name, occasionally two or three -- the
+# value itself and a cleaned-up copy of it. The cap is here so that a generated
+# statement with hundreds of derived columns cannot turn one scan into a search
+# of the whole warehouse; it is set far above anything hand-written.
+MAX_OUTPUT_NAMES = 6
+
+
+def output_names(stmt: Statement, column: str, limit: int = MAX_OUTPUT_NAMES) -> list[str]:
+    """Every name this column is published under once the statement is done.
 
     Renames often happen inside a subquery -- ``c.last_upd AS lut_ts`` buried in
     a ranking, then simply carried out by the enclosing SELECT. Resolving from
     the innermost query outwards is what keeps the chain joined up; without it
     the trail goes cold at exactly the statements that matter most.
+
+    A column also leaves under more than one name more often than it looks::
+
+        SELECT CAST(cm13 AS STRING) AS cm13_str,
+               cm13
+        FROM customer_demographics
+
+    Following only the first of those was a silent, expensive mistake. The next
+    table along reads ``cm13``, not ``cm13_str``, so the chain stopped one step
+    short -- and a change that really does reach a published table was reported
+    as no production impact, which is the exact answer this tool exists to stop
+    anybody giving.
+
+    The name carried through unchanged is always kept first, so it survives the
+    cap: it is the one the rest of the warehouse is most likely to be using.
     """
     if stmt.expr is None:
-        return column
-    name = column
+        return [column]
+    names = [column]
     selects = list(stmt.expr.find_all(exp.Select))  # outermost first
     for sel in reversed(selects):                   # so walk inner -> outer
         if any(isinstance(e, exp.Star) for e in sel.expressions):
-            continue  # SELECT * carries the name through untouched
-        for e in sel.expressions:
-            if isinstance(e, exp.Alias):
-                if any(c.name.upper() == name.upper() for c in e.find_all(exp.Column)):
-                    name = e.alias
-                    break
-            elif isinstance(e, exp.Column) and e.name.upper() == name.upper():
-                name = e.name
-                break
-    return name
+            continue  # SELECT * carries every name through untouched
+        direct: list[str] = []
+        derived: list[str] = []
+        for name in names:
+            for e in sel.expressions:
+                if isinstance(e, exp.Alias):
+                    inner = e.this
+                    if isinstance(inner, exp.Column) and inner.name.upper() == name.upper():
+                        direct.append(e.alias)      # cm13 AS customer_key
+                    elif any(c.name.upper() == name.upper() for c in e.find_all(exp.Column)):
+                        derived.append(e.alias)     # CAST(cm13 AS STRING) AS cm13_str
+                elif isinstance(e, exp.Column) and e.name.upper() == name.upper():
+                    direct.append(e.name)           # cm13, or c.cm13
+        found = _dedupe(direct + derived)
+        # Not projected at this level at all. That is normal -- the column may
+        # only be in a WHERE or a JOIN here -- so the name it had carries on
+        # rather than the trail being dropped.
+        names = found[:limit] if found else names
+    return names
 
 
-def usages_of(stmt: Statement, column: str) -> list[Usage]:
-    """Every way `column` is used by this statement, across all its subqueries."""
+def _dedupe(names: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for n in names:
+        key = n.upper()
+        if key not in seen:
+            seen.add(key)
+            out.append(n)
+    return out
+
+
+def output_name(stmt: Statement, column: str) -> str:
+    """The one name to show on screen for this column. See output_names."""
+    return output_names(stmt, column)[0]
+
+
+def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
+    """Every way `column` is used by this statement, across all its subqueries.
+
+    ``table`` is the table the column is being traced from. Given it, a column
+    the statement plainly attributes to some other table is not counted -- which
+    matters enormously in a warehouse where the same three key columns are in
+    nearly every table and so on both sides of nearly every join. Without a
+    table this behaves as it always did and counts every match.
+    """
     if stmt.expr is None:
         return []
     found: list[Usage] = []
     alias_for_column = output_name(stmt, column)
+    sources = _sources_of(stmt) if table else {}
+    ctes = _cte_names(stmt.expr) if table else set()
+
+    def owned(node: exp.Expression | None) -> tuple[list[exp.Column], bool]:
+        """This table's references to the column, and whether the SQL said so."""
+        cols = _cols_named(node, column)
+        if not table or not cols:
+            return cols, True
+        keep: list[exp.Column] = []
+        certain = True
+        for c in cols:
+            verdict = _belongs_to(c, stmt, table, sources, ctes)
+            if verdict == "no":
+                continue                 # plainly another table's column
+            if verdict == "unknown":
+                certain = False          # kept, and marked rather than asserted
+            keep.append(c)
+        return keep, certain
 
     # A DELETE or an UPDATE has a WHERE clause and no SELECT at all. Requiring a
     # SELECT made both invisible, so "DELETE FROM stage WHERE market_code = 'US'"
     # -- which stops working the day market_code goes, and silently stops pruning
     # the table -- was reported as no usage whatsoever.
     if isinstance(stmt.expr, (exp.Delete, exp.Update)):
-        for c in _cols_named(stmt.expr.args.get("where"), column):
+        cols, sure = owned(stmt.expr.args.get("where"))
+        for c in cols:
             found.append(Usage(kind="filter", column=column, alias=alias_for_column,
-                               detail=_literal_beside(stmt.expr, c)))
+                               detail=_literal_beside(stmt.expr, c), certain=sure))
         if isinstance(stmt.expr, exp.Update):
             for e in stmt.expr.args.get("expressions") or []:
-                if _cols_named(e, column):
+                cols, sure = owned(e)
+                if cols:
                     found.append(Usage(kind="transform", column=column,
-                                       alias=alias_for_column, detail="SET"))
+                                       alias=alias_for_column, detail="SET", certain=sure))
         if not found:
-            for c in _cols_named(stmt.expr, column):
-                found.append(Usage(kind="select", column=column, alias=alias_for_column))
-                break
+            cols, sure = owned(stmt.expr)
+            if cols:
+                found.append(Usage(kind="select", column=column, alias=alias_for_column,
+                                   certain=sure))
 
     if stmt.select is None:
         return _best_of(found)
@@ -467,47 +594,57 @@ def usages_of(stmt: Statement, column: str) -> list[Usage]:
     for sel in stmt.expr.find_all(exp.Select):
         # 1. the select list
         for e in sel.expressions:
-            if not _cols_named(e, column):
+            cols, sure = owned(e)
+            if not cols:
                 continue
             inner = e.this if isinstance(e, exp.Alias) else e
             if isinstance(inner, exp.Column):
-                found.append(Usage(kind="select", column=column, alias=alias_for_column))
+                found.append(Usage(kind="select", column=column, alias=alias_for_column,
+                                   certain=sure))
             else:
                 fn = inner.__class__.__name__.upper() if inner is not None else ""
                 found.append(
-                    Usage(kind="transform", column=column, alias=alias_for_column, detail=fn)
+                    Usage(kind="transform", column=column, alias=alias_for_column,
+                          detail=fn, certain=sure)
                 )
 
         # 2. WHERE / HAVING
         for clause_key in ("where", "having"):
             clause = sel.args.get(clause_key)
-            for c in _cols_named(clause, column):
+            cols, sure = owned(clause)
+            for c in cols:
                 found.append(
                     Usage(kind="filter", column=column, alias=alias_for_column,
-                          detail=_literal_beside(clause, c))
+                          detail=_literal_beside(clause, c), certain=sure)
                 )
 
         # 3. JOIN ... ON
         for j in sel.args.get("joins") or []:
-            on = j.args.get("on")
-            if _cols_named(on, column):
-                found.append(Usage(kind="join_key", column=column, alias=alias_for_column))
+            cols, sure = owned(j.args.get("on"))
+            if cols:
+                found.append(Usage(kind="join_key", column=column, alias=alias_for_column,
+                                   certain=sure))
 
         # 4. GROUP BY
-        if _cols_named(sel.args.get("group"), column):
-            found.append(Usage(kind="aggregation", column=column, alias=alias_for_column))
+        cols, sure = owned(sel.args.get("group"))
+        if cols:
+            found.append(Usage(kind="aggregation", column=column, alias=alias_for_column,
+                               certain=sure))
 
     # 5. window ORDER BY -- the ranking case, where removal is silent and awful
     for w in stmt.expr.find_all(exp.Window):
-        if _cols_named(w.args.get("order"), column):
-            found.append(Usage(kind="ranking", column=column, alias=alias_for_column))
+        cols, sure = owned(w.args.get("order"))
+        if cols:
+            found.append(Usage(kind="ranking", column=column, alias=alias_for_column,
+                               certain=sure))
 
     # 6. aggregates that pick which row survives
     for agg in list(stmt.expr.find_all(exp.Max)) + list(stmt.expr.find_all(exp.Min)):
-        if _cols_named(agg, column):
+        cols, sure = owned(agg)
+        if cols:
             found.append(
                 Usage(kind="dedup_key", column=column, alias=alias_for_column,
-                      detail=agg.__class__.__name__.upper())
+                      detail=agg.__class__.__name__.upper(), certain=sure)
             )
 
     return _best_of(found)
@@ -517,7 +654,13 @@ def _best_of(found: list[Usage]) -> list[Usage]:
     """The most informative reading of each kind, most consequential first."""
     seen: dict[str, Usage] = {}
     for u in found:
-        if u.kind not in seen or (u.detail and not seen[u.kind].detail):
+        if u.kind not in seen:
+            seen[u.kind] = u
+        # One the SQL was explicit about beats one it was not, and after that
+        # the one carrying a detail beats the one that does not.
+        elif u.certain and not seen[u.kind].certain:
+            seen[u.kind] = u
+        elif u.certain == seen[u.kind].certain and u.detail and not seen[u.kind].detail:
             seen[u.kind] = u
     return sorted(
         seen.values(),

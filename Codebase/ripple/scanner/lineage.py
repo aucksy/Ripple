@@ -15,7 +15,7 @@ from sqlglot import exp
 
 from ..config import Settings, settings as default_settings
 from .repo import RepoIndex
-from .sqlread import ParsedRepo, Usage, mode_of, locate, snippet, usages_of
+from .sqlread import ParsedRepo, Usage, mode_of, locate, output_names, snippet, usages_of
 
 # What a given kind of change does to a given kind of usage.
 BREAKS = {
@@ -77,6 +77,11 @@ class Finding:
     lang: str
     lines: list[dict]
     hop: int
+    # Whether the statement said which table this column came from. False means
+    # the usage is real and on that line, but the same column name is in more
+    # than one table the statement reads and the SQL did not say whose it is.
+    # Shown, never dropped -- and never asserted either.
+    certain: bool = True
 
     def key(self) -> tuple:
         return (self.file, self.source_table, self.source_column, self.kind)
@@ -98,6 +103,12 @@ class ScanResult:
     findings: list[Finding] = field(default_factory=list)
     unreadable: list[dict] = field(default_factory=list)
     mentions_only: list[dict] = field(default_factory=list)
+    # Files that were never opened at all, which is a different and worse thing
+    # than a file that was read and not understood. A scan over a repository
+    # half of which was never opened produces a short finding list and a green
+    # tick, and that green tick is the only thing this tool sells.
+    held_online: list[str] = field(default_factory=list)
+    too_long: list[str] = field(default_factory=list)
     files_scanned: int = 0
     files_matched: int = 0
     risk: str = "none"
@@ -111,6 +122,8 @@ class ScanResult:
             "graphs": self.graphs,
             "unreadable": self.unreadable,
             "mentionsOnly": self.mentions_only,
+            "heldOnline": self.held_online,
+            "pathTooLong": self.too_long,
             "filesScanned": self.files_scanned,
             "filesMatched": self.files_matched,
             "risk": self.risk,
@@ -134,6 +147,7 @@ class ScanResult:
             "filesWithImpact": len({f.file for f in self.findings}),
             "breakingUsages": len([f for f in self.findings if f.breaking]),
             "couldNotRead": len(self.unreadable),
+            "neverOpened": len(self.held_online) + len(self.too_long),
         }
 
 
@@ -160,6 +174,8 @@ def trace(
     res = ScanResult()
     res.files_scanned = len(index.files)
     res.unreadable = list(parsed.unreadable)
+    res.held_online = list(index.held_online)
+    res.too_long = list(index.too_long)
     breaks = BREAKS.get(change_type, BREAKS["unknown"])
 
     all_names: list[str] = []
@@ -168,6 +184,8 @@ def trace(
         all_names.extend(u.get("attrs") or [])
     matched_files = {m.file for m in index.search(all_names)}
     res.files_matched = len(matched_files)
+    attr_names = [a for u in upstream for a in (u.get("attrs") or [])]
+    shared, table_count = _tables_carrying(parsed, attr_names)
 
     graphs: list[dict] = []
     findings_by_key: dict[tuple, Finding] = {}
@@ -195,7 +213,7 @@ def trace(
                 recorded = False
 
                 for stmt in parsed.reading(cur_table):
-                    us = usages_of(stmt, cur_col)
+                    us = usages_of(stmt, cur_col, cur_table)
                     if not us:
                         continue
                     primary = us[0]
@@ -229,6 +247,7 @@ def trace(
                         lang=src.lang,
                         lines=snippet(src, hit, note),
                         hop=hop,
+                        certain=primary.certain,
                     )
                     findings_by_key.setdefault(f.key(), f)
                     f = findings_by_key[f.key()]
@@ -244,6 +263,12 @@ def trace(
                         "kind": _kind_of_node(tgt, cfg),
                         "alias": primary.alias or cur_col,
                     }
+                    # A column can leave a statement under more than one name --
+                    # reshaped into one column and passed through unchanged as
+                    # another, in the same SELECT. Following only one of them
+                    # stopped the chain one table short of the published table
+                    # that reads the other, and reported no production impact.
+                    onwards = output_names(stmt, cur_col)
                     if cfg.is_production_table(tgt):
                         node["prod"] = True
                         branch = path + [node]
@@ -255,11 +280,11 @@ def trace(
                         # exactly how a change spreads, and stopping at the first
                         # one under-counts the number this whole tool is judged
                         # on -- while showing a shorter chain than the real one.
-                        walk(tgt, primary.alias or cur_col, hop + 1, path + [node],
-                             new_chain, seen)
+                        for onward in onwards:
+                            walk(tgt, onward, hop + 1, path + [node], new_chain, seen)
                         continue
-                    if walk(tgt, primary.alias or cur_col, hop + 1, path + [node],
-                            new_chain, seen):
+                    if any(walk(tgt, onward, hop + 1, path + [node], new_chain, seen)
+                           for onward in onwards):
                         recorded = True
                     else:
                         # Nothing further is built from this table, so the trail
@@ -297,6 +322,15 @@ def trace(
                     "mentionedIn": len({m.file for m in index.search([attr])}),
                     "reachesProduction": bool(branches),
                     "endsAt": sorted({b[-1]["name"] for b in end_branches}),
+                    # How widely this column name is used as a name. A scan for
+                    # a name half the warehouse shares is a different kind of
+                    # answer from a scan for a name only one table has, and the
+                    # screen has no way to say so without these two numbers.
+                    "nameInTables": shared.get(attr.upper(), 0),
+                    "tablesRead": table_count,
+                    # Findings on lines where the SQL did not say which table
+                    # the column came from. Real usages; the table is inferred.
+                    "uncertain": len([f for f in attr_findings if not f.certain]),
                 }
             )
 
@@ -448,6 +482,41 @@ def _collect(groups: dict[str, list[Finding]], table: str, chain: list[Finding])
             bucket.append(f)
 
 
+def _tables_carrying(parsed: ParsedRepo, names: list[str]) -> tuple[dict[str, int], int]:
+    """How many tables have a column of each of these names, and how many tables
+    there are altogether.
+
+    In this warehouse cm13, cm11 and pub_guid are columns in nearly every table,
+    and market_code is in a handful. Those two scans look identical on screen and
+    are not remotely the same thing: one of them is following a name that half
+    the repository happens to share. Counting it is what lets the screen say so
+    instead of leaving somebody to work it out from the length of the list.
+    """
+    wanted = {n.upper() for n in names if n}
+    carrying: dict[str, set[str]] = {n: set() for n in wanted}
+    all_tables: set[str] = set()
+    for stmt in parsed.statements:
+        if not stmt.target:
+            continue
+        target = stmt.target.upper()
+        all_tables.add(target)
+        columns: list[str] = []
+        schema = stmt.expr.this if isinstance(stmt.expr, exp.Create) else None
+        if isinstance(schema, exp.Schema):
+            columns = [d.this.name for d in schema.expressions if isinstance(d, exp.ColumnDef)]
+        elif stmt.select is not None:
+            for e in stmt.select.expressions:
+                if isinstance(e, exp.Alias):
+                    columns.append(e.alias)
+                elif isinstance(e, exp.Column):
+                    columns.append(e.name)
+        for c in columns:
+            key = (c or "").upper()
+            if key in carrying:
+                carrying[key].add(target)
+    return {k: len(v) for k, v in carrying.items()}, len(all_tables)
+
+
 def _finding_row(f: Finding) -> dict:
     return {
         "inter": f.target_table or f.source_table,
@@ -462,6 +531,7 @@ def _finding_row(f: Finding) -> dict:
         "file": f.file,
         "lang": f.lang,
         "lines": f.lines,
+        "certain": f.certain,
     }
 
 
