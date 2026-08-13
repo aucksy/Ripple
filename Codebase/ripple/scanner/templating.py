@@ -267,17 +267,25 @@ def _case_depth_after(code: str, depth: int) -> int:
 
 
 def unwrap_blocks(text: str) -> str:
-    """The same SQL with scripting keywords replaced by empty statements."""
+    """The same SQL with scripting keywords replaced by empty statements.
+
+    Returns the text unchanged when there is no scripting in it, so callers can
+    hand everything to this rather than asking ``has_blocks`` first. Asking
+    first meant walking every line of every file twice, which on a repository of
+    a few thousand files is minutes rather than seconds.
+    """
     lines = text.splitlines()
     state = {"quote": "", "comment": False}
     out: list[str] = []
     depth = 0          # CASE expressions currently open
     skip_until = -1    # index of the last line of a multi-line thing being dropped
+    changed = False
 
     for n, line in enumerate(lines):
         code = _code_only(line, state)
         if n <= skip_until:
             out.append(";")
+            changed = True
             continue
 
         # A RAISE, or a procedure signature: neither is readable, both can run
@@ -286,6 +294,7 @@ def unwrap_blocks(text: str) -> str:
             skip_until = _end_of_run(lines, n, state.copy(),
                                      signature=bool(_PROCEDURE.match(code)))
             out.append(";")
+            changed = True
             continue
 
         if _LOOP_HEADER.match(code):
@@ -295,21 +304,27 @@ def unwrap_blocks(text: str) -> str:
             # no longer has it.
             loop = _LOOP_HEADER.match(line) or _LOOP_HEADER.match(code)
             out.append("SELECT * FROM " + loop.group(1) + ";")
+            changed = True
             continue
         if _LOOP_START.match(code) and not _LOOP_END.search(code):
             body, skip_until = _gather_loop(lines, n, state.copy())
             out.append(body)
+            changed = True
             continue
         if _ALWAYS_SCRIPTING.match(code) or _LOOP_PLAIN.match(code):
             out.append(";")
+            changed = True
             continue
         if _SCRIPTING_UNLESS_CASE.match(code) and depth == 0:
             out.append(";")
+            changed = True
             continue
 
         out.append(line)
         depth = _case_depth_after(code, depth)
 
+    if not changed:
+        return text
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 

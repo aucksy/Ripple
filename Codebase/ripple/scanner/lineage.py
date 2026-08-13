@@ -168,8 +168,16 @@ def trace(
     upstream: list[dict],
     change_type: str = "unknown",
     cfg: Settings | None = None,
+    on_progress=None,
 ) -> ScanResult:
-    """upstream is [{"table": "CUSTOMER_DEMOGRAPHICS", "attrs": ["MARKET_CODE"]}]."""
+    """upstream is [{"table": "CUSTOMER_DEMOGRAPHICS", "attrs": ["MARKET_CODE"]}].
+
+    ``on_progress(done, total, label)`` is called as the chain is followed. It
+    is deliberately given no total: how many statements a scan will look at
+    depends on what it finds as it goes, and a fraction of a number nobody knows
+    is a made-up fraction. The count of what has actually been looked at is a
+    real thing to show.
+    """
     cfg = cfg or default_settings
     res = ScanResult()
     res.files_scanned = len(index.files)
@@ -189,6 +197,7 @@ def trace(
 
     graphs: list[dict] = []
     findings_by_key: dict[tuple, Finding] = {}
+    looked = [0]                       # statements examined, for the progress line
     # production table -> ordered findings that lead to it
     prod_groups: dict[str, list[Finding]] = {}
     # the same, for chains that end at a table nothing further is built from
@@ -213,6 +222,10 @@ def trace(
                 recorded = False
 
                 for stmt in parsed.reading(cur_table):
+                    looked[0] += 1
+                    if on_progress is not None and looked[0] % 200 == 0:
+                        on_progress(looked[0], 0,
+                                    f"Following {cur_col} — {len(findings_by_key)} usages so far")
                     us = usages_of(stmt, cur_col, cur_table)
                     if not us:
                         continue

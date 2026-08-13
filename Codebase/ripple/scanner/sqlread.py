@@ -14,7 +14,14 @@ import sqlglot
 from sqlglot import exp
 
 from ..config import Settings, settings as default_settings
-from .repo import RepoIndex, SourceFile, statements_for, written_tables
+from .repo import (
+    RepoIndex,
+    SourceFile,
+    looks_like_unread_sql,
+    sql_file_refs,
+    statements_for,
+    written_tables,
+)
 from .templating import (
     describe as describe_templating,
     fill_placeholders,
@@ -82,9 +89,18 @@ class Statement:
     sources: set[str]
     select: exp.Select | None
     expr: exp.Expression | None
+    # Worked out once and kept. One scan asks the same statement about the same
+    # column many times over, and on a 600-line statement each answer means
+    # walking the whole expression tree again. Measured on a repository the size
+    # of his, this was most of the time a scan took.
+    _names: dict = field(default_factory=dict, repr=False, compare=False)
+    _projected: list | None = field(default=None, repr=False, compare=False)
+    _sources_upper: set | None = field(default=None, repr=False, compare=False)
 
     def reads_from(self, table: str) -> bool:
-        return table.upper() in {s.upper() for s in self.sources}
+        if self._sources_upper is None:
+            self._sources_upper = {s.upper() for s in self.sources}
+        return table.upper() in self._sources_upper
 
 
 @dataclass
@@ -98,9 +114,28 @@ class ParsedRepo:
     # entirely on what is being scanned for. A loop over a table list is
     # nothing at all -- until the attribute you are chasing is named inside it.
     opaque: dict[str, list[dict]] = field(default_factory=dict)
+    # Programs that run SQL kept in a separate .sql file rather than holding it
+    # as text. Two folders of his pipeline are written this way. Where the .sql
+    # file is in the repository this is nothing to worry about -- it was read on
+    # its own account -- but the program is not empty either, and saying so is
+    # the difference between "this DAG does nothing" and "this DAG runs that".
+    runs_sql_from: list[dict] = field(default_factory=list)
+    # Built on demand by reading(); see the note there.
+    _by_source: dict | None = field(default=None, repr=False, compare=False)
+    _indexed: int = field(default=-1, repr=False, compare=False)
 
     def reading(self, table: str) -> list[Statement]:
-        return [s for s in self.statements if s.reads_from(table)]
+        # Indexed rather than searched. A scan asks this once per table it
+        # visits, and on a repository of a few thousand statements walking the
+        # whole list each time was a large part of what a scan cost.
+        if self._by_source is None or self._indexed != len(self.statements):
+            by_source: dict[str, list[Statement]] = {}
+            for s in self.statements:
+                for src in s.sources:
+                    by_source.setdefault(src.upper(), []).append(s)
+            self._by_source = by_source
+            self._indexed = len(self.statements)
+        return self._by_source.get(table.upper(), [])
 
     def statements_in(self, path: str) -> list[Statement]:
         return [s for s in self.statements if s.file == path]
@@ -277,6 +312,21 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
     problems: list[dict] = []
     blocks = statements_for(f)
     if not blocks:
+        # No SQL came out. Before treating the file as empty, work out whether
+        # it is empty or whether the SQL is simply somewhere this reader cannot
+        # follow -- a DAG that runs a .sql file, or a statement glued together
+        # from short strings. Both used to be indistinguishable from a config
+        # file with nothing in it.
+        if looks_like_unread_sql(f, blocks):
+            problems.append({
+                "file": f.path,
+                "reason": "there is SQL written in this file that Ripple could not take out of it",
+                "line": 1,
+                "snippet": _first_code_line(f.text),
+                "hint": ("The statement is most likely built by adding short pieces of text "
+                         "together, so it never exists in the file as one thing to read. "
+                         "Nothing in it has been followed - open it and check by hand."),
+            })
         return out, problems, []
 
     # For Spark/Scala jobs the destination is in the program, not the SQL.
@@ -301,7 +351,10 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
         # into the parser only. Everything shown on screen still comes from the
         # file exactly as it is written, on the line it is written on.
         text = fill_placeholders(sql_text) if has_placeholders(sql_text) else sql_text
-        text = unwrap_blocks(text) if has_blocks(text) else text
+        # Handed straight over rather than asked about first: unwrap_blocks
+        # gives the text back unchanged when there is no scripting in it, and
+        # asking first meant walking every line of every file twice.
+        text = unwrap_blocks(text)
         parsed, bad = _parse_text(text, dialect, offset)
         failures.extend(bad)
         for stmt, line in parsed:
@@ -361,11 +414,17 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
     return out, problems, opaque
 
 
-def parse_repo(index: RepoIndex, cfg: Settings | None = None) -> ParsedRepo:
+def parse_repo(index: RepoIndex, cfg: Settings | None = None, on_progress=None) -> ParsedRepo:
+    """Read every file as SQL. ``on_progress(done, total, label)`` is called as
+    it goes: on a repository of a few thousand files this is minutes of work,
+    and it is by far the slowest thing Ripple does."""
     cfg = cfg or default_settings
     pr = ParsedRepo()
     problems: list[dict] = list(index.skipped)
-    for f in index.files:
+    total = len(index.files)
+    for done, f in enumerate(index.files, start=1):
+        if on_progress is not None and (done % 10 == 0 or done == total):
+            on_progress(done, total, "Understanding the SQL")
         stmts, file_problems, opaque = parse_file(f, cfg)
         if stmts:
             pr.statements.extend(stmts)
@@ -373,8 +432,44 @@ def parse_repo(index: RepoIndex, cfg: Settings | None = None) -> ParsedRepo:
         if opaque:
             pr.opaque[f.path] = opaque
         problems.extend(file_problems)
+    problems.extend(_follow_sql_file_refs(index, pr))
     pr.unreadable = _one_entry_per_file(problems)
     return pr
+
+
+def _follow_sql_file_refs(index: RepoIndex, pr: ParsedRepo) -> list[dict]:
+    """Match every program that names a .sql file to the file it names.
+
+    Found is the good case and is only recorded. Not found is a real hole: the
+    program runs a query that is not in this repository, so nothing in it has
+    been read and no scan can cover it.
+    """
+    by_path = {f.path.lower(): f.path for f in index.files}
+    by_name: dict[str, str] = {}
+    for f in index.files:
+        if f.path.lower().endswith(".sql"):
+            by_name.setdefault(f.path.rsplit("/", 1)[-1].lower(), f.path)
+
+    missing: list[dict] = []
+    for f in index.files:
+        for ref in sql_file_refs(f):
+            wanted = ref["ref"].replace("\\", "/").lstrip("./")
+            runs = by_path.get(wanted.lower()) or by_name.get(wanted.rsplit("/", 1)[-1].lower(), "")
+            pr.runs_sql_from.append(
+                {"file": f.path, "ref": ref["ref"], "line": ref["line"], "runs": runs}
+            )
+            if runs:
+                continue
+            missing.append({
+                "file": f.path,
+                "reason": f"runs the SQL in {ref['ref']}, which is not in this repository",
+                "line": ref["line"],
+                "snippet": ref["ref"],
+                "hint": ("Ripple has never read that query, so nothing it does is covered by "
+                         "this scan. If the file lives in another repository, scan that one "
+                         "too; if it is generated at run time, it has to be checked by hand."),
+            })
+    return missing
 
 
 def _one_entry_per_file(problems: list[dict]) -> list[dict]:
@@ -494,29 +589,59 @@ def output_names(stmt: Statement, column: str, limit: int = MAX_OUTPUT_NAMES) ->
     """
     if stmt.expr is None:
         return [column]
+    cached = stmt._names.get(column.upper())
+    if cached is not None:
+        return cached
     names = [column]
-    selects = list(stmt.expr.find_all(exp.Select))  # outermost first
-    for sel in reversed(selects):                   # so walk inner -> outer
-        if any(isinstance(e, exp.Star) for e in sel.expressions):
-            continue  # SELECT * carries every name through untouched
+    for direct_map, derived_map in _projections(stmt):
+        if direct_map is None:                      # SELECT * -- names pass through
+            continue
         direct: list[str] = []
         derived: list[str] = []
         for name in names:
-            for e in sel.expressions:
-                if isinstance(e, exp.Alias):
-                    inner = e.this
-                    if isinstance(inner, exp.Column) and inner.name.upper() == name.upper():
-                        direct.append(e.alias)      # cm13 AS customer_key
-                    elif any(c.name.upper() == name.upper() for c in e.find_all(exp.Column)):
-                        derived.append(e.alias)     # CAST(cm13 AS STRING) AS cm13_str
-                elif isinstance(e, exp.Column) and e.name.upper() == name.upper():
-                    direct.append(e.name)           # cm13, or c.cm13
+            direct.extend(direct_map.get(name.upper(), ()))
+        for name in names:
+            derived.extend(derived_map.get(name.upper(), ()))
         found = _dedupe(direct + derived)
         # Not projected at this level at all. That is normal -- the column may
         # only be in a WHERE or a JOIN here -- so the name it had carries on
         # rather than the trail being dropped.
         names = found[:limit] if found else names
+    stmt._names[column.upper()] = names
     return names
+
+
+def _projections(stmt: Statement) -> list[tuple[dict | None, dict]]:
+    """For each SELECT, inner to outer: which names each source column leaves as.
+
+    Built in one pass over the statement instead of once per column asked about.
+    ``direct`` is the column carried through or plainly renamed; ``derived`` is
+    the column reshaped into something else. A ``None`` direct map means the
+    SELECT is a ``SELECT *`` and every name passes through untouched.
+    """
+    if stmt._projected is not None:
+        return stmt._projected
+    out: list[tuple[dict | None, dict]] = []
+    selects = list(stmt.expr.find_all(exp.Select)) if stmt.expr is not None else []
+    for sel in reversed(selects):                   # innermost first
+        if any(isinstance(e, exp.Star) for e in sel.expressions):
+            out.append((None, {}))
+            continue
+        direct: dict[str, list[str]] = {}
+        derived: dict[str, list[str]] = {}
+        for e in sel.expressions:
+            if isinstance(e, exp.Alias):
+                inner = e.this
+                if isinstance(inner, exp.Column):
+                    direct.setdefault(inner.name.upper(), []).append(e.alias)
+                else:
+                    for c in e.find_all(exp.Column):
+                        derived.setdefault(c.name.upper(), []).append(e.alias)
+            elif isinstance(e, exp.Column):
+                direct.setdefault(e.name.upper(), []).append(e.name)
+        out.append((direct, derived))
+    stmt._projected = out
+    return out
 
 
 def _dedupe(names: list[str]) -> list[str]:

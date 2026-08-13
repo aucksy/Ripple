@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from . import folderpick, nonet, paths, prefs, synced
 
 # The shared engine. Importing this package has already put it on the path.
-from ripple import narrative, store                                # noqa: E402
+from ripple import narrative, progress, store                      # noqa: E402
 from ripple.catalog import Catalog, build_catalog                  # noqa: E402
 from ripple.config import settings                                 # noqa: E402
 from ripple.notification import extract_by_rules, read_pasted, read_upload  # noqa: E402
@@ -51,8 +51,10 @@ def repo_state() -> tuple[RepoIndex, ParsedRepo, Catalog]:
         if chosen in ("", "."):
             idx = RepoIndex(root=None)
         else:
-            idx = RepoIndex.build(settings.repo_path, settings)
-        parsed = parse_repo(idx, settings)
+            idx = RepoIndex.build(settings.repo_path, settings,
+                                  on_progress=progress.reader("reading"))
+        parsed = parse_repo(idx, settings, on_progress=progress.reader("parsing"))
+        progress.finish()
         _state.update({"index": idx, "parsed": parsed, "catalog": build_catalog(parsed)})
     return _state["index"], _state["parsed"], _state["catalog"]
 
@@ -112,6 +114,9 @@ def _health() -> dict:
             # online-only can never be fetched.
             "heldOnline": len(idx.held_online),
             "pathTooLong": len(idx.too_long),
+            # Programs that run SQL kept in a separate .sql file. Two folders of
+            # DAGs are written that way, and without this they read as empty.
+            "runsSqlFrom": len([r for r in parsed.runs_sql_from if r["runs"]]),
             "exists": folder["ok"],
             "kinds": [{"lang": k, "files": n}
                       for k, n in sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))],
@@ -176,6 +181,17 @@ class SettingsIn(BaseModel):
 @app.get("/api/health")
 def health() -> dict:
     return _health()
+
+
+@app.get("/api/progress")
+def progress_now() -> dict:
+    """What Ripple is doing this second, asked for by the screen while it waits.
+
+    This build is the one that meets a repository of a few thousand files on a
+    laptop, where reading it takes minutes. Every number is counted rather than
+    estimated, and where there is no total it says so rather than drawing a bar.
+    """
+    return progress.snapshot()
 
 
 @app.get("/api/catalog")
@@ -299,7 +315,11 @@ def scan(payload: ScanIn) -> dict:
     upstream = [{"table": u.table, "attrs": u.attrs} for u in payload.upstream]
     if not upstream:
         raise HTTPException(status_code=400, detail="No upstream tables were supplied.")
-    res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=settings)
+    try:
+        res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=settings,
+                    on_progress=progress.reader("scanning"))
+    finally:
+        progress.finish()
     out = res.to_dict()
     # No link template: the files are on this machine, and there is no address
     # to send anyone to. The screen offers no link rather than a broken one.

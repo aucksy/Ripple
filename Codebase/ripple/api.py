@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from dataclasses import replace
 
-from . import ai, narrative, store
+from . import ai, narrative, progress, store
 from .catalog import Catalog, build_catalog
 from .config import AI_MODELS, Settings, model_label, settings
 from .notification import Notification, extract_by_rules, read_pasted, read_upload
@@ -78,15 +78,18 @@ def _ai_facts() -> dict:
 
 
 def _install(idx: RepoIndex, source: str, conn: "ghub.Connection | None") -> None:
-    parsed = parse_repo(idx, settings)
+    parsed = parse_repo(idx, settings, on_progress=progress.reader("parsing"))
     _state.update({
         "index": idx, "parsed": parsed, "catalog": build_catalog(parsed),
         "source": source, "conn": conn,
     })
+    progress.finish()
 
 
 def _use_folder() -> None:
-    _install(RepoIndex.build(settings.repo_path, settings), "folder", None)
+    idx = RepoIndex.build(settings.repo_path, settings,
+                          on_progress=progress.reader("reading"))
+    _install(idx, "folder", None)
 
 
 def _use_github(repo: str, token: str, branch: str) -> None:
@@ -242,6 +245,9 @@ def health() -> dict:
             # sentence from "1,770 files read".
             "heldOnline": len(idx.held_online),
             "pathTooLong": len(idx.too_long),
+            # Programs that run SQL kept in a separate .sql file. Two folders of
+            # DAGs are written that way, and without this they read as empty.
+            "runsSqlFrom": len([r for r in parsed.runs_sql_from if r["runs"]]),
             "exists": True if on_github else settings.repo_path.exists(),
             "kinds": [
                 {"lang": k, "files": n}
@@ -257,6 +263,17 @@ def health() -> dict:
         "production": settings.production_rule(),
         "ai": _ai_facts(),
     }
+
+
+@app.get("/api/progress")
+def progress_now() -> dict:
+    """What Ripple is doing this second.
+
+    Asked for by the screen while it waits. Every number is counted rather than
+    estimated, and where there is genuinely no total it says so rather than
+    drawing a bar over a number nobody knows.
+    """
+    return progress.snapshot()
 
 
 @app.get("/api/catalog")
@@ -442,7 +459,11 @@ def scan(payload: ScanIn) -> dict:
     upstream = [{"table": u.table, "attrs": u.attrs} for u in payload.upstream]
     if not upstream:
         raise HTTPException(status_code=400, detail="No upstream tables were supplied.")
-    res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=settings)
+    try:
+        res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=settings,
+                    on_progress=progress.reader("scanning"))
+    finally:
+        progress.finish()
     out = res.to_dict()
     conn: ghub.Connection | None = _state["conn"]
     on_github = _state["source"] == "github" and conn is not None

@@ -578,12 +578,30 @@ function step3(root) {
     const chips = el('div', { className: 'chips', style: 'margin-top:12px' });
     h.repo.kinds.forEach(k => chips.append(el('span', { className: 'chip', textContent: `${k.lang} · ${k.files}` })));
     kinds.append(chips);
+    // A DAG that runs a query kept in a separate .sql file holds no SQL of its
+    // own, so it used to be indistinguishable from a config file with nothing
+    // in it. The query itself is read on its own account — this is the link
+    // between the two, said so that "Python · 240" is not read as 240 files
+    // Ripple learned nothing from.
+    if (h.repo.runsSqlFrom) {
+      kinds.append(el('div', { className: 'small muted', style: 'margin-top:14px;line-height:1.55',
+        textContent: `${h.repo.runsSqlFrom} of these run SQL that is kept in a separate .sql file `
+          + 'rather than written inside them. Those .sql files were read on their own account. '
+          + 'Any that name a file which is not in this repository are listed as gaps after a scan.' }));
+    }
     kinds.append(el('div', { className: 'small muted', style: 'margin-top:14px;line-height:1.55',
       textContent: 'Read-only access. Ripple never writes to your repository.' }));
   }
 
   const c = x(root, 'cat'); c.innerHTML = '';
+  // Until the answer arrives this card has a heading and nothing under it. On a
+  // repository of a few thousand files the read takes minutes, and for all of
+  // them that is an empty box sitting on the screen. It says what it is waiting
+  // for instead — and gets replaced, not added to, when the answer comes.
+  c.append(el('div', { className: 'small faint', style: 'margin-top:10px',
+    textContent: 'Counted once every file has been read.' }));
   api('/api/catalog').then(cat => {
+    c.innerHTML = '';
     c.append(el('div', { style: 'display:flex;gap:26px;margin-top:10px' },
       el('div', {}, el('div', { textContent: String(cat.tableCount), style: 'font-size:26px;font-weight:800;font-variant-numeric:tabular-nums' }),
         el('div', { className: 'small faint', textContent: 'tables found' })),
@@ -625,7 +643,13 @@ function step3(root) {
   x(root, 'next').onclick = () => runScan();
   x(root, 'next').disabled = S.busy;
   x(root, 'hint').textContent = S.busy
-    ? 'Reading every file. On a large repository this takes a few seconds — the counts above update when it finishes.'
+    // Measured on a repository the size of his: a couple of thousand files and
+    // statements six hundred lines long take minutes, not seconds. Saying
+    // "a few seconds" and then taking four minutes is how a working program
+    // gets reported as hung.
+    ? (progressText(S.progress)
+       || 'Reading every file. On a repository of a few thousand files this takes '
+          + 'a few minutes — the count appears as soon as the first files are read.')
     : repoOk
       ? `Scanning ${h.repo.label}.`
       : 'Nothing is indexed, so a scan would find nothing.';
@@ -1175,7 +1199,15 @@ function step5(root) {
     el('div', { className: 'ct', textContent: `${all.length} branch${all.length === 1 ? '' : 'es'} followed`
       + (g.branches.length ? ` · ${g.branches.length} to production` : '') })));
   const branches = el('div', { className: 'branches' });
-  all.forEach(br => {
+  // Measured on a repository the size of the one this was built for: following
+  // one of the key columns produces about 1,500 branches. Drawing all of them
+  // is a wall of boxes nobody can read, and a map nobody can read is the same
+  // as no map. So a readable number is drawn — the ones that reach a published
+  // table first, because those are the ones that matter — and the rest are
+  // COUNTED OUT LOUD rather than quietly left off. Nothing is lost: every
+  // branch here is already a finding in the list on the previous step.
+  const DRAWN = 40;
+  all.slice(0, DRAWN).forEach(br => {
     const line = el('div', { className: 'branch' });
     br.forEach((n, i) => {
       line.append(nodeEl(n));
@@ -1185,6 +1217,13 @@ function step5(root) {
   });
   row.append(src, branches);
   card.append(row);
+  if (all.length > DRAWN) {
+    card.append(el('div', { className: 'note info', style: 'margin-top:14px' },
+      el('b', { textContent: `${all.length - DRAWN} more branches are not drawn here. ` }),
+      `${all.length} were followed in total and every one of them is in the findings on the `
+      + 'previous step, grouped by published table. The ones drawn above are those that reach '
+      + 'a published table, longest first — drawing all of them makes a picture nobody can read.'));
+  }
   map.append(card);
   if (ends.length) {
     map.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
@@ -1590,10 +1629,45 @@ function goto(n) { S.step = n; S.maxStep = Math.max(S.maxStep, n); S.view = 'wiz
    far corner is not an answer -- numbers that change by themselves a while
    later read as a page that did something on its own. */
 function run(fn, what) {
-  S.busy = true; S.busyWhat = what || 'Working…'; render();
+  S.busy = true; S.busyWhat = what || 'Working…'; S.progress = null; render();
+  watchProgress();
   Promise.resolve(fn()).catch(e => {
     alert('Something went wrong: ' + e.message);
-  }).finally(() => { S.busy = false; S.busyWhat = ''; render(); });
+  }).finally(() => { S.busy = false; S.busyWhat = ''; S.progress = null; render(); });
+}
+
+/* Ask the running program what it is doing, twice a second, for as long as it
+   is doing something.
+
+   On a repository of a few thousand files, reading it takes minutes and a scan
+   takes about a minute. A spinner and a fixed sentence for that long is
+   indistinguishable from a program that has hung, and the usual answer to that
+   is a progress bar with a number nobody can check underneath it. This shows
+   only what the engine has actually counted: files really read, statements
+   really followed. Where there is no total — a chain looks at as many
+   statements as it turns out to need — it says the count and no fraction,
+   because a fraction would need a denominator nobody knows. */
+function watchProgress() {
+  if (S.progressTimer) return;
+  S.progressTimer = setInterval(async () => {
+    if (!S.busy) { clearInterval(S.progressTimer); S.progressTimer = null; S.progress = null; return; }
+    try {
+      const p = await api('/api/progress');
+      const was = progressText(S.progress);
+      S.progress = p.job ? p : null;
+      if (progressText(S.progress) !== was) render();
+    } catch { /* the request it belongs to will report the real failure */ }
+  }, 500);
+}
+
+function progressText(p) {
+  if (!p || !p.job) return '';
+  const label = p.label || ({ reading: 'Reading the files',
+                              parsing: 'Understanding the SQL',
+                              scanning: 'Following the column' })[p.job] || 'Working';
+  if (p.total > 0) return `${label} — ${p.done.toLocaleString()} of ${p.total.toLocaleString()}`;
+  if (p.done > 0) return `${label} — ${p.done.toLocaleString()} so far`;
+  return label;
 }
 
 function render() {
@@ -1601,8 +1675,9 @@ function render() {
   const view = $('#view'); view.innerHTML = '';
   $('#hRight').innerHTML = '';
   if (S.busy) {
+    // The counted line if there is one, the fixed sentence until there is.
     $('#hRight').append(el('span', { className: 'spin' }),
-      el('span', { className: 'small', textContent: S.busyWhat,
+      el('span', { className: 'small', textContent: progressText(S.progress) || S.busyWhat,
         style: 'margin-left:9px;font-weight:600;color:var(--blued)' }));
   }
 
