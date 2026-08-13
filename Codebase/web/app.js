@@ -994,7 +994,12 @@ function renderChecks(box, sc) {
     // produces a long list because the name is everywhere, the second because
     // something is badly wrong. Only said when the name really is widespread —
     // "this name is in 1 of 60 tables" is a fact nobody needs.
-    if (a.nameInTables > 1 && a.tablesRead) {
+    // Two conditions, and both matter. A big share says the name is common;
+    // a real count says the repository is big enough for that to mean anything.
+    // "3 of the 3 tables" is a fact about a folder with three files in it, and
+    // printing it there teaches somebody to skip the line in the repository
+    // where it is the whole point.
+    if (a.nameInTables >= 8 && a.tablesRead) {
       const share = a.nameInTables / a.tablesRead;
       if (share >= 0.25) {
         p.append(el('div', { className: 'small muted', style: 'margin:4px 0 0 4px;line-height:1.55',
