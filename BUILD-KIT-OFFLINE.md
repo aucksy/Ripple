@@ -1631,6 +1631,14 @@ Python's own downloader instead.)
 [PASTE THE CONTRACT CARD FIRST]
 
 Build web/index.html and web/styles.css. No framework, no CDN, no build step.
+
+BEFORE YOU PASTE THIS, READ THIS PARAGRAPH. This is the one phase where a
+description cannot give you back a design you already have. If you have the
+finished stylesheet -- 341 lines -- paste it into this window and tell the chat
+to use it exactly as written rather than composing its own. The screens then
+match the design instead of resembling it, and this window becomes ten minutes
+instead of an hour. Everything below is what to do when you do not have it: the
+colours are then exact and the layout is the chat's own work.
 The page is served by our own server at http://localhost:8000, and it asks
 that server for /static/styles.css and /static/app.js, so use absolute paths
 beginning /static/ and never a relative one.
@@ -1649,11 +1657,33 @@ holding the static skeleton for that step with data-x="..." hooks the script
 fills in. Keep the templates dumb: no text that changes, only the frame.
 
 STYLE
-A restrained corporate palette, defined as CSS variables at the top:
-navy #00175A, blue #006FCF, a light background #F2F5F9, white cards with a
-1px #DCE4EE border, 12px radius and a barely-there shadow. Status colours for
-red, amber, green and violet, each with a background, a border and a text
-tone. A monospace family for table and column names.
+The palette is not a matter of taste. It is the design, already settled, and
+it is taken from the prototype. Define exactly these CSS variables at the top
+and use them everywhere -- never a colour written inline:
+
+  --navy:#00175A; --blue:#006FCF; --blued:#005CAD; --pale:#E3F0FC;
+  --line:#DCE4EE; --line2:#C7D4E4; --line3:#E7EDF5; --hair:#F0F4F9;
+  --bg:#F2F5F9; --card:#fff; --tint:#FAFCFE;
+  --ink:#10243E; --body:#33445E; --mute:#5C6C84; --faint:#8595AB;
+  --chip:#EDF2F8; --chipink:#45566E;
+  --red:#B01C2E; --redbg:#FDE8E8; --redln:#F3C4C4;
+  --amber:#8A6100; --amberbg:#FFF4D9; --amberln:#EFDFAF;
+  --green:#006B40; --greenbg:#E4F5EC; --greenln:#BFE5CE;
+  --violet:#6D4B9E; --violetbg:#F0EAFA; --violetln:#D8C9EF;
+  --codebg:#FBFCFE; --codehead:#0B1F45; --codenum:#93A3B8;
+  --hit:#FFF7E1; --hitln:#F0DFAE; --hitbar:#E3A008; --hitpill:#FFF1CC;
+  --shadow:0 1px 2px rgba(16,36,62,.06);
+
+They are named for what they do, which is why there are four greys for lines:
+--line is a card border, --line2 an input border, --line3 a divider inside a
+card, --hair a row separator. The four ink tones run the same way, strongest
+first: --ink for headings, --body for paragraphs, --mute for card labels,
+--faint for field labels and hints.
+
+Cards are white with a 1px --line border, 12px radius and --shadow. Body text
+is 14px with line height 1.5. The sans family is 'Public Sans' falling back to
+Segoe UI and system-ui. The monospace family, used for every table and column
+name on screen, is 'IBM Plex Mono' falling back to Consolas.
 
 Components to define, because the script uses these class names:
   .card .pad .pad.lg .clip .chead      cards and their tinted header strip
