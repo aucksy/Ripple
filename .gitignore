@@ -3,6 +3,11 @@
 Ripple - Overview.pdf
 ripple-overview.html
 
+# Real code from work, kept here to test the reader against. Internal table and
+# dataset names, so it never goes near a public repository. Anything learned
+# from it belongs in the tests as neutral names and shapes, never verbatim.
+Docs/
+
 Codebase/.venv/
 Codebase/ripple.db
 **/__pycache__/

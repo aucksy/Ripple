@@ -8,7 +8,10 @@ actually has to defend.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+
+from sqlglot import exp
 
 from ..config import Settings, settings as default_settings
 from .repo import RepoIndex
@@ -319,13 +322,26 @@ def trace(
     res.other = [_finding_row(f) for f in res.findings if f.key() not in placed]
 
     # Honesty: anything the search matched but the reader could not turn into a
-    # finding is surfaced, never quietly dropped.
+    # finding is surfaced, never quietly dropped. Which of the three things it
+    # is matters enormously -- "the name is written down here and nothing reads
+    # it" is reassuring, and "the name is inside a call I cannot follow" is the
+    # opposite, and they used to be told apart by nothing at all.
     impacted_files = {f.file for f in res.findings}
-    unreadable_files = {u.get("file") for u in res.unreadable}
+    already = {u.get("file"): u for u in res.unreadable}
     for path in sorted(matched_files - impacted_files):
-        if path in unreadable_files:
+        hidden = _named_out_of_reach(index, parsed, path, all_names)
+        if hidden and path in already:
+            # Already known to be unreadable, but now there is something better
+            # to say about it: not just "this file was a problem" but "the name
+            # you are chasing is on line 212 of it".
+            entry = already[path]
+            entry["hint"] = (entry.get("hint", "") + " " + hidden["hint"]).strip()
+            entry.update({k: hidden[k] for k in ("reason", "line", "snippet")})
+        elif hidden:
+            res.unreadable.append(hidden)
+        elif path in already:
             continue
-        if path not in parsed.parsed_files:
+        elif path not in parsed.parsed_files:
             res.unreadable.append(
                 {
                     "file": path,
@@ -339,6 +355,83 @@ def trace(
 
     res.risk = _risk_of(res)
     return res
+
+
+def _named_out_of_reach(
+    index: RepoIndex, parsed: ParsedRepo, path: str, names: list[str]
+) -> dict | None:
+    """Is the name here in a place structural reading cannot follow?
+
+    Two shapes, both everywhere in real pipeline code, and both invisible to a
+    parser however good it is:
+
+    * The name is inside a statement the reader could take in but not make sense
+      of -- a procedure call, a loop, an EXECUTE IMMEDIATE, SQL assembled as
+      text and run later.
+    * The name is a quoted string rather than a column: an in-house helper like
+      ``get_tag('home_phone_no', 'customer_demographics')`` names the column and
+      the table as text, and no amount of parsing turns that back into lineage.
+
+    Either way the attribute really is referenced in this file. Filing it under
+    "mentions the name but carries it nowhere" reads as a reassurance, and it is
+    the one place a person genuinely has to go and look.
+    """
+    pattern = index._pattern(names)
+    src = index.get(path)
+
+    for record in parsed.opaque.get(path, []):
+        match = pattern.search(record.get("sql") or record.get("text") or "")
+        if match:
+            line, text = _line_naming(src, match.group(1))
+            return {
+                "file": path,
+                "reason": "the name is used in a statement Ripple cannot follow",
+                "line": line,
+                "snippet": text,
+                "hint": "A procedure call, a loop, or SQL built as text and run later. "
+                        "Ripple can see the name in it but not what it does with it, so "
+                        "this one has to be read by a person.",
+            }
+
+    for stmt in parsed.statements_in(path):
+        if stmt.expr is None:
+            continue
+        for literal in stmt.expr.find_all(exp.Literal):
+            if not literal.is_string:
+                continue
+            match = pattern.search(str(literal.this))
+            if not match:
+                continue
+            line, text = _line_naming(src, match.group(1))
+            return {
+                "file": path,
+                "reason": f'the name appears as text inside a call - "{match.group(1)}"',
+                "line": line,
+                "snippet": text,
+                "hint": "Written as a quoted string rather than used as a column, which is "
+                        "how in-house helpers take a column or table name. Ripple cannot "
+                        "follow what the helper does with it.",
+            }
+    return None
+
+
+def _line_naming(src, name: str) -> tuple[int, str]:
+    """The line of the real file where this name is written, and that line.
+
+    Quoted occurrences win: that is the one being reported, and it is the line
+    somebody has to open the file at.
+    """
+    if src is None:
+        return 1, ""
+    quoted = re.compile(r"['\"]" + re.escape(name) + r"['\"]", re.IGNORECASE)
+    plain = re.compile(r"\b" + re.escape(name) + r"\b", re.IGNORECASE)
+    fallback = None
+    for number, line in enumerate(src.lines, start=1):
+        if quoted.search(line):
+            return number, line.strip()[:140]
+        if fallback is None and plain.search(line):
+            fallback = (number, line.strip()[:140])
+    return fallback or (1, "")
 
 
 def _longest_only(branches: list[list[dict]]) -> list[list[dict]]:

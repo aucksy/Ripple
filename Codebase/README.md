@@ -239,15 +239,50 @@ did. `{{ ... }}`, `{% ... %}`, `{# ... #}`, `${ ... }` and Python's `{name}` are
 all handled, and dbt's `ref('orders')` resolves to `orders`, because that is
 what it means.
 
-Two more things changed with it:
+Three more things changed with it:
 
+* **`BEGIN` no longer eats the statement after it.** Real pipeline files are
+  wrapped in `DECLARE … BEGIN … END;`. `BEGIN` has no semicolon of its own, so a
+  parser that does not know the keyword takes the next statement as part of it
+  and hands back one blob it cannot read. Nothing errors, the file "parses", and
+  the *first real statement of every file* is gone. Scripting keywords — `BEGIN`,
+  `END`, `IF … THEN`, `ELSE`, `EXCEPTION WHEN … THEN`, `FOR … DO`, transaction
+  markers — are now dropped before parsing, and a loop keeps the query in its
+  header so the table it reads is still seen.
 * **One bad statement costs one statement.** A file is retried statement by
   statement, so a `GRANT`, a procedure call or one line in another dialect no
   longer takes the other thirteen statements down with it. The gap then reads
   *"1 of 14 statements in this file could not be read"*.
-* **The gap says where.** Every entry in "could not read" now carries the line
+* **The gap says where.** Every entry in "check by hand" now carries the line
   number and the line itself, so the file can be opened at the right place
   instead of hunted through.
+
+---
+
+## When the name is somewhere no parser can follow
+
+Some references genuinely cannot be traced, however good the parsing is:
+
+```sql
+SET tag = `proj`.ds.get_sde_tag('home_phone_no', 'customer_demographics');
+EXECUTE IMMEDIATE FORMAT("""INSERT INTO %s SELECT home_phone_no FROM %s""", a, b);
+CALL `proj`.ds.refresh('proj.ds.customer_demographics', NULL, out);
+```
+
+The column and the table are **quoted strings** handed to a helper, or SQL built
+as text and run later. Ripple cannot turn any of that back into lineage — and it
+used to file those files under *"mentions the name but carries it nowhere"*,
+which reads as a reassurance and is the exact opposite of the truth.
+
+They now go in the **check by hand** list, with the line and the line itself, and
+a sentence saying which of the two it is. A file that only mentions the name in a
+comment still goes in the quiet list, because a list that flags everything is
+ignored within a week.
+
+**`DELETE` and `UPDATE` are read too.** They build nothing, so they look
+uninteresting — but `DELETE FROM stage WHERE market_code = 'US'` stops working
+the day the column goes, the pruning silently stops, and the table fills up.
+Their `WHERE` clauses used to be invisible.
 
 ---
 
@@ -465,9 +500,15 @@ certain than it is.
 
 - **It reads one repository.** Lineage that crosses into another team's code is
   invisible to it. What you get is *your* exposure, not the whole blast radius.
-- **SQL built by gluing strings together cannot be followed.** Those files are
-  listed as unreadable, but they are a real hole.
-- **Stored procedure bodies are not parsed.**
+- **SQL built by gluing strings together cannot be followed**, and neither can a
+  column or table name handed to a helper as a quoted string. Both are listed
+  under *check by hand*, with the line — but they are a real hole, and the list
+  is only useful if somebody actually reads those lines.
+- **Stored procedure bodies are not parsed.** A `CALL` that passes a table name
+  as a string shows up under *check by hand* when that table is being scanned
+  for, and is invisible otherwise.
+- **A loop is not followed**, only the query in its header. What the body does
+  once per row is beyond this.
 - **`SELECT *` hides which columns flow onward.**
 - **A job writing to several tables** cannot be attributed reliably, so lineage
   stops there — and says so.
