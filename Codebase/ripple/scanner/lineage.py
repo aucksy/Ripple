@@ -375,6 +375,29 @@ def trace(
     # opposite, and they used to be told apart by nothing at all.
     impacted_files = {f.file for f in res.findings}
     already = {u.get("file"): u for u in res.unreadable}
+
+    # A file that produced findings used to be skipped entirely here, on the
+    # reasonable-sounding grounds that it is already covered. It is not.
+    #
+    # Real code in this pipeline reads:
+    #
+    #     substr(decrypt_sde(get_sde_tag('cm13', 'triumph_demographics'), cm13), 1, 11)
+    #
+    # Both cm13s on that line break when cm13 is renamed. Ripple reports the
+    # second one, because it is a column. The first is a quoted string, so no
+    # parser can see it as anything but text -- and because the file was
+    # "already covered", nothing was said about it at all. Somebody fixes the
+    # column, ships, and the helper carries on asking for a name that has gone.
+    for path in sorted(matched_files & impacted_files):
+        hidden = _named_out_of_reach(index, parsed, path, all_names)
+        if not hidden:
+            continue
+        hidden["reason"] = ("this file has findings above, and the name is ALSO written as "
+                            "text in it - " + hidden["reason"])
+        hidden["hint"] = (hidden.get("hint", "") + " Fixing the findings above does not fix "
+                          "this one: the text still says the old name.").strip()
+        res.unreadable.append(hidden)
+
     for path in sorted(matched_files - impacted_files):
         hidden = _named_out_of_reach(index, parsed, path, all_names)
         if hidden and path in already:
