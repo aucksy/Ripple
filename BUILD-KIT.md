@@ -186,6 +186,12 @@ that in *other* people's folders, because it makes a half-read repository look l
 a clean result — you do not want your own project living in it. A short path also
 keeps you clear of Windows' 260-character limit once the folders get deep.
 
+**One note on how paths are written from here on.** The phases below say
+`ripple-build/ripple/config.py` with forward slashes. That means exactly the same
+place as `C:\ripple-build\ripple\config.py` — the folder you just made. The kit
+writes it the short way because that is the form the chat should use, and Windows
+accepts either.
+
 This is what you are building towards. Every phase says exactly which of these
 files it produces:
 
@@ -323,6 +329,14 @@ You are helping me build a tool called Ripple, one file at a time, across
 several separate chats. You cannot see the other chats, so this card is the
 shared contract. Follow it exactly. Do not rename anything in it.
 
+You also cannot see my files, run anything, or test anything. I am the only
+one who finds out whether your code works, by saving it and running it, and
+every round of that costs me real time. So never tell me something is tested,
+verified or working -- say what you believe it does and what you are unsure
+of. If you are guessing about how a library behaves, say which line you are
+guessing about. A named doubt I can check in thirty seconds is worth far more
+than confident prose.
+
 WHAT RIPPLE IS
 An upstream data team emails us: "we are changing MARKET_CODE in
 CUSTOMER_DEMOGRAPHICS on 18 September." Ripple reads our own pipeline
@@ -355,6 +369,7 @@ step, no framework, no npm, no CDN, no TypeScript, no inline event handlers.
 Tests with pytest.
 
 FILE MAP (build order)
+ripple/paths.py                where things live, running either way
 ripple/config.py               settings, read from environment variables
 ripple/production.py           which tables the team publishes
 ripple/scanner/repo.py         walking the folder, holding files, word search
@@ -412,9 +427,10 @@ HOUSE STYLE
 WHERE THINGS GO — the project root is the folder I run python from
   ripple-build/
     run.py
+    build.py                 (Phase 13 -- packaging)
     ripple/
       __init__.py            (empty file, but it must exist)
-      config.py  production.py  catalog.py  notification.py
+      paths.py  config.py  production.py  catalog.py  notification.py
       narrative.py  progress.py  store.py  api.py
       scanner/
         __init__.py          (empty file, but it must exist)
@@ -427,10 +443,40 @@ WHERE THINGS GO — the project root is the folder I run python from
       test_narrative.py
     mockrepo/                (a small fake pipeline to test against)
 
+BEFORE YOU ANSWER, CHECK YOUR OWN WORK
+You are a capable model and you will be tempted to improve on this brief. The
+trouble is that eleven other windows are building against it and none of them
+can see what you decided. So before you reply:
+- Re-read DATA SHAPES above and confirm every name that crosses a file
+  boundary matches it exactly. If you genuinely needed one that is not there,
+  invent it, but SAY SO in one line at the top so I can carry it to the other
+  windows. A silent invention is the single most expensive thing that can
+  happen here.
+- Confirm every file is complete. No "...", no "rest unchanged", no TODO, no
+  placeholder, no function body left as pass.
+- Confirm you added nothing I did not ask for. No extra packages, no logging
+  framework, no command-line options, no retry logic, no caching layer,
+  no abstraction "for later". Cleverness in one window is a mismatch in the
+  next.
+- Confirm the tests would actually FAIL if the behaviour were missing. A test
+  that passes against an empty function is worse than no test, because it
+  makes a missing feature look finished.
+- Confirm it runs on Python 3.10.
+If something in the prompt genuinely contradicts this card, stop and ask me
+instead of choosing. The question costs me a minute. A wrong guess costs me a
+whole window.
+
 WHAT I WANT BACK
 Complete files, ready to save. No "...rest unchanged", no placeholders, no
-TODOs. If a file would be very long, say so and give it to me in clearly
-labelled parts I can concatenate.
+TODOs, no function body left as pass.
+
+Some of these files are 800 lines and may be longer than one reply can hold.
+Before writing a long file, say how many lines you expect it to be. Then, if
+it will not fit, give it in clearly labelled parts -- PART 1 OF 3 and so on --
+each part ending at a sensible boundary rather than mid-function, and tell me
+in what order to paste them. If a reply is cut off, do not restart the file
+from the top when I ask you to continue: carry on from the last complete line
+and tell me which line that was.
 
 END EVERY REPLY WITH A BLOCK EXACTLY LIKE THIS, and nothing after it:
 
@@ -457,13 +503,49 @@ about the path I will put it in the wrong place and the next chat will fail.
 
 # PHASE 1 — settings, and the published-tables list
 
-**Saves to:** `ripple-build/ripple/config.py`, `ripple-build/ripple/production.py`,
-`ripple-build/tests/test_production.py`
+**Saves to:** `ripple-build/ripple/paths.py`, `ripple-build/ripple/config.py`,
+`ripple-build/ripple/production.py`, `ripple-build/tests/test_production.py`
 
 ````text
 [PASTE THE CONTRACT CARD FIRST]
 
-Build ripple/config.py, ripple/production.py and tests/test_production.py.
+Build ripple/paths.py, ripple/config.py, ripple/production.py and
+tests/test_production.py.
+
+--- ripple/paths.py
+
+Small, and first, because everything else asks it where things are. Ripple has
+to run two ways: as `python run.py` while it is being built, and later as a
+packaged program with no folder of source files around it. Anything that
+assumes the second case looks like the first fails silently, so the guessing is
+done here, once.
+
+  frozen()   -> bool   True when running as the packaged program. It is
+                       getattr(sys, "frozen", False).
+  app_dir()  -> Path   The folder a person actually sees. Packaged, the folder
+                       holding the .exe: Path(sys.executable).resolve().parent.
+                       From source, the project root.
+  web_dir()  -> Path   Where the three front-end files are. Packaged,
+                       Path(sys._MEIPASS) / "web", because the packager unpacks
+                       bundled files to a folder of its own choosing and
+                       _MEIPASS is where it says it put them. From source, the
+                       web folder beside the code.
+  data_dir() -> Path   Where the history database goes. app_dir() both ways;
+                       create it if it is missing.
+
+Nothing else in Ripple may work out a path for itself. Two rules follow, and
+both exist because breaking them fails quietly rather than loudly:
+  The front end is found with web_dir(), never by walking up from __file__.
+  Packaged, that walk lands somewhere real but empty, so every route still
+  answers and the browser shows a blank white page — which reads as broken
+  code rather than as a folder that moved.
+  The database is written under data_dir(), never beside the code. Packaged,
+  beside-the-code is inside the program's own internals: rebuilding destroys
+  every saved analysis, zipping the folder to send to somebody sends your
+  saved analyses too, and a read-only location fails the save without saying
+  so.
+
+This file needs no test of its own; Phase 13 exercises it.
 
 --- ripple/config.py
 
@@ -478,7 +560,8 @@ locked-down machine differ only by environment. Fields:
   skip_dirs            .git .venv venv node_modules __pycache__ target build dist
   max_file_bytes       2_000_000
   max_upload_bytes     25_000_000
-  db_path
+  db_path              defaults to paths.data_dir() / "ripple.db", never a
+                       path worked out from this file's own location
   production_patterns  tuple of recognised entries — what is matched against
   production_text      the raw paste, kept exactly as it arrived so the box
                        can be opened and edited again rather than handing
@@ -1320,14 +1403,22 @@ GET  /api/file?path=  the real text of a scanned file
 Refuse an upload over max_upload_bytes with a message saying what the real
 ceiling is and why, not a bare 413.
 
-Serve web/ at /static and web/index.html at /. Send Cache-Control: no-store
+Serve web/ at /static and web/index.html at /, finding that folder with
+paths.web_dir() from Phase 1 and never by walking up from __file__ — see the
+reason there. Send Cache-Control: no-store
 for the page and the script — during a demo or an edit, a cached script is
 the difference between seeing a change and staring at yesterday's page. Cache
 the fonts, if any, for a month.
 
 Also write run.py at the project root: print the repository, the dialect and
-the address, then start uvicorn on host 127.0.0.1, port 8000, with a
---no-browser flag.
+the address, whether it is running packaged or from source, then start uvicorn
+on host 127.0.0.1, port 8000, with a --no-browser flag.
+
+Pass uvicorn the app OBJECT -- from ripple.api import app -- and not the string
+"ripple.api:app". Both work today. Only the object still works once this is
+packaged in Phase 13, because a packaged program has no importable module of
+that name to look up, and the string form exits immediately with "Could not
+import module".
 
 BIND TO 127.0.0.1 AND NEVER TO 0.0.0.0. The two look interchangeable and are
 not. 127.0.0.1 is the machine talking to itself and cannot be reached from
@@ -1754,10 +1845,8 @@ that.
 
 # PHASE 13 — packaging it as a program
 
-**Saves to:** `C:\ripple-build\ripple\paths.py` (new),
-`C:\ripple-build\ripple\api.py` and `C:\ripple-build\ripple\config.py`
-(both changed), `C:\ripple-build\run.py` (replaced), and
-`C:\ripple-build\build.py` (new)
+**Saves to:** `C:\ripple-build\build.py` (new). Nothing else changes — Phases 1
+and 8 already wrote the three things a packaged program needs.
 
 **What you get.** A folder called `Ripple` holding `Ripple.exe` and one other
 folder, about 40 MB in total. Copy that folder anywhere, double-click the program,
@@ -1771,87 +1860,41 @@ does the building:
 python -m pip install --user pyinstaller
 ```
 
-**Why this is a phase and not one command.** A packaged program has no folder of
-source files around it. Everything it needs was unpacked somewhere else, so every
-line of code that goes looking for a file has to ask where it is rather than
-assume. There are three such places in Ripple, and all three fail *quietly* — the
-program starts, looks healthy, and is wrong. That is what this phase fixes before
-it packages anything.
+**Why this is one short phase.** A packaged program has no folder of source files
+around it, so anything that goes looking for a file has to ask where it is rather
+than assume. There are three such places in Ripple and all three fail *silently* —
+the program starts, looks healthy, and is wrong. They were dealt with when the
+files were first written: `paths.py` in Phase 1 answers where the front end and the
+database live, and `run.py` in Phase 8 hands uvicorn the app object rather than its
+name. So nothing here goes back and edits anything. If any of that was skipped, go
+back and fix it there rather than patching it now, or Phase 13 will appear to work
+and the program will not.
 
 ````text
 [PASTE THE CONTRACT CARD FIRST]
 
-Ripple works when I run it with python run.py. Now package it as a Windows
-program with PyInstaller, so it runs on a machine with no Python installed.
+Ripple works when I run it with python run.py. Package it as a Windows program
+with PyInstaller so it runs on a machine with no Python installed.
 
-Give me ripple/paths.py, the changes to ripple/api.py and ripple/config.py,
-a replacement run.py, and build.py.
-
---- ripple/paths.py  (new, small)
-
-One place that answers "where am I", so nothing else in the app has to guess.
-
-  frozen()    -> bool          True when running as the packaged program.
-                               It is getattr(sys, "frozen", False).
-  app_dir()   -> Path          The folder a person actually sees. Packaged,
-                               that is the folder holding the .exe:
-                               Path(sys.executable).resolve().parent.
-                               From source, the project root.
-  web_dir()   -> Path          Packaged: Path(sys._MEIPASS) / "web", because
-                               PyInstaller unpacks bundled files to a folder of
-                               its own choosing and _MEIPASS is where it says
-                               it put them. From source: the web folder beside
-                               the code.
-  data_dir()  -> Path          Where the history database and any settings go.
-                               app_dir() both ways. Create it if missing.
-
-THE THREE QUIET FAILURES, so you can see why each of those exists:
-
-1. THE PAGE GOES BLANK. api.py currently finds the front end with
-   Path(__file__).parent.parent / "web". Inside a packaged program that path
-   does not exist. Every API route keeps working perfectly, so the program
-   looks alive, and the browser shows a blank white page. It reads as a broken
-   app rather than as a folder that moved. Use web_dir().
-
-2. THE HISTORY DISAPPEARS. If the database is written relative to the code, it
-   lands INSIDE the packaged program's own internals. Three things then go
-   wrong: rebuilding the program silently destroys every saved analysis;
-   zipping the folder to send to somebody sends your saved analyses with it;
-   and if it is ever put somewhere read-only, saving fails. Put it in
-   data_dir(), beside the .exe where a person can see it. config.py's db_path
-   should default to data_dir() / "ripple.db".
-
-3. IT DIES ON STARTUP. run.py starts the server with the string
-   "ripple.api:app". A packaged program has no importable module by that name
-   to look up, so it exits immediately with "Could not import module". Import
-   the app object and pass the object itself.
-
---- run.py  (replaced)
-
-Same as now — print the repository, the dialect and the address, open the
-browser unless --no-browser — plus:
-  say whether it is running packaged or from source, because when somebody
-    reports odd behaviour that is the first thing worth knowing
-  bind to 127.0.0.1, never 0.0.0.0
-  pass the app OBJECT to uvicorn, per failure 3 above
-  when packaged, wrap the whole of main() so that if anything raises, the
-    message is written to a file called ripple-log.txt next to the program AND
-    the window stays open long enough to read it. A packaged program that
-    crashes at startup otherwise shows a black window that vanishes, which is
-    unreportable and undiagnosable.
+ripple/paths.py already answers where the front end and the database live when
+running packaged, and run.py already passes uvicorn the app object rather than
+the string "ripple.api:app". Do not change either. Do not change any other
+file. I want build.py and nothing else.
 
 --- build.py  (new, at the project root)
 
 Run with: python build.py
-It prints what it is doing, runs PyInstaller, and says where the result is.
-It must use exactly these arguments, each of which is here for a reason:
+It says what it is doing, runs PyInstaller, then checks the result itself.
+
+Use exactly these arguments. Every one is here because leaving it out
+produces a program that builds cleanly and then misbehaves:
 
   sys.executable, "-m", "PyInstaller", "run.py",
   "--name", "Ripple",
   "--noconfirm", "--clean",
   "--onedir",
   "--console",
-  "--add-data", f"{ABSOLUTE_PATH_TO_WEB}{os.pathsep}web",
+  "--add-data", f"{WEB}{os.pathsep}web",
   "--collect-all", "sqlglot",
   "--collect-all", "extract_msg",
 
@@ -1859,29 +1902,41 @@ It must use exactly these arguments, each of which is here for a reason:
     folder on every single launch, which makes it slow to start, and a
     locked-down Windows machine often refuses to run a program out of a
     temporary folder at all.
-  --console for now. It leaves a black window open beside the app showing the
-    address and any error. Once everything works, switch it to --noconsole for
-    the copy you show people.
-  --add-data MUST BE AN ABSOLUTE PATH. Build the path with
-    Path(__file__).resolve().parent / "web" and pass that. A relative "web" is
-    resolved against PyInstaller's own working folder, not yours, and the
-    build stops with "Unable to find ... web".
-  --collect-all for both of those. They load parts of themselves by name at
-    run time, which PyInstaller cannot see by reading the code, so without
-    this they are left out and the program fails the first time it reads any
-    SQL.
+  --console for now. It leaves a plain window open beside the app showing the
+    address, and showing the error if there is one. Put a line at the end of
+    build.py saying that switching it to --noconsole gives a cleaner program
+    once everything works, so I can find it again later.
+  WEB MUST BE AN ABSOLUTE PATH. Build it as
+    Path(__file__).resolve().parent / "web" and pass that. A relative "web"
+    gets resolved against PyInstaller's own working folder rather than mine,
+    and the build stops with "Unable to find ... web", which reads as a
+    missing folder rather than a wrong path.
+  --collect-all for both of those two. Each loads parts of itself by name at
+    run time, which PyInstaller cannot see by reading the code. Without this
+    they are silently left out and the program fails the first time it reads
+    any SQL -- long after the build said it succeeded.
 
-Then have build.py CHECK ITS OWN WORK rather than trusting PyInstaller's exit
-code: confirm dist/Ripple/Ripple.exe exists, confirm the web folder came
-along, print the total size of dist/Ripple in MB, and print the full path to
-the .exe. If PyInstaller fails, print the last part of its output rather than
-a bare "failed" — its error is usually the last three lines of a very long
-message.
+Then have build.py CHECK ITS OWN WORK rather than trust PyInstaller's exit
+code:
+  confirm dist/Ripple/Ripple.exe is really there
+  confirm the web folder was bundled, by finding index.html inside
+    dist/Ripple/_internal/web
+  print the total size of dist/Ripple in MB, and the full path to the .exe
+  if PyInstaller failed, print the LAST part of its output, not a bare
+    "failed" -- the real reason is usually the last three lines of a very
+    long message, and the first three thousand lines are noise
 
-One thing to say in a comment, because it will bite: rebuilding wipes the
-dist folder, and the history database lives in there once the program has
-been run. Say so, and have build.py warn if it is about to delete a database
-that has anything in it.
+Two things to guard, because both cost an evening:
+  Rebuilding deletes the dist folder, and once the program has been run the
+  history database is living in it. Before deleting, check for that database
+  and if it exists and is not empty, say so and ask me to confirm rather than
+  destroying saved analyses without a word.
+  Windows will not delete a folder something is sitting in -- the last build
+  still running, or a terminal whose current folder is inside it. PyInstaller
+  fails there with a wall of traceback ending in WinError 32, which says none
+  of that. Catch it and say it in plain words.
+
+Python 3.10. Standard library only in build.py itself.
 ````
 
 **Check it worked.** From `C:\ripple-build`:
@@ -1943,6 +1998,30 @@ mentioning a version, or a line the chat swears is fine. Reply: *"This is Python
 **It asks you to install something new.** Reply: *"Use only what is already
 installed."* Every phase in this kit is buildable with the nine pieces from the
 setup step, and an extra one is a habit rather than a need.
+
+### The four replies worth keeping to hand
+
+Most rounds of back-and-forth are one of these four. Paste the reply into the
+same window rather than explaining it in your own words each time.
+
+**It stopped mid-file.**
+> *Continue from the last complete line. Do not start the file again from the
+> top. Tell me the line you are resuming from.*
+
+**It used a name that is not in the contract card.**
+> *The card calls that X, not Y. Window 9 will be looking for X and will never
+> know you renamed it. Use the card's name everywhere and give me the file
+> again.*
+
+**The tests all pass but look too easy.**
+> *Would any of those tests fail if the behaviour were missing? Show me the one
+> that catches it. If there is not one, add it.*
+
+**Something failed when you ran it.** Paste the whole red block, and nothing
+else except this:
+> *This is what happened when I ran it. Do not guess at the cause -- tell me
+> which line you think produced it and why, then give me the corrected file
+> whole.*
 
 ---
 
