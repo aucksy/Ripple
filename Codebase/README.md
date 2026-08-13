@@ -140,6 +140,7 @@ All optional. Set them as environment variables before starting.
 | `RIPPLE_REPO_LABEL` | `mockrepo` | The name shown in the interface. |
 | `RIPPLE_SQL_DIALECT` | generic | `bigquery`, `oracle`, `teradata`, `snowflake`, `hive`, `spark`, `postgres`, `mysql`, `tsql`, `redshift`, `databricks`, `presto`, `trino`, `duckdb`, `sqlite`. **Setting this correctly matters more than anything else here** — see below. |
 | `RIPPLE_MAX_HOPS` | `4` | How many renames deep to follow a column. |
+| `RIPPLE_PROD_TABLES` | `_PROD, _PRD, _PUBLISHED` | How **your** published tables are named. A plain word matches the end of a table name; `*` matches anything (`PROD_*`, or `*` for every table). **This is the second setting that can turn a real finding into a calm-looking result** — see below. |
 | `RIPPLE_REPO_URL_TEMPLATE` | empty | Link findings to your Git host, when reading a folder. Use `{path}` and `{line}`. On GitHub this is worked out for you. |
 | `GROQ_API_KEY` | empty | Turns the AI on. Without it everything still works. Can also be entered on the Settings screen. |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | Which model to call. Also choosable on the Settings screen. |
@@ -190,6 +191,63 @@ wrong. Ripple does report the files it could not read, so the evidence is on
 screen — but a "no impact" headline is what gets remembered.
 
 Set it once, and check the Settings screen agrees.
+
+---
+
+## The other setting that can flatten a real result
+
+`RIPPLE_PROD_TABLES` says how *your* published tables are named. It decides one
+thing: whether a finding counts as **production impact**, which is what the
+headline, the risk level and the drafted reply are all built from.
+
+It ships as `_PROD, _PRD, _PUBLISHED`, because that is a common convention and
+there is no way to guess. Point Ripple at a repository whose published tables end
+`_umdl`, `_gdi`, `_final` or anything else, and every real finding is still
+found, still listed and still counted — but nothing is *called* production
+impact, so the top of the report reads far calmer than the truth.
+
+Ripple no longer hides those findings behind that. When a chain ends at a table
+the rule does not match, the table is listed under **Chain ends here**, the rule
+is quoted beside it, and the summary says the assessment is unfinished rather
+than clean. Correcting the rule and scanning again turns them into production
+tables — nothing else changes.
+
+A plain word matches the end of a name (`_PROD` matches `sales_prod`). `*`
+matches anything (`PROD_*` matches `prod_sales`; `*` on its own treats every
+table as published, which is the safe setting if you are not sure).
+
+---
+
+## SQL that is really a template
+
+Very little production SQL is plain SQL. Airflow, dbt and in-house generators
+write the project and dataset names as placeholders that are filled in before a
+database ever sees the file:
+
+```sql
+CREATE OR REPLACE TABLE {{tgt_project_id}}.{{stage_dataset}}.web_activity AS ...
+```
+
+A SQL parser refuses that outright, and refuses the whole file with it. On a
+repository written this way that meant almost every file landing in "could not
+read" — and a scan over a repository that was never read reports no impact,
+confidently, on a change that breaks things.
+
+Ripple fills the placeholders in with ordinary names before parsing, on a copy;
+the file itself is never touched and every line number still points where it
+did. `{{ ... }}`, `{% ... %}`, `{# ... #}`, `${ ... }` and Python's `{name}` are
+all handled, and dbt's `ref('orders')` resolves to `orders`, because that is
+what it means.
+
+Two more things changed with it:
+
+* **One bad statement costs one statement.** A file is retried statement by
+  statement, so a `GRANT`, a procedure call or one line in another dialect no
+  longer takes the other thirteen statements down with it. The gap then reads
+  *"1 of 14 statements in this file could not be read"*.
+* **The gap says where.** Every entry in "could not read" now carries the line
+  number and the line itself, so the file can be opened at the right place
+  instead of hunted through.
 
 ---
 
@@ -363,6 +421,7 @@ ripple/
   scanner/
     repo.py         walking a folder and searching it
     github.py       reading a repository from GitHub with an access token
+    templating.py   filling in {{ ... }} placeholders so real pipeline SQL parses
     sqlread.py      parsing SQL and classifying how a column is used
     lineage.py      following renames, and grouping by production table
 web/                the interface - plain HTML, CSS and JavaScript, no build step
@@ -412,9 +471,12 @@ certain than it is.
 - **`SELECT *` hides which columns flow onward.**
 - **A job writing to several tables** cannot be attributed reliably, so lineage
   stops there — and says so.
-- **A chain ends at the first production table it reaches.** If one production
-  table feeds another, the second is not reported. That is deliberate: the first
-  one is the thing an engineer has to go and fix.
+- **Which tables count as "production" is a naming rule you set**
+  (`RIPPLE_PROD_TABLES`, or the settings screen in Ripple Offline). Ripple ships
+  expecting `_PROD`. Point it at a repository that names nothing `_PROD` and no
+  finding will be *called* production impact — every table the change reaches is
+  still listed, with the rule quoted beside them, but the headline and the risk
+  level follow the rule. Check it before you trust a calm answer.
 - **Columns are matched by name.** Two different tables using the same column
   name can produce a finding that needs a human to dismiss.
 - **The SQL dialect must be set correctly**, and it is the one setting that can

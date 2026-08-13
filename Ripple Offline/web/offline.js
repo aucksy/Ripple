@@ -42,11 +42,27 @@ function offState() {
       path: (h && h.repo.path) || '',
       dialect: (h && h.sqlDialectId) || '',
       hops: (h && h.maxHops) || 4,
+      prod: (h && h.production) || '',
       check: null,        // the answer to "check this folder", before saving
       msg: null,          // the answer to the last save
+      working: '',        // which button is busy: 'check', 'browse' or 'save'
     };
   }
   return S.off;
+}
+
+/* Slow work here has to be visible on the button that started it. The header
+   spinner is across the screen from whatever was pressed, and a folder being
+   read is the one moment on this screen where nothing happens for a while and
+   then several numbers change at once. */
+function offRun(which, fn) {
+  const o = offState();
+  o.working = which;
+  run(async () => {
+    try { await fn(); } finally { o.working = ''; }
+  }, which === 'save' ? 'Reading every file in the folder…'
+    : which === 'check' ? 'Counting what is in the folder…'
+    : 'Waiting for the folder picker…');
 }
 
 function settingsView(root) {
@@ -72,9 +88,35 @@ function settingsView(root) {
   }
 
   const grid = el('div', { className: 'grid2 even' });
-  grid.append(el('div', {}, folderCard(h, o), dialectCard(h, o), saveRow(h, o)),
+  grid.append(el('div', {}, folderCard(h, o), dialectCard(h, o), productionCard(h, o), saveRow(h, o)),
               el('div', { className: 'rail' }, whereCard(h), guardCard(), factsCard(h)));
   root.append(grid);
+}
+
+/* Which tables are the ones this team publishes.
+   The setting that decides whether "no production table is impacted" is a
+   result or an accident. Ripple ships knowing about names ending _PROD, and a
+   repository that names nothing _PROD gets a clean bill of health for a change
+   that breaks it. There is nobody here to set an environment variable, so it
+   is asked for on screen like the other two. */
+function productionCard(h, o) {
+  const card = el('div', { className: 'card pad lg', style: 'margin-top:18px' });
+  card.append(el('span', { className: 'lbl', textContent: 'The tables your team publishes' }));
+  card.append(el('div', { className: 'small faint', style: 'margin-top:6px;line-height:1.55',
+    textContent: 'How your published tables are named. Separate with commas. A plain word matches '
+      + 'the end of a table name, so _PROD matches sales_prod. Use * for anything else: '
+      + 'PROD_* matches prod_sales, and * on its own means treat every table as published.' }));
+  const inp = el('input', { type: 'text', className: 'mono', value: o.prod,
+    placeholder: '_PROD, _PRD, _PUBLISHED', style: 'margin-top:12px;padding:12px 14px' });
+  inp.oninput = () => { o.prod = inp.value; };
+  inp.onkeydown = (e) => { if (e.key === 'Enter') saveOfflineSettings(); };
+  card.append(inp);
+  card.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
+    el('b', { textContent: 'Get this wrong and a real impact reads as a clean result. ' }),
+    'A finding is only counted as production impact when the table it ends at matches this. '
+    + 'Nothing is hidden either way — every table the change reaches is still listed — but '
+    + 'the headline, the risk level and the drafted reply all follow this line.'));
+  return card;
 }
 
 /* The folder to scan. Typing a path always works; the picker is only offered
@@ -94,13 +136,21 @@ function folderCard(h, o) {
 
   const row = el('div', { className: 'foot', style: 'margin-top:14px' });
   if (h.canBrowse) {
-    const browse = el('button', { className: 'ghost', textContent: 'Browse…' });
+    const browse = el('button', { className: 'ghost',
+      textContent: o.working === 'browse' ? 'Waiting for the picker…' : 'Browse…' });
+    browse.disabled = !!o.working;
     browse.onclick = () => browseForFolder();
     row.append(browse);
   }
-  const check = el('button', { className: 'ghost', textContent: 'Check this folder' });
+  const check = el('button', { className: 'ghost',
+    textContent: o.working === 'check' ? 'Counting the files…' : 'Check this folder' });
+  check.disabled = !!o.working;
   check.onclick = () => checkFolder();
   row.append(check);
+  if (o.working === 'check') {
+    row.append(el('span', { className: 'spin' }),
+      el('span', { className: 'small muted', textContent: 'Walking the folder. A large one takes a moment.' }));
+  }
   card.append(row);
 
   // A note with nothing in it is an empty coloured box, which reads as
@@ -137,12 +187,25 @@ function dialectCard(h, o) {
 
 function saveRow(h, o) {
   const row = el('div', { className: 'card pad lg foot', style: 'margin-top:18px' });
+  const busy = o.working === 'save';
   const save = el('button', { className: 'pri',
-    textContent: h.configured ? 'Save and read the repository again' : 'Save and read the repository' });
+    textContent: busy ? 'Reading the folder…'
+      : h.configured ? 'Save and read the repository again' : 'Save and read the repository' });
+  save.disabled = !!o.working;
   save.onclick = () => saveOfflineSettings();
   row.append(save);
-  row.append(el('span', { className: 'small faint',
-    textContent: 'Saved to the settings file beside Ripple, so it is remembered next time.' }));
+  if (busy) {
+    // Reading a real repository is thousands of files. Without this the screen
+    // sits still and then several numbers change on their own, which reads as
+    // the page having done something by itself.
+    row.append(el('span', { className: 'spin' }),
+      el('span', { className: 'small muted',
+        textContent: 'Reading every file and parsing the SQL. On a large repository this takes '
+          + 'a few seconds — the counts on the right update when it finishes.' }));
+  } else {
+    row.append(el('span', { className: 'small faint',
+      textContent: 'Saved to the settings file beside Ripple, so it is remembered next time.' }));
+  }
   const box = el('div', {}, row);
   if (o.msg) {
     box.append(el('div', { className: 'note ' + (o.msg.ok ? 'good' : 'bad'), style: 'margin-top:14px' },
@@ -211,7 +274,8 @@ function factsCard(h) {
    ['Files unreadable', String(h.repo.unreadable)],
    ['Tables found', String(h.catalog.tables)],
    ['SQL read as', h.sqlDialect],
-   ['Renames followed', `${h.maxHops} hops`]].forEach(([k, v]) =>
+   ['Renames followed', `${h.maxHops} hops`],
+   ['Tables you publish', h.production || 'not set']].forEach(([k, v]) =>
     card.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },
       el('span', { className: 'small muted', textContent: k, style: 'flex:1' }),
       el('span', { className: 'small', textContent: v, style: 'font-weight:700' }))));
@@ -221,7 +285,7 @@ function factsCard(h) {
 // ── the three things those buttons do ─────────────────────────────────────
 function checkFolder() {
   const o = offState();
-  run(async () => {
+  offRun('check', async () => {
     o.check = await api('/api/settings/check', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: o.path.trim() }),
@@ -231,7 +295,7 @@ function checkFolder() {
 
 function browseForFolder() {
   const o = offState();
-  run(async () => {
+  offRun('browse', async () => {
     const out = await api('/api/settings/browse', { method: 'POST' });
     if (out.path) { o.path = out.path; o.check = null; o.msg = null; }
   });
@@ -239,19 +303,24 @@ function browseForFolder() {
 
 function saveOfflineSettings() {
   const o = offState();
-  run(async () => {
+  offRun('save', async () => {
     try {
       S.health = await api('/api/settings', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoPath: o.path.trim(), sqlDialect: o.dialect, maxHops: o.hops }),
+        body: JSON.stringify({ repoPath: o.path.trim(), sqlDialect: o.dialect,
+                               maxHops: o.hops, prodTables: o.prod.trim() }),
       });
+      o.prod = S.health.production || o.prod;
       // The saved message below says what happened. Leaving the "check this
       // folder" answer up as well puts an empty green box on screen, because
       // once it has been saved there is nothing left for it to report.
       o.check = null;
       o.msg = { ok: true, text: `Saved. ${S.health.repo.files} file`
         + `${S.health.repo.files === 1 ? '' : 's'} indexed from ${S.health.repo.label}, `
-        + `read as ${S.health.sqlDialect}.` };
+        + `read as ${S.health.sqlDialect}. ${S.health.repo.statements} statement`
+        + `${S.health.repo.statements === 1 ? '' : 's'} understood, ${S.health.repo.unreadable} file`
+        + `${S.health.repo.unreadable === 1 ? '' : 's'} could not be read. `
+        + `Published tables: ${S.health.production}.` };
       // Whatever was scanned before came from a different folder or a different
       // dialect, so it is dropped rather than left on screen looking current.
       S.scan = null; S.summary = null; S.reply = null;

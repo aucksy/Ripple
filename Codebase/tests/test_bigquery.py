@@ -131,9 +131,17 @@ def test_with_the_dialect_every_file_is_read(repo):
 
 
 def test_the_change_reaches_the_production_table(repo):
-    """The whole point: a value change upstream lands on the table people read."""
+    """The whole point: a value change upstream lands on the table people read.
+
+    Both of them. customer_profile_prod is loaded by the MERGE, and the Python
+    job then builds final_targeting_prod out of it -- in this same repository,
+    so it is this team's to defend too. Ripple used to stop at the first
+    published table it met, which under-counted the one number on the summary
+    that anybody acts on.
+    """
     _, _, _, _, out = scan(repo, "bigquery")
-    assert [g["prod"] for g in out["groups"]] == ["customer_profile_prod"]
+    assert [g["prod"] for g in out["groups"]] == ["customer_profile_prod",
+                                                  "final_targeting_prod"]
     files = {r["file"] for g in out["groups"] for r in g["rows"]}
     assert "etl/customer_snapshot.sql" in files
     assert "odl/customer_profile_prod.sql" in files

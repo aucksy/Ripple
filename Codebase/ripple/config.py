@@ -6,10 +6,29 @@ network lives here, so nothing has to be hunted for in code.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Which tables are the ones this team publishes -- the tables a finding has to
+# reach before anybody outside the team notices. Every organisation names them
+# differently, and getting this wrong is the most expensive mistake Ripple can
+# make: a change that really breaks three tables is reported as "no impact"
+# purely because the tables are not called _PROD. So it is a setting, it is on
+# screen, and findings that reach nothing on this list are still shown.
+#
+# A pattern with no * matches the end of a table name, which is how naming
+# conventions usually work (_PROD, _UMDL, _PUBLISHED). A pattern with a * is
+# matched in full, so PROD_* works too, and * on its own means every table.
+DEFAULT_PRODUCTION = ("_PROD", "_PRD", "_PUBLISHED")
+
+
+def parse_production_rule(text: str) -> tuple[str, ...]:
+    """The list a person typed into one box, as separate patterns."""
+    return tuple(p.strip() for p in re.split(r"[,;\n]+", text or "") if p.strip())
 
 # The models Ripple offers on the Settings screen. Only Groq's production
 # models are listed -- preview ones get withdrawn without notice, and a model
@@ -132,10 +151,12 @@ class Settings:
     # How many renames deep to follow a column.
     max_hops: int = field(default_factory=lambda: int(_env("RIPPLE_MAX_HOPS", "4")))
 
-    # A table is "production" if its name ends with any of these, or is listed
-    # explicitly. Everything else is an intermediate step.
-    production_suffixes: tuple[str, ...] = ("_PROD", "_PRD", "_PUBLISHED")
-    production_tables: tuple[str, ...] = ()
+    # Which tables count as the ones this team publishes. See DEFAULT_PRODUCTION
+    # above for why this is a setting and not a constant.
+    production_patterns: tuple[str, ...] = field(
+        default_factory=lambda: parse_production_rule(_env("RIPPLE_PROD_TABLES", ""))
+        or DEFAULT_PRODUCTION
+    )
 
     # File types worth reading at all.
     code_extensions: tuple[str, ...] = (
@@ -180,9 +201,22 @@ class Settings:
 
     def is_production_table(self, table: str) -> bool:
         t = (table or "").upper()
-        if t in {x.upper() for x in self.production_tables}:
-            return True
-        return any(t.endswith(sfx) for sfx in self.production_suffixes)
+        if not t:
+            return False
+        for raw in self.production_patterns:
+            pattern = raw.strip().upper()
+            if not pattern:
+                continue
+            if "*" in pattern or "?" in pattern:
+                if fnmatch(t, pattern):
+                    return True
+            elif t.endswith(pattern):
+                return True
+        return False
+
+    def production_rule(self) -> str:
+        """The rule as one line, for showing on screen and saving."""
+        return ", ".join(self.production_patterns)
 
 
 settings = Settings()

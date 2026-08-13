@@ -15,6 +15,7 @@ from sqlglot import exp
 
 from ..config import Settings, settings as default_settings
 from .repo import RepoIndex, SourceFile, statements_for, written_tables
+from .templating import describe as describe_templating, fill_placeholders, has_placeholders
 
 # sqlglot narrates its fallbacks to the log; that noise is not useful here
 # because we surface every genuinely unreadable file ourselves.
@@ -110,6 +111,133 @@ def _target_of(stmt: exp.Expression) -> str | None:
     return None
 
 
+# ── splitting a file into separate statements ──────────────────────────────
+# Only used once a whole block has already been refused. sqlglot reads a file
+# as one piece and gives up at the first statement it cannot follow, taking
+# every other statement in the file down with it -- so one GRANT, one procedure
+# call, one line written in a dialect the rest of the file is not in, costs the
+# reader the entire file. Splitting first means one bad statement costs exactly
+# one statement, and the file is reported as "3 of 14" rather than "unreadable".
+def split_statements(sql: str) -> list[tuple[str, int]]:
+    """(statement, 0-based line it starts on), split on real statement ends.
+
+    Semicolons inside quotes and comments do not end a statement, which is the
+    only reason this is not a call to ``str.split``.
+    """
+    out: list[tuple[str, int]] = []
+    start = start_line = line = i = 0
+    n = len(sql)
+    quote = ""
+
+    def keep(chunk: str, base: int) -> None:
+        if not chunk.strip():
+            return
+        lead = len(chunk) - len(chunk.lstrip())
+        out.append((chunk, base + chunk[:lead].count("\n")))
+
+    while i < n:
+        ch = sql[i]
+        if ch == "\n":
+            line += 1
+            i += 1
+        elif quote:
+            if ch == "\\" and quote != "`":
+                i += 2
+            else:
+                if ch == quote:
+                    quote = ""
+                i += 1
+        elif ch in "'\"`":
+            quote = ch
+            i += 1
+        elif sql.startswith("--", i) or ch == "#":
+            found = sql.find("\n", i)
+            i = n if found < 0 else found
+        elif sql.startswith("/*", i):
+            found = sql.find("*/", i + 2)
+            end = n if found < 0 else found + 2
+            line += sql.count("\n", i, end)
+            i = end
+        elif ch == ";":
+            keep(sql[start:i], start_line)
+            i += 1
+            start, start_line = i, line
+        else:
+            i += 1
+    keep(sql[start:], start_line)
+    return out
+
+
+# A statement sqlglot hands back as an opaque command, when it holds a query,
+# was not understood -- it just failed quietly instead of loudly. Counting it
+# as read would put the file in the clean pile with nothing to show for it.
+_LOOKS_LIKE_A_QUERY = re.compile(
+    r"\b(SELECT|MERGE\s+INTO|INSERT\s+INTO|CREATE\s+(OR\s+REPLACE\s+)?(TABLE|VIEW))\b",
+    re.IGNORECASE,
+)
+
+
+def _first_code_line(chunk: str) -> str:
+    """The first line of a statement worth showing on screen."""
+    for raw in chunk.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("--"):
+            return line[:120]
+    return chunk.strip()[:120]
+
+
+def _parse_text(
+    text: str, dialect: str | None, base_line: int
+) -> tuple[list[tuple[exp.Expression, int]], list[dict]]:
+    """Parse a block; if it is refused, parse it one statement at a time."""
+    try:
+        got = sqlglot.parse(text, read=dialect)
+        return [(s, base_line) for s in got if s is not None], []
+    except Exception:
+        pass
+    good: list[tuple[exp.Expression, int]] = []
+    bad: list[dict] = []
+    for chunk, line in split_statements(text):
+        try:
+            got = sqlglot.parse(chunk, read=dialect)
+        except Exception:
+            bad.append({"line": base_line + line + 1, "text": _first_code_line(chunk)})
+            continue
+        good.extend((s, base_line + line) for s in got if s is not None)
+    return good, bad
+
+
+def _why_not(f: SourceFile, cfg: Settings, failures: list[dict], understood: int) -> dict:
+    """One entry for the 'could not read' list, saying enough to act on.
+
+    The point of this list is that somebody goes and checks those files by
+    hand, so it has to name the line and show it. "ParseError" names nothing.
+    """
+    first = failures[0]
+    total = understood + len(failures)
+    if understood:
+        reason = (f"{len(failures)} of {total} statements in this file could not be read - "
+                  f"the other {understood} {'was' if understood == 1 else 'were'}")
+    else:
+        reason = "could not be read as SQL"
+    hints: list[str] = []
+    kind = describe_templating(f.text)
+    if kind:
+        hints.append(f"It is a template - it uses {kind}. Ripple fills those in before reading, "
+                     f"and this part still did not parse.")
+    if not cfg.sql_dialect:
+        hints.append("This repository is being read as generic SQL. If it is BigQuery, Snowflake "
+                     "or anything else in particular, choose that on the settings screen - it is "
+                     "the most common reason a file will not parse.")
+    return {
+        "file": f.path,
+        "reason": reason,
+        "line": first["line"],
+        "snippet": first["text"],
+        "hint": " ".join(hints),
+    }
+
+
 def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict]]:
     """Parse one file into statements. Failures are reported, never swallowed."""
     out: list[Statement] = []
@@ -133,19 +261,16 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
         )
 
     dialect = cfg.sql_dialect or None
+    failures: list[dict] = []
     for sql_text, offset in blocks:
-        try:
-            parsed = sqlglot.parse(sql_text, read=dialect)
-        except Exception as exc:
-            problems.append(
-                {
-                    "file": f.path,
-                    "reason": f"the SQL reader could not parse this file ({type(exc).__name__})",
-                }
-            )
-            continue
-        for stmt in parsed:
-            if stmt is None:
+        # Templating is filled in on the way into the parser only. Everything
+        # shown on screen still comes from the file exactly as it is written.
+        text = fill_placeholders(sql_text) if has_placeholders(sql_text) else sql_text
+        parsed, bad = _parse_text(text, dialect, offset)
+        failures.extend(bad)
+        for stmt, line in parsed:
+            if isinstance(stmt, exp.Command) and _LOOKS_LIKE_A_QUERY.search(stmt.sql()):
+                failures.append({"line": line + 1, "text": _first_code_line(stmt.sql())})
                 continue
             select = stmt.find(exp.Select)
             target = _target_of(stmt) or implied_target
@@ -158,7 +283,7 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
                 Statement(
                     file=f.path,
                     lang=f.lang,
-                    line_offset=offset,
+                    line_offset=line,
                     sql=stmt.sql(),
                     target=target,
                     sources=sources,
@@ -166,6 +291,9 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
                     expr=stmt,
                 )
             )
+    if failures:
+        failures.sort(key=lambda p: p["line"])
+        problems.append(_why_not(f, cfg, failures, len(out)))
     return out, problems
 
 

@@ -40,9 +40,10 @@ const S = {
   aiMsg: null,        // result of the last AI key action, kept across redraws
   //</online-only>
   manRows: [{ table: '', attrs: '' }],
-  man: { source: '', changeType: '', effectiveDate: '', changeDesc: '', pocName: '', pocEmail: '', pocTeam: '' },
-  busy: false,
-  openGroup: 0, openRow: null, graphTab: 0,
+  man: { source: '', changeKind: 'unknown', effectiveDate: '', changeDesc: '',
+         pocName: '', pocEmail: '', pocTeam: '' },
+  busy: false, busyWhat: '',
+  openGroup: 'p0', openRow: null, graphTab: 0,
   //<online-only>
   // Repository step. The token is held here only long enough to send it once;
   // it is cleared as soon as the server has accepted it.
@@ -52,14 +53,18 @@ const S = {
   //</online-only>
 };
 
+// Typed by hand, so the awkward ones are given the right control rather than a
+// box and a format to remember: a real calendar for the date, the same list of
+// change types the scan actually understands, and a contact box that takes as
+// many addresses as you care to paste in.
 const MAN_FIELDS = [
-  ['source', 'Source system', 'e.g. C360'],
-  ['changeType', 'Change type', 'e.g. Attribute decommission'],
-  ['effectiveDate', 'Effective date', 'YYYY-MM-DD'],
-  ['changeDesc', 'What is changing', 'One line describing the change'],
-  ['pocName', 'Contact name', 'Who sent the notice'],
-  ['pocEmail', 'Contact email', 'name@corp.example.com'],
-  ['pocTeam', 'Contact team', 'e.g. C360 Data Governance'],
+  ['source', 'Source system', 'text', 'e.g. C360'],
+  ['changeKind', 'Change type', 'kind', ''],
+  ['effectiveDate', 'Effective date', 'date', ''],
+  ['changeDesc', 'What is changing', 'text', 'One line describing the change'],
+  ['pocName', 'Contact name', 'text', 'Who sent the notice'],
+  ['pocEmail', 'Contact email', 'emails', 'name@corp.example.com, other@corp.example.com'],
+  ['pocTeam', 'Contact team', 'text', 'e.g. C360 Data Governance'],
 ];
 
 const CHANGE_KINDS = [
@@ -69,6 +74,7 @@ const CHANGE_KINDS = [
   ['type_change', 'Data type change'],
   ['rename', 'Attribute rename'],
 ];
+const kindLabel = (id) => (CHANGE_KINDS.find(([k]) => k === id) || CHANGE_KINDS[0])[1];
 
 // ── helpers ───────────────────────────────────────────────────────────────
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -80,6 +86,43 @@ const el = (tag, props = {}, ...kids) => {
 };
 const x = (root, name) => root.querySelector(`[data-x="${name}"]`);
 const esc = (s) => String(s ?? '');
+
+/* Every email address in a blob of text, once each.
+   People do not type addresses one at a time into a form. They copy the To line
+   out of Outlook, which arrives as "Priya Raman <priya@corp.com>; Marcus Hale
+   <marcus@corp.com>", or they paste a comma-separated list. Rather than telling
+   anyone which of those is allowed, the addresses are picked out of whatever
+   arrives and shown back as separate values, so it is obvious what was
+   understood. */
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+function emailList(text) {
+  const found = String(text ?? '').match(EMAIL_RE) || [];
+  return [...new Set(found.map(a => a.toLowerCase()))];
+}
+
+/* A box that takes any number of addresses, showing what it found underneath.
+   It updates itself rather than redrawing the screen, which would throw the
+   cursor out of the box on every keystroke. */
+function emailField(value, onchange, opts = {}) {
+  const wrap = el('div');
+  const inp = el('input', { type: 'text', value: value || '', placeholder: opts.hint || '',
+    style: opts.style || '' });
+  const chips = el('div', { className: 'chips', style: 'margin-top:8px' });
+  const note = el('div', { className: 'small faint', style: 'margin-top:5px;line-height:1.5' });
+  const sync = () => {
+    const found = emailList(inp.value);
+    chips.innerHTML = '';
+    found.forEach(a => chips.append(el('span', { className: 'chip mono', textContent: a })));
+    note.textContent = found.length
+      ? `${found.length} address${found.length === 1 ? '' : 'es'} read. Separate with commas, or paste the whole To line.`
+      : (inp.value.trim() ? 'No email address in what is typed here.' : '');
+    onchange(inp.value, found);
+  };
+  inp.oninput = sync;
+  sync();
+  wrap.append(inp, chips, note);
+  return wrap;
+}
 
 async function api(path, opts = {}) {
   const r = await fetch(path, opts);
@@ -111,16 +154,32 @@ const RISK = {
 };
 
 // ── chrome ────────────────────────────────────────────────────────────────
+/* Typing the change in by hand and then being shown "check what Ripple read"
+   is being asked to check your own typing. In that mode step 1 is the review,
+   so the review step is not in the wizard at all -- rather than being in it,
+   greyed out, or silently skipped past while the count still says 7. */
+function manualFlow() {
+  if (S.step === 1) return S.mode === 'manual';
+  return S.vals ? S.vals.extractedBy === 'manual' : false;
+}
+function stepNumbers() {
+  return manualFlow() ? [1, 3, 4, 5, 6, 7] : [1, 2, 3, 4, 5, 6, 7];
+}
+function nextStepAfter(n) {
+  const list = stepNumbers();
+  return list[Math.min(list.indexOf(n) + 1, list.length - 1)];
+}
+
 function renderSteps() {
   const box = $('#steps');
   box.innerHTML = '';
-  STEPS.forEach(([label, sub], i) => {
-    const n = i + 1;
+  stepNumbers().forEach((n, i) => {
+    const [label, sub] = STEPS[n - 1];
     const on = S.view === 'wizard' && S.step === n;
     const done = n < S.maxStep && !on;
     const b = el('button', { className: `step${on ? ' on' : ''}${done ? ' done' : ''}` });
     b.disabled = n > S.maxStep;
-    b.append(el('span', { className: 'n', textContent: done ? '✓' : String(n) }),
+    b.append(el('span', { className: 'n', textContent: done ? '✓' : String(i + 1) }),
       el('span', {}, el('span', { className: 't', textContent: label }),
         el('span', { className: 's', textContent: sub })));
     b.onclick = () => { if (n <= S.maxStep) { S.view = 'wizard'; S.step = n; render(); } };
@@ -191,7 +250,7 @@ function step1(root) {
           body: JSON.stringify({ text, useAI: true }),
         });
         acceptExtract(out);
-      });
+      }, 'Reading the pasted notification…');
     };
     return;
   }
@@ -219,19 +278,49 @@ function step1(root) {
 
   const fields = x(root, 'manFields');
   fields.innerHTML = '';
-  MAN_FIELDS.forEach(([key, label, hint]) => {
-    const inp = el('input', { type: 'text', value: S.man[key], placeholder: hint,
-      style: 'margin-top:7px;font-size:12.5px;font-weight:400;color:var(--mute);padding:7px 11px' });
-    inp.oninput = () => { S.man[key] = inp.value; };
-    fields.append(el('div', { className: 'field' }, el('span', { className: 'lbl faint', textContent: label }), inp));
+  const small = 'margin-top:7px;font-size:12.5px;font-weight:400;color:var(--mute);padding:7px 11px';
+  MAN_FIELDS.forEach(([key, label, type, hint]) => {
+    const field = el('div', { className: 'field' }, el('span', { className: 'lbl faint', textContent: label }));
+    if (type === 'kind') {
+      const sel = el('select', { style: 'margin-top:7px;padding:7px 11px;font-size:12.5px' });
+      CHANGE_KINDS.forEach(([k, l]) => sel.append(el('option', { value: k, textContent: l, selected: k === S.man.changeKind })));
+      sel.onchange = () => { S.man.changeKind = sel.value; };
+      field.append(sel);
+    } else if (type === 'emails') {
+      field.append(emailField(S.man.pocEmail, (raw) => { S.man.pocEmail = raw; },
+        { hint, style: small }));
+    } else {
+      const inp = el('input', { type: type === 'date' ? 'date' : 'text',
+        value: S.man[key], placeholder: hint, style: small });
+      inp.oninput = () => { S.man[key] = inp.value; };
+      field.append(inp);
+      // A date typed in a box is a date somebody has to work out. The picker is
+      // the control; this is the answer in words, so a slip is visible.
+      if (type === 'date') {
+        const said = el('div', { className: 'small faint', style: 'margin-top:5px' });
+        const sayDate = () => {
+          const dl = daysLeft(inp.value);
+          said.textContent = inp.value
+            ? fmtDate(inp.value) + (dl === null ? '' : dl < 0 ? ' — that date has passed'
+              : ` — ${dl} day${dl === 1 ? '' : 's'} away`)
+            : '';
+        };
+        inp.addEventListener('input', sayDate);
+        sayDate();
+        field.append(said);
+      }
+    }
+    fields.append(field);
   });
 
   x(root, 'manDemo').onclick = () => {
     S.manRows = [{ table: 'CUSTOMER_DEMOGRAPHICS', attrs: 'MARKET_CODE, MARKET_NAME' },
                  { table: 'CUSTOMER_ADDRESS', attrs: 'COUNTRY_CODE' }];
-    S.man = { source: 'C360', changeType: 'Value format change', effectiveDate: '2026-09-18',
+    S.man = { source: 'C360', changeKind: 'value_change', effectiveDate: '2026-09-18',
       changeDesc: "Values change from ISO abbreviations to full country names ('US' becomes 'United States').",
-      pocName: 'Priya Raman', pocEmail: 'priya.raman@corp.example.com', pocTeam: 'C360 Data Governance' };
+      pocName: 'Priya Raman',
+      pocEmail: 'priya.raman@corp.example.com, dl-c360-governance@corp.example.com',
+      pocTeam: 'C360 Data Governance' };
     render();
   };
   x(root, 'manStart').onclick = () => startManual();
@@ -252,15 +341,16 @@ function updateManHint(root) {
 
 function startManual() {
   if (!manValid()) return;
-  const kind = (CHANGE_KINDS.find(([, l]) => l.toLowerCase() === S.man.changeType.trim().toLowerCase()) || ['unknown'])[0];
   S.vals = {
     source: S.man.source.trim() || 'Entered manually',
-    changeType: S.man.changeType.trim() || 'Not specified',
-    changeKind: kind,
+    changeType: kindLabel(S.man.changeKind),
+    changeKind: S.man.changeKind || 'unknown',
     changeDesc: S.man.changeDesc.trim() || 'Entered by hand — no notification email was used.',
     subject: 'Manual impact check — ' + S.manRows.filter(r => r.table.trim()).map(r => r.table.trim()).join(', '),
     effectiveDate: S.man.effectiveDate.trim(),
-    pocName: S.man.pocName.trim(), pocEmail: S.man.pocEmail.trim(), pocTeam: S.man.pocTeam.trim(),
+    pocName: S.man.pocName.trim(),
+    pocEmail: S.man.pocEmail.trim(), pocEmails: emailList(S.man.pocEmail),
+    pocTeam: S.man.pocTeam.trim(),
     upstream: S.manRows.filter(r => r.table.trim()).map(r => ({
       table: r.table.trim(),
       attrs: r.attrs.split(',').map(s => s.trim()).filter(Boolean),
@@ -268,7 +358,9 @@ function startManual() {
     extractedBy: 'manual', warnings: [],
   };
   S.emailPreview = null; S.scan = null; S.summary = null; S.savedId = null;
-  goto(2);
+  // Straight to the repository. There is nothing on the review step that was
+  // not just typed on this one.
+  goto(3);
 }
 
 function upload(f) {
@@ -290,7 +382,7 @@ function upload(f) {
     fd.append('file', f);
     const out = await api('/api/read-email?useAI=true', { method: 'POST', body: fd });
     acceptExtract(out);
-  });
+  }, 'Reading the notification…');
 }
 
 function acceptExtract(out) {
@@ -298,7 +390,8 @@ function acceptExtract(out) {
   S.vals = {
     source: out.source || '', changeType: out.changeType || '', changeKind: out.changeKind || 'unknown',
     changeDesc: out.changeDesc || '', subject: out.subject || '', effectiveDate: out.effectiveDate || '',
-    pocName: out.pocName || '', pocEmail: out.pocEmail || '', pocTeam: out.pocTeam || '',
+    pocName: out.pocName || '', pocEmail: out.pocEmail || '', pocEmails: emailList(out.pocEmail),
+    pocTeam: out.pocTeam || '',
     upstream: (out.upstream || []).map(u => ({ table: u.table, attrs: u.attrs || [] })),
     extractedBy: out.extractedBy || 'rules',
     warnings: out.warnings || [], aiNote: out.aiNote || '',
@@ -348,7 +441,13 @@ function step2(root) {
         card.append(el('span', { className: 'badge sm ' + (dl <= 21 ? 'amber' : 'blue'),
           textContent: dl < 0 ? 'date has passed' : `${dl} day${dl === 1 ? '' : 's'} left`, style: 'margin-top:8px' }));
       }
-      if (key === 'pocName' && v.pocEmail) card.append(el('div', { className: 'small muted', textContent: v.pocEmail, style: 'margin-top:5px;overflow-wrap:break-word' }));
+      // Every address, editable, and as many as there are. A notification is
+      // often sent by one person on behalf of a mailbox, and the reply has to
+      // go to both.
+      if (key === 'pocName') {
+        card.append(emailField(v.pocEmail, (raw, found) => { v.pocEmail = raw; v.pocEmails = found; },
+          { hint: 'name@corp.example.com, other@corp.example.com', style: 'margin-top:8px' }));
+      }
     }
     meta.append(card);
   });
@@ -507,14 +606,23 @@ function step3(root) {
     }
   });
 
-  x(root, 'reindex').onclick = () => run(async () => { S.health = await api('/api/reindex', { method: 'POST' }); render(); });
+  const reread = x(root, 'reindex');
+  reread.disabled = S.busy;
+  if (S.busy) reread.textContent = 'Reading the repository…';
+  reread.onclick = () => run(async () => {
+    S.health = await api('/api/reindex', { method: 'POST' });
+    render();
+  }, `Reading every file in ${h.repo.label}…`);
   x(root, 'next').onclick = () => runScan();
-  x(root, 'hint').textContent = repoOk
-    ? `Scanning ${h.repo.label}.`
-    : 'Nothing is indexed, so a scan would find nothing.';
+  x(root, 'next').disabled = S.busy;
+  x(root, 'hint').textContent = S.busy
+    ? 'Reading every file. On a large repository this takes a few seconds — the counts above update when it finishes.'
+    : repoOk
+      ? `Scanning ${h.repo.label}.`
+      : 'Nothing is indexed, so a scan would find nothing.';
   // Both halves matter. Files can be indexed from a folder that has since been
   // moved or deleted, and offering to scan it would be scanning a memory.
-  x(root, 'next').disabled = !repoOk;
+  x(root, 'next').disabled = !repoOk || S.busy;
 }
 
 /* What Ripple is reading now — the same facts either way. */
@@ -657,9 +765,9 @@ function runScan() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ upstream: S.vals.upstream, changeKind: S.vals.changeKind || 'unknown' }),
     });
-    S.summary = null; S.openGroup = 0; S.openRow = null; S.graphTab = 0;
+    S.summary = null; S.openGroup = 'p0'; S.openRow = null; S.graphTab = 0;
     goto(4);
-  });
+  }, 'Searching every file for these names…');
 }
 
 // ── step 4 ────────────────────────────────────────────────────────────────
@@ -668,6 +776,13 @@ function step4(root) {
   if (!sc) { x(root, 'progress').append(el('div', { className: 'note info', textContent: 'No scan yet.' })); return; }
   const [cls, label] = RISK[sc.risk] || RISK.none;
   x(root, 'risk').append(el('span', { className: 'badge ' + cls, textContent: label }));
+  // The line under the title has to be true of the screen underneath it, and
+  // "grouped under the production table" is not true when there is not one.
+  x(root, 'sub').textContent = sc.groups.length
+    ? 'Every finding grouped under the production table it puts at risk.'
+    : (sc.reached || []).length || (sc.other || []).length
+      ? 'Nothing matched your published-table rule. Every table the change does reach is below.'
+      : 'What the change touches in this repository, and what could not be read.';
 
   // What was actually read. Real counts only — the scan has already finished by
   // the time this renders, so there is nothing to animate.
@@ -687,9 +802,10 @@ function step4(root) {
   x(root, 'progress').append(done);
 
   const st = sc.stats;
+  const reached = sc.reached || [], other = sc.other || [];
   const cards = [
-    ['Production tables at risk', st.productionTables, st.productionTables ? 'var(--red)' : 'var(--green)', 'Published by this team'],
-    ['Intermediate tables', st.intermediateTables, '', 'Steps along the way'],
+    ['Production tables at risk', st.productionTables, st.productionTables ? 'var(--red)' : 'var(--green)', 'Matched your published-table rule'],
+    ['Other tables reached', st.tablesReached ?? 0, (st.tablesReached ? 'var(--amber)' : ''), 'The chain ends at these'],
     ['Attributes impacted', st.attributesImpacted, '', 'Of those you confirmed'],
     ['Files to change', st.filesWithImpact, '', `Of ${sc.filesScanned} scanned`],
     ['Breaking usages', st.breakingUsages, st.breakingUsages ? 'var(--amber)' : '', 'Filters, joins, ranking'],
@@ -702,48 +818,129 @@ function step4(root) {
     el('div', { className: 's', textContent: sub }))));
 
   const groups = x(root, 'groups');
-  if (!sc.groups.length) {
+  // The clean result is only ever offered when there is genuinely nothing:
+  // no production table, no other table, and no loose usage anywhere. Anything
+  // less than that and a green tick is the tool lying to your face.
+  if (!sc.groups.length && !reached.length && !other.length) {
     groups.append(el('div', { className: 'note good', style: 'display:flex;align-items:center;gap:14px;padding:18px 22px' },
       el('span', { textContent: '✓', style: 'width:30px;height:30px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0' }),
-      el('div', {}, el('b', { textContent: 'No production table depends on these attributes', style: 'display:block' }),
-        el('div', { style: 'margin-top:3px', textContent: 'Nothing in this repository carries them through to a table this team publishes.' }))));
+      el('div', {}, el('b', { textContent: 'Nothing in this repository uses these attributes', style: 'display:block' }),
+        el('div', { style: 'margin-top:3px', textContent: 'No table is built from them, and no code reads them. Check the list below to confirm the names were the right ones.' }))));
   }
-  sc.groups.forEach((g, gi) => {
-    const card = el('div', { className: 'card clip group' });
-    const open = S.openGroup === gi;
-    const head = el('div', { className: 'ghead' + (open ? ' open' : '') });
-    head.append(
-      el('span', { className: 'tag', textContent: 'Production table' }),
-      el('div', { className: 'mono', textContent: g.prod, style: 'font-size:15px;font-weight:600' }),
-      el('span', { className: 'badge grey', textContent: `${g.rows.length} impact${g.rows.length === 1 ? '' : 's'}` }),
-      el('span', { className: 'small muted', textContent: g.note }),
-      el('span', { className: 'caret', textContent: '›' }));
-    head.onclick = () => { S.openGroup = open ? null : gi; S.openRow = null; render(); };
-    card.append(head);
-    if (open) {
-      const hr = el('div', { className: 'rowhead' });
-      ['Table it lands in', 'Attribute impacted', 'Alias used', 'What the code does', 'Value', ''].forEach(h => hr.append(el('span', { textContent: h })));
-      card.append(hr);
-      g.rows.forEach((r, ri) => {
-        const key = `${gi}-${ri}`, ro = S.openRow === key;
-        const row = el('div', { className: 'row' + (ro ? ' open' : '') });
-        row.append(
-          el('span', { className: 'mono', textContent: r.inter, style: 'font-weight:600;font-size:13px;min-width:0;overflow-wrap:break-word' }),
-          el('span', { className: 'mono', textContent: r.attr, style: 'font-size:13px;font-weight:600;color:var(--blued);min-width:0;overflow-wrap:break-word' }),
-          el('span', {}, el('span', { className: 'chip alias', textContent: r.alias })),
-          el('span', {}, el('span', { className: 'badge sm ' + (r.breaking ? 'red' : 'grey'), textContent: r.logic })),
-          el('span', {}, el('span', { className: 'badge sm ' + (r.mode === 'Direct pull' ? 'blue' : 'violet'), textContent: r.mode })),
-          el('span', { className: 'caret', textContent: '›' }));
-        row.onclick = () => { S.openRow = ro ? null : key; render(); };
-        card.append(row);
-        if (ro) card.append(detailFor(r));
-      });
-    }
-    groups.append(card);
-  });
+  // With nothing on the production list, the first table the change reaches is
+  // the most important thing on the screen, so it opens rather than sitting
+  // shut behind a caret like a footnote.
+  if (!sc.groups.length && reached.length && S.openGroup === 'p0') S.openGroup = 'r0';
+  sc.groups.forEach((g, gi) => groups.append(groupCard(g, `p${gi}`, 'Production table', '')));
 
+  if (reached.length) {
+    // These used to be thrown away. A chain that ends at a table nobody has
+    // told Ripple is published is not a chain that goes nowhere.
+    groups.append(el('div', { className: 'note warn', style: 'margin-top:20px' },
+      el('b', { textContent: `The change reaches ${reached.length} more table${reached.length === 1 ? '' : 's'}, `
+        + `${sc.groups.length ? 'beyond the ones above' : 'none of them on your published list'}. ` }),
+      'Ripple decides which tables are the ones your team publishes from a naming rule — '
+      + `currently ${S.health?.production || 'not set'}. Nothing below matches it, so Ripple `
+      + 'cannot tell you whether anyone outside your team reads these. If they are your published '
+      + 'tables, correct the rule on the settings screen and run the scan again.'));
+    reached.forEach((g, gi) => groups.append(groupCard(g, `r${gi}`, 'Chain ends here', 'background:var(--amber);color:#fff')));
+  }
+
+  if (other.length) {
+    const card = el('div', { className: 'card clip', style: 'margin-top:20px' });
+    card.append(el('div', { className: 'chead' },
+      el('b', { textContent: `${other.length} more usage${other.length === 1 ? '' : 's'} that build no table` })));
+    const p = el('div', { className: 'pad lg' });
+    p.append(el('div', { className: 'prose', textContent:
+      'The attribute is read here, but this code does not write a table Ripple can name — a bare query, or a job whose destination is set somewhere it cannot see. Real usages all the same.' }));
+    other.forEach((r, ri) => {
+      const key = `o${ri}`, ro = S.openRow === key;
+      const line = el('div', { style: 'display:flex;gap:10px;align-items:baseline;margin-top:10px;flex-wrap:wrap;cursor:pointer' },
+        el('span', { className: 'chip mono', textContent: r.file }),
+        el('span', { className: 'badge sm ' + (r.breaking ? 'red' : 'grey'), textContent: r.logic }),
+        el('span', { className: 'small muted', textContent: `on ${r.attr}` }));
+      line.onclick = () => { S.openRow = ro ? null : key; render(); };
+      p.append(line);
+      if (ro) p.append(detailFor(r));
+    });
+    card.append(p);
+    groups.append(card);
+  }
+
+  x(root, 'gaps').innerHTML = '';
+  renderChecks(x(root, 'gaps'), sc);
   renderGaps(x(root, 'gaps'), sc);
   x(root, 'next').onclick = () => goto(5);
+}
+
+/* One production table, or one table a chain ends at. The same rows either
+   way -- what differs is what Ripple is able to claim about the table. */
+function groupCard(g, key, tag, tagStyle) {
+  const card = el('div', { className: 'card clip group' });
+  const open = S.openGroup === key;
+  const head = el('div', { className: 'ghead' + (open ? ' open' : '') });
+  head.append(
+    el('span', { className: 'tag', textContent: tag, style: tagStyle }),
+    el('div', { className: 'mono', textContent: g.prod, style: 'font-size:15px;font-weight:600' }),
+    el('span', { className: 'badge grey', textContent: `${g.rows.length} impact${g.rows.length === 1 ? '' : 's'}` }),
+    el('span', { className: 'small muted', textContent: g.note }),
+    el('span', { className: 'caret', textContent: '›' }));
+  head.onclick = () => { S.openGroup = open ? null : key; S.openRow = null; render(); };
+  card.append(head);
+  if (!open) return card;
+  const hr = el('div', { className: 'rowhead' });
+  ['Table it lands in', 'Attribute impacted', 'Alias used', 'What the code does', 'Value', ''].forEach(h => hr.append(el('span', { textContent: h })));
+  card.append(hr);
+  g.rows.forEach((r, ri) => {
+    const rowKey = `${key}-${ri}`, ro = S.openRow === rowKey;
+    const row = el('div', { className: 'row' + (ro ? ' open' : '') });
+    row.append(
+      el('span', { className: 'mono', textContent: r.inter, style: 'font-weight:600;font-size:13px;min-width:0;overflow-wrap:break-word' }),
+      el('span', { className: 'mono', textContent: r.attr, style: 'font-size:13px;font-weight:600;color:var(--blued);min-width:0;overflow-wrap:break-word' }),
+      el('span', {}, el('span', { className: 'chip alias', textContent: r.alias })),
+      el('span', {}, el('span', { className: 'badge sm ' + (r.breaking ? 'red' : 'grey'), textContent: r.logic })),
+      el('span', {}, el('span', { className: 'badge sm ' + (r.mode === 'Direct pull' ? 'blue' : 'violet'), textContent: r.mode })),
+      el('span', { className: 'caret', textContent: '›' }));
+    row.onclick = () => { S.openRow = ro ? null : rowKey; render(); };
+    card.append(row);
+    if (ro) card.append(detailFor(r));
+  });
+  return card;
+}
+
+/* Attribute by attribute: what was looked for and what came back.
+   "It said no impact and I have no way to check" is answered here rather than
+   by asking anyone to trust the headline. An attribute that is not written
+   down anywhere in the repository looks nothing like one that is used in nine
+   files, and both used to end up behind the same green tick. */
+function renderChecks(box, sc) {
+  const rows = sc.attributes || [];
+  if (!rows.length) return;
+  const card = el('div', { className: 'card clip', style: 'margin-top:20px' });
+  card.append(el('div', { className: 'chead' },
+    el('b', { textContent: 'Every attribute you asked about, and what came back' })));
+  const p = el('div', { className: 'pad lg' });
+  p.append(el('div', { className: 'prose', textContent:
+    `Searched ${sc.filesScanned} file${sc.filesScanned === 1 ? '' : 's'}. This is how to check the result: `
+    + 'an attribute nobody writes down anywhere is the usual reason a scan comes back clean.' }));
+  rows.forEach(a => {
+    const used = a.found > 0;
+    const badge = a.reachesProduction
+      ? ['red', 'reaches a published table']
+      : used
+        ? ['amber', `used in ${a.files} file${a.files === 1 ? '' : 's'}`]
+        : a.mentionedIn
+          ? ['grey', `named in ${a.mentionedIn} file${a.mentionedIn === 1 ? '' : 's'}, never read from`]
+          : ['grey', 'this name is not in the repository at all'];
+    p.append(el('div', { style: 'display:flex;gap:10px;align-items:baseline;margin-top:10px;flex-wrap:wrap' },
+      el('span', { className: 'chip mono', textContent: `${a.table}.${a.attr}` }),
+      el('span', { className: 'badge sm ' + badge[0], textContent: badge[1] }),
+      (a.endsAt || []).length
+        ? el('span', { className: 'small muted', textContent: 'ends at ' + a.endsAt.join(', ') })
+        : null));
+  });
+  card.append(p);
+  box.append(card);
 }
 
 /* The address of a finding in the connected repository, or nothing at all.
@@ -792,7 +989,6 @@ function detailFor(r) {
 /* The honest half of the report: what Ripple could NOT account for. Styled to
    stand out, never to shrink — a clean finding list is only worth what was read. */
 function renderGaps(box, sc) {
-  box.innerHTML = '';
   if (sc.unreadable?.length) {
     const card = el('div', { className: 'card clip', style: 'margin-top:20px;border-color:var(--amberln)' });
     card.append(el('div', { className: 'chead', style: 'background:var(--amberbg);border-bottom-color:var(--amberln)' },
@@ -800,16 +996,35 @@ function renderGaps(box, sc) {
       el('b', { textContent: `${sc.unreadable.length} file${sc.unreadable.length === 1 ? '' : 's'} Ripple could not read` })));
     const p = el('div', { className: 'pad lg' });
     p.append(el('div', { className: 'prose', textContent: 'These are not covered by the findings above. A clean result is only as good as what could be read.' }));
-    sc.unreadable.forEach(u => p.append(el('div', { style: 'display:flex;gap:10px;align-items:baseline;margin-top:10px;flex-wrap:wrap' },
-      el('span', { className: 'chip mono', textContent: u.file }),
-      el('span', { className: 'small muted',
-        textContent: u.reason + (u.places > 1 ? ` — in ${u.places} places` : '') }))));
+    // The point of this list is that somebody opens those files and checks
+    // them, so it gives them the line to open at and the line itself. "Could
+    // not parse" sends a person hunting through a thousand-line file.
+    sc.unreadable.forEach(u => {
+      const item = el('div', { style: 'margin-top:14px' });
+      item.append(el('div', { style: 'display:flex;gap:10px;align-items:baseline;flex-wrap:wrap' },
+        el('span', { className: 'chip mono', textContent: u.file }),
+        el('span', { className: 'small muted',
+          textContent: u.reason + (u.places > 1 ? ` — in ${u.places} places` : '') })));
+      if (u.snippet) {
+        item.append(el('div', { className: 'mono small',
+          style: 'margin-top:6px;padding:8px 12px;background:var(--amberbg);border:1px solid var(--amberln);'
+            + 'border-radius:6px;overflow-x:auto;white-space:pre' },
+          `line ${u.line} · ${u.snippet}`));
+      }
+      if (u.hint) {
+        item.append(el('div', { className: 'small muted', style: 'margin-top:6px;line-height:1.55', textContent: u.hint }));
+      }
+      p.append(item);
+    });
     card.append(p);
     box.append(card);
   }
   if (sc.mentionsOnly?.length) {
     const card = el('div', { className: 'card pad lg', style: 'margin-top:16px' });
-    card.append(el('span', { className: 'lbl', textContent: `${sc.mentionsOnly.length} file${sc.mentionsOnly.length === 1 ? '' : 's'} mention the name but carry it nowhere` }));
+    card.append(el('span', { className: 'lbl',
+      textContent: sc.mentionsOnly.length === 1
+        ? '1 file mentions the name but carries it nowhere'
+        : `${sc.mentionsOnly.length} files mention the name but carry it nowhere` }));
     const chips = el('div', { className: 'chips', style: 'margin-top:10px' });
     sc.mentionsOnly.forEach(m => chips.append(el('span', { className: 'chip mono', textContent: m.file })));
     card.append(chips);
@@ -825,7 +1040,11 @@ function step5(root) {
     map.append(el('div', { className: 'note good', style: 'max-width:600px;padding:22px 26px' },
       el('b', { textContent: 'No downstream lineage found', style: 'display:block;font-size:15px' }),
       el('div', { style: 'margin-top:6px', textContent: 'These attributes do not feed any table this team publishes.' })));
-    x(root, 'next').onclick = () => goto(6);
+    // The summary is written here, not on the summary step. Sending someone
+    // straight on to step 6 left that screen with nothing to draw and two
+    // buttons that did nothing -- which only ever happened on a clean result,
+    // exactly when somebody most wants to get to the reply.
+    x(root, 'next').onclick = () => makeSummary();
     return;
   }
   const gi = Math.min(S.graphTab, gs.length - 1);
@@ -838,6 +1057,8 @@ function step5(root) {
     tabs.append(b);
   });
   const g = gs[gi];
+  const ends = g.endBranches || [];
+  const all = g.branches.concat(ends);
   const card = el('div', { className: 'card pad lg' });
   const row = el('div', { className: 'maprow' });
   const src = el('div', { className: 'mapsrc' });
@@ -845,9 +1066,10 @@ function step5(root) {
     el('div', { className: 'k', textContent: 'Upstream source' }),
     el('div', { className: 'tb', textContent: g.table }),
     el('div', { className: 'at', textContent: g.attr }),
-    el('div', { className: 'ct', textContent: `${g.branches.length} branch${g.branches.length === 1 ? '' : 'es'} to production` })));
+    el('div', { className: 'ct', textContent: `${all.length} branch${all.length === 1 ? '' : 'es'} followed`
+      + (g.branches.length ? ` · ${g.branches.length} to production` : '') })));
   const branches = el('div', { className: 'branches' });
-  g.branches.forEach(br => {
+  all.forEach(br => {
     const line = el('div', { className: 'branch' });
     br.forEach((n, i) => {
       line.append(nodeEl(n));
@@ -858,6 +1080,13 @@ function step5(root) {
   row.append(src, branches);
   card.append(row);
   map.append(card);
+  if (ends.length) {
+    map.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
+      el('b', { textContent: `${ends.length} of these branch${ends.length === 1 ? ' ends' : 'es end'} at a table `
+        + 'that does not match your published-table rule. ' }),
+      'They are drawn because the change reaches them either way — Ripple simply cannot say '
+      + 'whether anyone outside your team reads them.'));
+  }
 
   const legend = el('div', { className: 'legend' });
   [['var(--redbg)', 'var(--redln)', 'Production table'],
@@ -891,11 +1120,28 @@ function makeSummary() {
     });
     S.summary = out.summary; S.reply = out.reply; S.aiNote = out.aiNote || '';
     goto(6);
-  });
+  }, 'Writing the summary…');
 }
 
 function step6(root) {
-  const s = S.summary; if (!s) return;
+  const s = S.summary;
+  // A screen with nothing on it and two buttons that do nothing is the worst
+  // way to say "the summary has not been written yet". If we ever arrive here
+  // without one, say so and offer the one button that fixes it.
+  if (!s) {
+    x(root, 'sub').textContent = 'The summary has not been written yet.';
+    const b = x(root, 'body');
+    const go = el('button', { className: 'pri', textContent: 'Write the summary now' });
+    go.onclick = () => makeSummary();
+    b.append(el('div', { className: 'note info', style: 'max-width:620px' },
+      el('b', { textContent: 'Nothing to show yet. ', style: 'display:block' }),
+      'The summary is written from the findings when you leave the dependency map. '
+      + 'It has not been written for this scan.'), el('div', { style: 'margin-top:14px' }, go));
+    x(root, 'next').onclick = () => makeSummary();
+    x(root, 'save').disabled = true;
+    x(root, 'saved').textContent = 'Nothing to save until the summary is written.';
+    return;
+  }
   const [cls, label] = RISK[S.scan.risk] || RISK.none;
   x(root, 'sub').textContent =
     //<online-only>
@@ -967,12 +1213,15 @@ function step6(root) {
   // same breath rather than letting the word stand on its own. This sits in a
   // row between two buttons, so it stays one short line -- the full
   // explanation is on the Past analyses screen.
-  x(root, 'saved').textContent = S.savedId
-    ? `Saved as analysis #${S.savedId}.`
-      + (S.health?.limits?.historyKept === false
-        ? ' This host wipes saved analyses — copy out anything you need to keep.'
-        : '')
-    : '';
+  const saved = x(root, 'saved');
+  saved.textContent = '';
+  if (S.savedId) {
+    saved.append(el('span', { className: 'badge sm green', textContent: `Saved as analysis #${S.savedId}` }));
+    if (S.health?.limits?.historyKept === false) {
+      saved.append(el('span', { className: 'small faint',
+        textContent: ' This host wipes saved analyses — copy out anything you need to keep.' }));
+    }
+  }
   x(root, 'save').onclick = () => run(async () => {
     const out = await api('/api/history', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -981,7 +1230,7 @@ function step6(root) {
     S.savedId = out.id || null;
     if (!out.saved) alert('History is not available here: ' + (out.reason || ''));
     render();
-  });
+  }, 'Saving this analysis…');
 }
 
 // ── step 7 ────────────────────────────────────────────────────────────────
@@ -992,11 +1241,17 @@ function step7(root) {
   const ol = x(root, 'acts');
   (S.summary?.actions || []).forEach(a => ol.append(el('li', {}, a)));
 
-  // who the reply is for — real values only, and nothing here sends anything
+  // who the reply is for — real values only, and nothing here sends anything.
+  // Every address, one chip each, so a list of four is not one long unreadable
+  // string that hides a typo in the middle of it.
   const to = x(root, 'to');
+  const addresses = S.vals.pocEmails?.length ? S.vals.pocEmails : emailList(S.vals.pocEmail);
   to.append(el('span', { className: 'small', textContent: 'To', style: 'font-weight:700;color:var(--mute);flex-shrink:0' }));
-  to.append(el('span', { className: 'chip',
-    textContent: [S.vals.pocName, S.vals.pocEmail].filter(Boolean).join(' · ') || 'No contact was given' }));
+  if (S.vals.pocName) to.append(el('span', { className: 'chip', textContent: S.vals.pocName }));
+  addresses.forEach(a => to.append(el('span', { className: 'chip mono', textContent: a })));
+  if (!S.vals.pocName && !addresses.length) {
+    to.append(el('span', { className: 'chip', textContent: 'No contact was given' }));
+  }
   if (S.vals.pocTeam) to.append(el('span', { className: 'badge sm blue', textContent: S.vals.pocTeam }));
 
   if (S.scan) {
@@ -1012,12 +1267,17 @@ function step7(root) {
   }
 
   x(root, 'copy').onclick = async () => {
-    await navigator.clipboard.writeText(`Subject: ${r.subject}\n\n${r.body}`);
-    x(root, 'copied').textContent = 'Copied — paste it into Outlook.';
+    // The addresses go with it. Copying a reply and then having to gather the
+    // recipients again by hand is half a job.
+    const head = addresses.length ? `To: ${addresses.join('; ')}\n` : '';
+    await navigator.clipboard.writeText(`${head}Subject: ${r.subject}\n\n${r.body}`);
+    x(root, 'copied').textContent = addresses.length
+      ? `Copied, with ${addresses.length} recipient${addresses.length === 1 ? '' : 's'} — paste it into Outlook.`
+      : 'Copied — paste it into Outlook.';
   };
   x(root, 'restart').onclick = () => {
     Object.assign(S, { step: 1, maxStep: 1, vals: null, scan: null, summary: null, reply: null,
-      savedId: null, emailPreview: null, openGroup: 0, openRow: null, graphTab: 0 });
+      savedId: null, emailPreview: null, openGroup: 'p0', openRow: null, graphTab: 0 });
     render();
   };
 }
@@ -1092,14 +1352,24 @@ function settingsView(root) {
   left.append(el('span', { className: 'lbl', textContent: 'Repository' }));
   [['Folder', h.repo.path], ['Label', h.repo.label], ['Files indexed', String(h.repo.files)],
    ['Statements understood', String(h.repo.statements)], ['Files unreadable', String(h.repo.unreadable)],
-   ['SQL dialect', h.sqlDialect], ['Renames followed', `${h.maxHops} hops`]].forEach(([k, v]) =>
+   ['SQL dialect', h.sqlDialect], ['Renames followed', `${h.maxHops} hops`],
+   ['Tables you publish', h.production || 'not set']].forEach(([k, v]) =>
     left.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },
       el('span', { className: 'small muted', textContent: k, style: 'width:150px;flex-shrink:0' }),
       el('span', { className: 'small', textContent: v, style: 'font-weight:600;word-break:break-all' }))));
-  left.append(el('div', { className: 'note info', style: 'margin-top:18px' },
+  // The one setting on this screen that can turn a real impact into a clean
+  // result, so it is explained rather than listed.
+  left.append(el('div', { className: 'note warn', style: 'margin-top:18px' },
+    el('b', { textContent: 'What "tables you publish" decides. ' }),
+    'A finding counts as production impact only if the table it ends at matches that rule. '
+    + 'If your published tables are not named that way, Ripple will still list every table the '
+    + 'change reaches — but it will not call any of them production, and the headline will read '
+    + 'far calmer than the truth.'));
+  left.append(el('div', { className: 'note info', style: 'margin-top:14px' },
     'Change any of these with environment variables — ',
     el('span', { className: 'mono', textContent: 'RIPPLE_REPO' }), ', ',
     el('span', { className: 'mono', textContent: 'RIPPLE_SQL_DIALECT' }), ', ',
+    el('span', { className: 'mono', textContent: 'RIPPLE_PROD_TABLES' }), ', ',
     el('span', { className: 'mono', textContent: 'GROQ_API_KEY' }), '. See the README.'));
 
   grid.append(left, aiCard(h));
@@ -1206,18 +1476,26 @@ function aiCard(h) {
 // ── plumbing ──────────────────────────────────────────────────────────────
 function goto(n) { S.step = n; S.maxStep = Math.max(S.maxStep, n); S.view = 'wizard'; render(); }
 
-function run(fn) {
-  S.busy = true; render();
+/* Everything slow goes through here, and everything slow says what it is doing.
+   Reading a repository takes seconds on a big one, and a spinning dot in the
+   far corner is not an answer -- numbers that change by themselves a while
+   later read as a page that did something on its own. */
+function run(fn, what) {
+  S.busy = true; S.busyWhat = what || 'Working…'; render();
   Promise.resolve(fn()).catch(e => {
     alert('Something went wrong: ' + e.message);
-  }).finally(() => { S.busy = false; render(); });
+  }).finally(() => { S.busy = false; S.busyWhat = ''; render(); });
 }
 
 function render() {
   renderSteps(); renderStatus();
   const view = $('#view'); view.innerHTML = '';
   $('#hRight').innerHTML = '';
-  if (S.busy) $('#hRight').append(el('span', { className: 'spin' }));
+  if (S.busy) {
+    $('#hRight').append(el('span', { className: 'spin' }),
+      el('span', { className: 'small', textContent: S.busyWhat,
+        style: 'margin-left:9px;font-weight:600;color:var(--blued)' }));
+  }
 
   if (S.view === 'history') {
     setHeader('Past analyses', S.health?.limits?.historyKept === false
@@ -1226,7 +1504,8 @@ function render() {
   }
   if (S.view === 'settings') { setHeader('Settings & checks', 'Connections and health'); settingsView(view); return; }
 
-  setHeader(STEPS[S.step - 1][0], `Step ${S.step} of ${STEPS.length}`);
+  const list = stepNumbers();
+  setHeader(STEPS[S.step - 1][0], `Step ${list.indexOf(S.step) + 1} of ${list.length}`);
   const tpl = $(`#t-step${S.step}`);
   if (!tpl) return;
   const node = tpl.content.cloneNode(true);
