@@ -213,15 +213,23 @@ prints, Phase 0 is done and you never think about it again.
 
 ## What is already known about the laptop, as of 13 August 2026
 
-- **GitHub opens in the browser.** So **Route B works, and it is your route**: five
-  minutes, one download, nothing carried from home, nobody's permission needed.
-- **Files can be moved from the home machine online** — OneDrive, Teams, or emailing
-  them to yourself. So Routes C and D are there as a fallback if Route B disappoints.
-- **Whether there is an internal mirror is not yet known.** That is Route A below,
-  it takes about a minute, and it is worth doing first for one reason only: if there
-  is a mirror, you should be building with the other kit entirely.
+**There is an internal mirror and it works, so this kit is now the backup rather
+than the plan.** It was found at `artifactory.aexp.com`, and everything Ripple
+needs installs from it. **Build with BUILD-KIT.md.** Come back here only if that
+mirror is taken away, or refuses something that cannot be worked around.
 
-So: spend one minute on Route A, then go to Route B.
+One thing it did refuse, and it is worth knowing before you conclude the mirror is
+useless: a single package came back with a 403 because that version had been
+published the day before, and a mirror will normally hold back anything that new
+until it has been scanned. Everything around it downloaded perfectly. Pinning that
+one package to an older release fixed it — the same trick will fix the next one.
+`sqlglot` 25.24.0 is from September 2024, so it is nowhere near new enough for any
+rule of that kind to touch it.
+
+If the mirror does disappear, the way in is Phase 0 below and the route is B:
+GitHub opens in that browser, so it takes one download and about five minutes,
+with nothing carried from home. Files can also be moved across online — OneDrive,
+Teams, or email — so Routes C and D work as well.
 
 ---
 
