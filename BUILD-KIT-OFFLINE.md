@@ -211,6 +211,20 @@ prints, Phase 0 is done and you never think about it again.
 
 ---
 
+## What is already known about the laptop, as of 13 August 2026
+
+- **GitHub opens in the browser.** So **Route B works, and it is your route**: five
+  minutes, one download, nothing carried from home, nobody's permission needed.
+- **Files can be moved from the home machine online** — OneDrive, Teams, or emailing
+  them to yourself. So Routes C and D are there as a fallback if Route B disappoints.
+- **Whether there is an internal mirror is not yet known.** That is Route A below,
+  it takes about a minute, and it is worth doing first for one reason only: if there
+  is a mirror, you should be building with the other kit entirely.
+
+So: spend one minute on Route A, then go to Route B.
+
+---
+
 ## Route A — an internal company mirror. **Try this first, because it changes which kit you use.**
 
 Many companies run their own copy of the package site inside the network, so that
