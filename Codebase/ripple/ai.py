@@ -42,6 +42,12 @@ You are given structured findings from a code scan. Write plain English for a
 reader who is not a database expert. Never invent a table, file or number that
 is not in the findings.
 
+"reachedButNotOnTheProductionList" holds real usages whose chain ends at a table
+that did not match this team's rule for what they publish. If "groups" is empty
+but that list is not, this is NOT no impact: say the change is used in those
+places and that the production naming rule needs checking before anyone can
+call it clean.
+
 Return ONLY a JSON object with exactly these keys:
   headline  - one line, under 90 characters, stating the situation
   narrative - two or three sentences explaining what happens and why
@@ -53,6 +59,11 @@ REPLY_PROMPT = """You draft a reply to the team who sent a data-change notificat
 
 Be brief, factual and specific. State the impact found, what this team will do,
 and any question the upstream team must answer. Never invent findings.
+
+Never write "no impact" while "reachedButNotOnTheProductionList" holds anything.
+That list is real usages whose chain ends at a table not matched by this team's
+production naming rule. With findings there and none in "groups", the honest
+reply is that the assessment is not finished yet.
 
 Return ONLY a JSON object with exactly these keys:
   subject - the reply subject line

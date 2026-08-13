@@ -41,11 +41,24 @@ DIALECT_CHOICES: tuple[dict[str, str], ...] = (
 )
 
 DEFAULT_DIALECT = "bigquery"
+
+
+def default_production() -> str:
+    from ripple.config import DEFAULT_PRODUCTION
+
+    return ", ".join(DEFAULT_PRODUCTION)
+
+
 DEFAULTS: dict[str, Any] = {
     "repoPath": "",
     "repoLabel": "",
     "sqlDialect": DEFAULT_DIALECT,
     "maxHops": 4,
+    # Which table names are the ones this team publishes. Online this is an
+    # environment variable set by whoever deploys Ripple. Offline there is
+    # nobody to set one, and leaving it at _PROD on a repository that names
+    # nothing _PROD is what turns a real impact into a confident "no impact".
+    "prodTables": "_PROD, _PRD, _PUBLISHED",
 }
 
 
@@ -81,6 +94,8 @@ def load() -> dict[str, Any]:
     if not valid_dialect(str(out["sqlDialect"])):
         out["sqlDialect"] = DEFAULT_DIALECT
     out["maxHops"] = max(1, min(8, int(out["maxHops"] or 4)))
+    if not str(out["prodTables"]).strip():
+        out["prodTables"] = default_production()
     return out
 
 
@@ -96,6 +111,10 @@ def save(values: dict[str, Any]) -> dict[str, Any]:
     if not valid_dialect(str(keep["sqlDialect"])):
         keep["sqlDialect"] = DEFAULT_DIALECT
     keep["maxHops"] = max(1, min(8, int(keep["maxHops"] or 4)))
+    # An empty box would mean "no table is ever production", which would report
+    # every repository as clean. Falling back to the default is the only safe
+    # reading of an empty box here.
+    keep["prodTables"] = str(keep["prodTables"] or "").strip() or default_production()
     path = paths.settings_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(keep, indent=2) + "\n", encoding="utf-8")
@@ -123,13 +142,15 @@ def apply(values: dict[str, Any]) -> None:
     key, and no serverless limits, because this runs on a real machine with a
     real disk.
     """
-    from ripple.config import settings
+    from ripple.config import DEFAULT_PRODUCTION, parse_production_rule, settings
 
     settings.repo_path = Path(str(values.get("repoPath") or ""))
     settings.repo_label = str(values.get("repoLabel") or "") or folder_label(settings.repo_path)
     settings.repo_branch = git_branch(settings.repo_path)
     settings.sql_dialect = str(values.get("sqlDialect") or "")
     settings.max_hops = int(values.get("maxHops") or 4)
+    settings.production_patterns = (parse_production_rule(str(values.get("prodTables") or ""))
+                                    or DEFAULT_PRODUCTION)
     settings.db_path = paths.history_file()
     settings.serverless = False
     settings.repo_source = "folder"

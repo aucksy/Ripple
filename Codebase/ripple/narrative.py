@@ -24,13 +24,9 @@ def days_until(iso: str) -> int | None:
         return None
 
 
-def summarise(scan: dict, vals: dict) -> dict:
-    stats = scan.get("stats", {})
-    groups = scan.get("groups", [])
-    unreadable = scan.get("unreadable", [])
-    prod_names = [g["prod"] for g in groups]
-    # A finding upstream of two production tables appears in both groups; count
-    # and list it once, or the actions read like a stutter.
+def _unique(groups: list[dict]) -> list[dict]:
+    """Rows across groups, listed once. A finding upstream of two tables appears
+    in both groups; counting it twice makes the actions read like a stutter."""
     rows, seen = [], set()
     for g in groups:
         for r in g["rows"]:
@@ -38,6 +34,22 @@ def summarise(scan: dict, vals: dict) -> dict:
             if k not in seen:
                 seen.add(k)
                 rows.append(r)
+    return rows
+
+
+def summarise(scan: dict, vals: dict) -> dict:
+    stats = scan.get("stats", {})
+    groups = scan.get("groups", [])
+    # Chains that end somewhere that is not on the production list, and usages
+    # in code that builds no table at all. Both are real usages of the
+    # attribute, and saying "no impact" while holding them would be a lie the
+    # person then forwards to the upstream team in writing.
+    reached = scan.get("reached", [])
+    other = scan.get("other", [])
+    unreadable = scan.get("unreadable", [])
+    prod_names = [g["prod"] for g in groups]
+    rows = _unique(groups)
+    elsewhere = _unique(reached) + other
     breaking = [r for r in rows if r.get("breaking")]
     no_fix = [r for r in rows if r.get("noLocalFix")]
     attrs = ", ".join(
@@ -45,7 +57,31 @@ def summarise(scan: dict, vals: dict) -> dict:
     ) or "the changed attributes"
     when = vals.get("effectiveLabel") or "the effective date"
 
-    if not groups:
+    if not groups and elsewhere:
+        # Found, and consumed -- but nothing it feeds is on the list of tables
+        # this team publishes. That is either a genuinely internal chain or a
+        # production naming rule that does not match this repository, and only
+        # a person can tell which. So the wording says exactly that.
+        end_names = [g["prod"] for g in reached]
+        headline = (f"{_plural(len(elsewhere), 'usage')} found - none of them reaching "
+                    f"a table on your published list")
+        narrative = (
+            f"{attrs} is used in {_plural(len({r.get('file') for r in elsewhere}), 'file')} "
+            f"of the {scan.get('filesScanned', 0)} scanned. "
+            + (f"Those chains end at {', '.join(end_names)}. " if end_names else "")
+            + "None of those names match the rule Ripple has been given for a table this "
+              "team publishes, so this is not a clean result - it is an unfinished one. "
+              "Check the rule on the settings screen before replying."
+        )
+        bullets = [f"{r['inter']} - {r['logic'].lower()} on {r['alias']}" for r in elsewhere[:4]]
+        bullets.append("Nothing here matched the production naming rule, so Ripple cannot say "
+                       "whether these tables are ones anybody outside the team reads.")
+        actions = [
+            "Check the production table rule on the settings screen against how your tables "
+            "are really named, then run the scan again.",
+            "Until then, treat the tables listed above as impacted.",
+        ]
+    elif not groups:
         headline = "No impact - nothing in this repository consumes the attribute"
         narrative = (
             f"The scan read {stats.get('filesWithImpact', 0) or 0} of "
@@ -113,14 +149,31 @@ def summarise(scan: dict, vals: dict) -> dict:
 
 def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
     groups = scan.get("groups", [])
+    reached = scan.get("reached", [])
+    other = scan.get("other", [])
     rows = [r for g in groups for r in g["rows"]]
+    elsewhere = _unique(reached) + other
     no_fix = [r for r in rows if r.get("noLocalFix")]
     poc = vals.get("pocName") or "there"
     first = poc.split()[0] if poc and poc != "there" else "there"
     attrs = ", ".join(a for u in vals.get("upstream", []) for a in u.get("attrs", []))
     subject_base = vals.get("subject") or f"{attrs} change"
 
-    if not groups:
+    if not groups and elsewhere:
+        # This draft is a letter somebody sends. It must never say "no impact"
+        # while the analysis behind it is holding a list of usages.
+        end_names = ", ".join(g["prod"] for g in reached) or "tables in our own pipeline"
+        subject = f"RE: {subject_base} - assessment in progress"
+        body = (
+            f"Hi {first},\n\n"
+            f"We have run our impact analysis and are still confirming the result.\n\n"
+            f"{attrs} is used in {_plural(len({r.get('file') for r in elsewhere}), 'file')} "
+            f"in our repository, feeding {end_names}. We are confirming which of those are "
+            f"published outside our team before we can tell you whether this is impacting.\n\n"
+            f"We will come back to you with a firm answer before the effective date.\n\n"
+            f"Thanks,\nData Engineering"
+        )
+    elif not groups:
         subject = f"RE: {subject_base} - no impact"
         body = (
             f"Hi {first},\n\n"

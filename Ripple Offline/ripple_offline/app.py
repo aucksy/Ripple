@@ -113,6 +113,10 @@ def _health() -> dict:
         # empty string, and the settings screen has to be able to select it.
         "sqlDialectId": settings.sql_dialect,
         "maxHops": settings.max_hops,
+        # Which table names count as the ones this team publishes. On screen so
+        # that "no production table is impacted" can be checked rather than
+        # believed -- it is only ever as true as this rule is.
+        "production": settings.production_rule(),
     }
 
 
@@ -155,6 +159,7 @@ class SettingsIn(BaseModel):
     repoPath: str = ""
     sqlDialect: str = prefs.DEFAULT_DIALECT
     maxHops: int = 4
+    prodTables: str = ""
 
 
 # ── routes ─────────────────────────────────────────────────────────────────
@@ -224,7 +229,8 @@ def save_settings(payload: SettingsIn) -> dict:
         raise HTTPException(status_code=400, detail=verdict["message"])
     try:
         saved = prefs.save({"repoPath": payload.repoPath, "repoLabel": "",
-                            "sqlDialect": payload.sqlDialect, "maxHops": payload.maxHops})
+                            "sqlDialect": payload.sqlDialect, "maxHops": payload.maxHops,
+                            "prodTables": payload.prodTables})
     except OSError as exc:
         # Ripple keeps its settings beside itself. Somewhere like Program Files,
         # or a network share it was opened from, may not allow that -- and

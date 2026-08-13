@@ -83,6 +83,14 @@ class Finding:
 class ScanResult:
     attributes: list[dict] = field(default_factory=list)
     groups: list[dict] = field(default_factory=list)
+    # Chains that end somewhere Ripple has not been told is a table this team
+    # publishes. These used to be thrown away, which meant a real, breaking
+    # impact could be shown as a clean result purely because the tables are not
+    # named _PROD. They are reported, and labelled for what they are.
+    reached: list[dict] = field(default_factory=list)
+    # Usages in code that builds no table Ripple can name -- a bare SELECT, a
+    # view it could not follow. Still real usages of the attribute.
+    other: list[dict] = field(default_factory=list)
     graphs: list[dict] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     unreadable: list[dict] = field(default_factory=list)
@@ -95,6 +103,8 @@ class ScanResult:
         return {
             "attributes": self.attributes,
             "groups": self.groups,
+            "reached": self.reached,
+            "other": self.other,
             "graphs": self.graphs,
             "unreadable": self.unreadable,
             "mentionsOnly": self.mentions_only,
@@ -111,8 +121,13 @@ class ScanResult:
         inter = {t for t in inter if t and t not in prod}
         return {
             "productionTables": len(self.groups),
+            "tablesReached": len(self.reached),
             "intermediateTables": len(inter),
-            "attributesImpacted": len({f.source_column for f in self.findings}),
+            # Counted over the attributes that were actually confirmed, not over
+            # every column name a finding touches -- a column renamed twice on
+            # the way down is one attribute, and the card says "of those you
+            # confirmed", so it has to be true of that number.
+            "attributesImpacted": len([a for a in self.attributes if a.get("found")]),
             "filesWithImpact": len({f.file for f in self.findings}),
             "breakingUsages": len([f for f in self.findings if f.breaking]),
             "couldNotRead": len(self.unreadable),
@@ -155,21 +170,26 @@ def trace(
     findings_by_key: dict[tuple, Finding] = {}
     # production table -> ordered findings that lead to it
     prod_groups: dict[str, list[Finding]] = {}
+    # the same, for chains that end at a table nothing further is built from
+    end_groups: dict[str, list[Finding]] = {}
 
     for up in upstream:
         table = up["table"]
         for attr in up.get("attrs") or []:
             branches: list[list[dict]] = []
+            end_branches: list[list[dict]] = []
             attr_findings: list[Finding] = []
 
             def walk(cur_table: str, cur_col: str, hop: int, path: list[dict],
-                     chain: list[Finding], seen: set) -> None:
+                     chain: list[Finding], seen: set) -> bool:
+                """Follow the column onwards. True if anything was recorded."""
                 if hop >= cfg.max_hops:
-                    return
+                    return False
                 key = (cur_table.upper(), cur_col.upper())
                 if key in seen:
-                    return
+                    return False
                 seen = seen | {key}
+                recorded = False
 
                 for stmt in parsed.reading(cur_table):
                     us = usages_of(stmt, cur_col)
@@ -226,24 +246,54 @@ def trace(
                         branch = path + [node]
                         if branch not in branches:
                             branches.append(branch)
-                        bucket = prod_groups.setdefault(tgt, [])
-                        for cf in new_chain:
-                            if cf not in bucket:
-                                bucket.append(cf)
+                        _collect(prod_groups, tgt, new_chain)
+                        recorded = True
+                        # And keep going. One published table feeding another is
+                        # exactly how a change spreads, and stopping at the first
+                        # one under-counts the number this whole tool is judged
+                        # on -- while showing a shorter chain than the real one.
+                        walk(tgt, primary.alias or cur_col, hop + 1, path + [node],
+                             new_chain, seen)
                         continue
-                    walk(tgt, primary.alias or cur_col, hop + 1, path + [node], new_chain, seen)
+                    if walk(tgt, primary.alias or cur_col, hop + 1, path + [node],
+                            new_chain, seen):
+                        recorded = True
+                    else:
+                        # Nothing further is built from this table, so the trail
+                        # ends here. Recorded rather than dropped: an end that
+                        # does not happen to match the production naming rule is
+                        # still a table somebody has to look at.
+                        branch = path + [node]
+                        if branch not in end_branches:
+                            end_branches.append(branch)
+                        _collect(end_groups, tgt, new_chain)
+                        recorded = True
+                return recorded
 
             walk(table, attr, 0, [], [], set())
 
+            # A chain that carries on past a published table is drawn once, at
+            # its full length. The shorter version of it is the same chain with
+            # the end cut off, and drawing both reads as two findings.
+            branches = _longest_only(branches)
+            end_branches = _longest_only(end_branches)
+
             res.findings.extend([f for f in attr_findings if f not in res.findings])
-            if branches:
-                graphs.append({"attr": attr, "table": table, "branches": branches})
+            if branches or end_branches:
+                graphs.append({"attr": attr, "table": table,
+                               "branches": branches, "endBranches": end_branches})
             res.attributes.append(
                 {
                     "table": table,
                     "attr": attr,
                     "found": len(attr_findings),
+                    "files": len({f.file for f in attr_findings}),
+                    # How many files so much as write the name down. Zero here
+                    # is the answer to "why did it find nothing?" -- the name is
+                    # not in this repository at all.
+                    "mentionedIn": len({m.file for m in index.search([attr])}),
                     "reachesProduction": bool(branches),
+                    "endsAt": sorted({b[-1]["name"] for b in end_branches}),
                 }
             )
 
@@ -256,6 +306,17 @@ def trace(
         }
         for prod, fs in sorted(prod_groups.items())
     ]
+    placed = {f.key() for fs in prod_groups.values() for f in fs}
+    res.reached = [
+        {
+            "prod": table,
+            "note": "Last table in the chain - not matched by your production naming rule",
+            "rows": [_finding_row(f) for f in fs],
+        }
+        for table, fs in sorted(end_groups.items())
+    ]
+    placed |= {f.key() for fs in end_groups.values() for f in fs}
+    res.other = [_finding_row(f) for f in res.findings if f.key() not in placed]
 
     # Honesty: anything the search matched but the reader could not turn into a
     # finding is surfaced, never quietly dropped.
@@ -278,6 +339,20 @@ def trace(
 
     res.risk = _risk_of(res)
     return res
+
+
+def _longest_only(branches: list[list[dict]]) -> list[list[dict]]:
+    """Drop any branch that is just the start of a longer one already listed."""
+    return [b for b in branches
+            if not any(other is not b and len(other) > len(b) and other[:len(b)] == b
+                       for other in branches)]
+
+
+def _collect(groups: dict[str, list[Finding]], table: str, chain: list[Finding]) -> None:
+    bucket = groups.setdefault(table, [])
+    for f in chain:
+        if f not in bucket:
+            bucket.append(f)
 
 
 def _finding_row(f: Finding) -> dict:

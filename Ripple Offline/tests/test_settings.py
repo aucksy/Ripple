@@ -65,6 +65,35 @@ def test_the_label_defaults_to_the_folder_name(clean_home):
     assert saved["repoLabel"] == "mockrepo"
 
 
+# ── which tables count as the ones this team publishes ─────────────────────
+def test_the_published_table_rule_is_asked_for_and_remembered(clean_home):
+    """Online this is an environment variable. Offline there is nobody to set
+    one, and leaving it at _PROD on a repository that names nothing _PROD is
+    what turns a real impact into a confident "no impact"."""
+    prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4,
+                "prodTables": "_UMDL, _GDI"})
+    assert prefs.load()["prodTables"] == "_UMDL, _GDI"
+
+
+def test_the_rule_reaches_the_shared_engine(clean_home):
+    from ripple.config import settings
+    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery",
+                            "maxHops": 4, "prodTables": "_UMDL, _GDI"}))
+    assert settings.is_production_table("card_pub_pvt_guid_umdl") is True
+    assert settings.is_production_table("sales_prod") is False
+
+
+def test_an_empty_rule_falls_back_rather_than_calling_everything_safe(clean_home):
+    """An empty box would mean no table is ever production, which reports every
+    repository on earth as clean."""
+    saved = prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery",
+                        "maxHops": 4, "prodTables": "   "})
+    assert saved["prodTables"] == prefs.default_production()
+    prefs.apply(saved)
+    from ripple.config import settings
+    assert settings.is_production_table("sales_prod") is True
+
+
 # ── a folder that is not where it was ──────────────────────────────────────
 def test_a_good_folder_says_how_much_it_holds():
     verdict = prefs.check_folder(MOCKREPO)

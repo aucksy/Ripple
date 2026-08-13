@@ -246,6 +246,10 @@ def health() -> dict:
         "catalog": {"tables": len(cat.tables), "columns": sum(len(v) for v in cat.tables.values())},
         "sqlDialect": settings.sql_dialect or "generic",
         "maxHops": settings.max_hops,
+        # Which table names count as the ones this team publishes. On screen so
+        # that "no production table is impacted" can be checked rather than
+        # believed -- it is only ever as true as this rule is.
+        "production": settings.production_rule(),
         "ai": _ai_facts(),
     }
 
@@ -456,10 +460,8 @@ def summary(payload: SummaryIn) -> dict:
     out = {"summary": base, "reply": reply}
     if not (payload.useAI and cfg.ai_available()):
         return out
-    trimmed = {
-        "risk": payload.scan.get("risk"),
-        "stats": payload.scan.get("stats"),
-        "groups": [
+    def _trim(groups: list[dict]) -> list[dict]:
+        return [
             {
                 "prod": g["prod"],
                 "rows": [
@@ -468,8 +470,16 @@ def summary(payload: SummaryIn) -> dict:
                     for r in g["rows"]
                 ],
             }
-            for g in payload.scan.get("groups", [])
-        ],
+            for g in groups
+        ]
+
+    trimmed = {
+        "risk": payload.scan.get("risk"),
+        "stats": payload.scan.get("stats"),
+        "groups": _trim(payload.scan.get("groups", [])),
+        # Sent as well, or the model writes "no impact" over a list of findings
+        # that simply did not match the production naming rule.
+        "reachedButNotOnTheProductionList": _trim(payload.scan.get("reached", [])),
         "couldNotRead": [u.get("file") for u in payload.scan.get("unreadable", [])],
         "change": {k: payload.vals.get(k) for k in
                    ("source", "changeType", "changeDesc", "effectiveLabel", "pocName", "pocTeam")},

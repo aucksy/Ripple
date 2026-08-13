@@ -142,14 +142,25 @@ def test_a_folder_can_be_checked_before_it_is_saved(client):
     assert out["ok"] and out["files"] > 15
 
 
-def test_the_dialect_really_changes_what_is_read(client):
+def test_the_dialect_really_changes_what_is_read(client, tmp_path):
     """The whole reason the setting is on screen. Read as generic SQL, a
-    BigQuery file is not read less well -- it is not read at all."""
-    bq = client.post("/api/settings", json={"repoPath": str(MOCKREPO),
+    BigQuery file is not read less well -- it is not read at all.
+
+    Measured on BigQuery SQL, not on the plain-SQL mock repository. Plain SQL
+    reads the same either way, so proving the point there proved nothing.
+    """
+    (tmp_path / "snapshot.sql").write_text(
+        "CREATE OR REPLACE TABLE `acme.stage.snap` AS\n"
+        "SELECT c.customer_id, UPPER(c.market_code) AS mkt_cd\n"
+        "FROM `acme.c360.customer_demographics` AS c\n"
+        "QUALIFY ROW_NUMBER() OVER (PARTITION BY c.customer_id ORDER BY c.last_upd) = 1;\n",
+        encoding="utf-8")
+    bq = client.post("/api/settings", json={"repoPath": str(tmp_path),
                                             "sqlDialect": "bigquery", "maxHops": 4}).json()
-    generic = client.post("/api/settings", json={"repoPath": str(MOCKREPO),
+    generic = client.post("/api/settings", json={"repoPath": str(tmp_path),
                                                  "sqlDialect": "", "maxHops": 4}).json()
-    assert generic["repo"]["unreadable"] > bq["repo"]["unreadable"]
+    assert bq["repo"]["statements"] == 1 and bq["repo"]["unreadable"] == 0
+    assert generic["repo"]["statements"] == 0 and generic["repo"]["unreadable"] == 1
     client.post("/api/settings", json={"repoPath": str(MOCKREPO),
                                        "sqlDialect": "bigquery", "maxHops": 4})
 
