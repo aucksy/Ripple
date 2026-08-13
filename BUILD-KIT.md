@@ -299,6 +299,7 @@ as far as Phase 5, you already have the part that no other tool does.
 | 10 | The screens: notification, review, repository | 600 lines |
 | 11 | The screens: findings, map, summary, reply, settings | 1,000 lines |
 | 12 | Starting it up, and the checklist that says it works | — |
+| 13 | Packaging it as a program you can hand to somebody | 250 lines |
 
 **One thing to test before you invest an evening.** Two of these files are 800
 lines long. Paste Phase 1 into a window and see whether you get complete files back
@@ -1718,7 +1719,7 @@ back and insist on.
 
 ---
 
-## Starting it with a double-click
+## Starting it with a double-click, before it is packaged
 
 Once it all works you will not want to open a Command Prompt every time. Two
 commands, once:
@@ -1748,6 +1749,168 @@ a network port, is close to the worst possible shape as far as endpoint security
 concerned — it tends to be quarantined, and explaining it afterwards costs more
 time than it ever saved. The batch file gives you the same double-click and none of
 that.
+
+---
+
+# PHASE 13 — packaging it as a program
+
+**Saves to:** `C:\ripple-build\ripple\paths.py` (new),
+`C:\ripple-build\ripple\api.py` and `C:\ripple-build\ripple\config.py`
+(both changed), `C:\ripple-build\run.py` (replaced), and
+`C:\ripple-build\build.py` (new)
+
+**What you get.** A folder called `Ripple` holding `Ripple.exe` and one other
+folder, about 40 MB in total. Copy that folder anywhere, double-click the program,
+and Ripple starts and opens the browser — on a machine with no Python on it and
+nothing installed. Packaging takes about a minute and a half each time.
+
+**First, add the packaging tool.** One more install, and only on the machine that
+does the building:
+
+```
+python -m pip install --user pyinstaller
+```
+
+**Why this is a phase and not one command.** A packaged program has no folder of
+source files around it. Everything it needs was unpacked somewhere else, so every
+line of code that goes looking for a file has to ask where it is rather than
+assume. There are three such places in Ripple, and all three fail *quietly* — the
+program starts, looks healthy, and is wrong. That is what this phase fixes before
+it packages anything.
+
+````text
+[PASTE THE CONTRACT CARD FIRST]
+
+Ripple works when I run it with python run.py. Now package it as a Windows
+program with PyInstaller, so it runs on a machine with no Python installed.
+
+Give me ripple/paths.py, the changes to ripple/api.py and ripple/config.py,
+a replacement run.py, and build.py.
+
+--- ripple/paths.py  (new, small)
+
+One place that answers "where am I", so nothing else in the app has to guess.
+
+  frozen()    -> bool          True when running as the packaged program.
+                               It is getattr(sys, "frozen", False).
+  app_dir()   -> Path          The folder a person actually sees. Packaged,
+                               that is the folder holding the .exe:
+                               Path(sys.executable).resolve().parent.
+                               From source, the project root.
+  web_dir()   -> Path          Packaged: Path(sys._MEIPASS) / "web", because
+                               PyInstaller unpacks bundled files to a folder of
+                               its own choosing and _MEIPASS is where it says
+                               it put them. From source: the web folder beside
+                               the code.
+  data_dir()  -> Path          Where the history database and any settings go.
+                               app_dir() both ways. Create it if missing.
+
+THE THREE QUIET FAILURES, so you can see why each of those exists:
+
+1. THE PAGE GOES BLANK. api.py currently finds the front end with
+   Path(__file__).parent.parent / "web". Inside a packaged program that path
+   does not exist. Every API route keeps working perfectly, so the program
+   looks alive, and the browser shows a blank white page. It reads as a broken
+   app rather than as a folder that moved. Use web_dir().
+
+2. THE HISTORY DISAPPEARS. If the database is written relative to the code, it
+   lands INSIDE the packaged program's own internals. Three things then go
+   wrong: rebuilding the program silently destroys every saved analysis;
+   zipping the folder to send to somebody sends your saved analyses with it;
+   and if it is ever put somewhere read-only, saving fails. Put it in
+   data_dir(), beside the .exe where a person can see it. config.py's db_path
+   should default to data_dir() / "ripple.db".
+
+3. IT DIES ON STARTUP. run.py starts the server with the string
+   "ripple.api:app". A packaged program has no importable module by that name
+   to look up, so it exits immediately with "Could not import module". Import
+   the app object and pass the object itself.
+
+--- run.py  (replaced)
+
+Same as now — print the repository, the dialect and the address, open the
+browser unless --no-browser — plus:
+  say whether it is running packaged or from source, because when somebody
+    reports odd behaviour that is the first thing worth knowing
+  bind to 127.0.0.1, never 0.0.0.0
+  pass the app OBJECT to uvicorn, per failure 3 above
+  when packaged, wrap the whole of main() so that if anything raises, the
+    message is written to a file called ripple-log.txt next to the program AND
+    the window stays open long enough to read it. A packaged program that
+    crashes at startup otherwise shows a black window that vanishes, which is
+    unreportable and undiagnosable.
+
+--- build.py  (new, at the project root)
+
+Run with: python build.py
+It prints what it is doing, runs PyInstaller, and says where the result is.
+It must use exactly these arguments, each of which is here for a reason:
+
+  sys.executable, "-m", "PyInstaller", "run.py",
+  "--name", "Ripple",
+  "--noconfirm", "--clean",
+  "--onedir",
+  "--console",
+  "--add-data", f"{ABSOLUTE_PATH_TO_WEB}{os.pathsep}web",
+  "--collect-all", "sqlglot",
+  "--collect-all", "extract_msg",
+
+  --onedir, not --onefile. A one-file build unpacks itself into a temporary
+    folder on every single launch, which makes it slow to start, and a
+    locked-down Windows machine often refuses to run a program out of a
+    temporary folder at all.
+  --console for now. It leaves a black window open beside the app showing the
+    address and any error. Once everything works, switch it to --noconsole for
+    the copy you show people.
+  --add-data MUST BE AN ABSOLUTE PATH. Build the path with
+    Path(__file__).resolve().parent / "web" and pass that. A relative "web" is
+    resolved against PyInstaller's own working folder, not yours, and the
+    build stops with "Unable to find ... web".
+  --collect-all for both of those. They load parts of themselves by name at
+    run time, which PyInstaller cannot see by reading the code, so without
+    this they are left out and the program fails the first time it reads any
+    SQL.
+
+Then have build.py CHECK ITS OWN WORK rather than trusting PyInstaller's exit
+code: confirm dist/Ripple/Ripple.exe exists, confirm the web folder came
+along, print the total size of dist/Ripple in MB, and print the full path to
+the .exe. If PyInstaller fails, print the last part of its output rather than
+a bare "failed" — its error is usually the last three lines of a very long
+message.
+
+One thing to say in a comment, because it will bite: rebuilding wipes the
+dist folder, and the history database lives in there once the program has
+been run. Say so, and have build.py warn if it is about to delete a database
+that has anything in it.
+````
+
+**Check it worked.** From `C:\ripple-build`:
+
+```
+python build.py
+```
+
+It takes a minute or two and ends by naming the folder it made. Then go to that
+folder and double-click **Ripple.exe**. The browser should open on the same Ripple
+you have been using. Walk one scan through it end to end — that is the only proof
+that matters, because everything in this phase fails quietly rather than loudly.
+
+Three things to check specifically, since these are the ones that break silently:
+
+1. **The page is styled**, not blank and not plain text. Blank means the front end
+   did not come along.
+2. **Run a scan.** If it reports that it could not read any SQL, the parser was
+   left out of the package.
+3. **Save an analysis, close the program, open it again, and look at Past
+   analyses.** Your saved analysis should still be there, and there should be a
+   file next to `Ripple.exe` holding it.
+
+**If Windows blocks it or quietly deletes it.** An unsigned program built on the
+spot, which then opens a network port, is a shape that endpoint security is
+designed to be suspicious of. If it is quarantined, that is not a bug in your
+build, and the fix is not a setting you should go hunting for on your own — it is
+a conversation with whoever runs security, who can allow it properly. Ripple runs
+perfectly well as `python run.py` in the meantime.
 
 ---
 
