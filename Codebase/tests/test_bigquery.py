@@ -23,7 +23,7 @@ from ripple.catalog import build_catalog                        # noqa: E402
 from ripple.config import Settings                              # noqa: E402
 from ripple.scanner.lineage import trace                        # noqa: E402
 from ripple.scanner.repo import RepoIndex, written_tables       # noqa: E402
-from ripple.scanner.sqlread import parse_repo                   # noqa: E402
+from ripple.scanner.sqlread import parse_repo, short_name       # noqa: E402
 
 # A small pipeline in the shape a BigQuery team really writes it.
 FILES = {
@@ -156,8 +156,8 @@ def test_the_change_reaches_the_production_table(repo):
 def test_merge_counts_as_writing_to_its_table(repo):
     _, _, parsed, _, _ = scan(repo, "bigquery")
     merge = next(s for s in parsed.statements if s.file == "odl/customer_profile_prod.sql")
-    assert merge.target == "customer_profile_prod"
-    assert "market_enriched" in {s.lower() for s in merge.sources}
+    assert short_name(merge.target) == "customer_profile_prod"
+    assert "market_enriched" in {short_name(s).lower() for s in merge.sources}
 
 
 def test_a_python_job_names_its_destination_in_the_job_settings(repo):

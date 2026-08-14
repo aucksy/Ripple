@@ -24,7 +24,7 @@ from ripple.catalog import build_catalog                        # noqa: E402
 from ripple.config import Settings, parse_production_rule       # noqa: E402
 from ripple.scanner.lineage import trace                        # noqa: E402
 from ripple.scanner.repo import RepoIndex                       # noqa: E402
-from ripple.scanner.sqlread import parse_repo, split_statements  # noqa: E402
+from ripple.scanner.sqlread import parse_repo, short_name, split_statements       # noqa: E402
 from ripple.scanner.templating import fill_placeholders         # noqa: E402
 
 # The shape of the office repository this was reported from: Airflow-templated
@@ -117,7 +117,7 @@ def test_a_regular_expression_is_left_alone():
 
 def test_a_templated_repository_is_read(tmp_path):
     _, _, parsed = build(tmp_path)
-    targets = {s.target for s in parsed.statements}
+    targets = {short_name(s.target) for s in parsed.statements}
     assert {"myca_web_activity", "card_pub_pvt_guid_umdl", "transaction_billed_gdi"} <= targets
     cat = build_catalog(parsed)
     assert "MYCA_WEB_ACTIVITY" in cat.tables
@@ -126,7 +126,7 @@ def test_a_templated_repository_is_read(tmp_path):
 # ── one bad statement is one bad statement ─────────────────────────────────
 def test_one_unreadable_statement_does_not_lose_the_whole_file(tmp_path):
     _, _, parsed = build(tmp_path)
-    targets = {s.target for s in parsed.statements}
+    targets = {short_name(s.target) for s in parsed.statements}
     assert {"first_one", "last_one"} <= targets, "the statements either side survived"
 
 
@@ -324,9 +324,9 @@ def test_begin_does_not_swallow_the_statement_after_it(tmp_path):
           SELECT market_code FROM `{{p}}.{{d}}.first_thing`;
         END;
     """})
-    assert {s.target for s in parsed.statements} >= {"first_thing", "second_thing"}
-    first = next(s for s in parsed.statements if s.target == "first_thing")
-    assert {x.lower() for x in first.sources} == {"customer_demographics"}
+    assert {short_name(s.target) for s in parsed.statements} >= {"first_thing", "second_thing"}
+    first = next(s for s in parsed.statements if short_name(s.target) == "first_thing")
+    assert {short_name(x).lower() for x in first.sources} == {"customer_demographics"}
 
 
 @pytest.mark.parametrize("opener", [
@@ -340,7 +340,7 @@ def test_no_scripting_keyword_swallows_the_next_statement(tmp_path, opener):
           SELECT market_code FROM `{{{{p}}}}.{{{{d}}}}.customer_demographics`;
         END;
     """})
-    assert "made_here" in {s.target for s in parsed.statements}, opener
+    assert "made_here" in {short_name(s.target) for s in parsed.statements}, opener
 
 
 def test_a_loop_still_shows_the_table_it_loops_over(tmp_path):
@@ -353,7 +353,7 @@ def test_a_loop_still_shows_the_table_it_loops_over(tmp_path):
           END FOR;
         END;
     """})
-    assert any("sor_mapping" in {x.lower() for x in s.sources} for s in parsed.statements)
+    assert any("sor_mapping" in {short_name(x).lower() for x in s.sources} for s in parsed.statements)
 
 
 def test_a_case_written_across_lines_survives_the_scripting_stripper(tmp_path):
@@ -383,8 +383,8 @@ def test_a_case_written_across_lines_survives_the_scripting_stripper(tmp_path):
           RAISE USING MESSAGE = @@error.message;
         END;
     """})
-    assert "card_demographics" in {s.target for s in parsed.statements}
-    assert any("account_main" in {x.lower() for x in s.sources} for s in parsed.statements)
+    assert "card_demographics" in {short_name(s.target) for s in parsed.statements}
+    assert any("account_main" in {short_name(x).lower() for x in s.sources} for s in parsed.statements)
     assert parsed.unreadable == []
 
 
@@ -401,7 +401,7 @@ def test_raise_does_not_put_the_whole_file_on_the_check_by_hand_list(tmp_path):
           RAISE USING MESSAGE = @@error.message;
         END;
     """})
-    assert "enrollment" in {s.target for s in parsed.statements}
+    assert "enrollment" in {short_name(s.target) for s in parsed.statements}
     assert parsed.unreadable == []
 
 
@@ -420,7 +420,7 @@ def test_every_shape_of_raise_seen_in_the_real_repository(tmp_path, raise_line):
           {raise_line}
         END;
     """})
-    assert "made_here" in {s.target for s in parsed.statements}, raise_line
+    assert "made_here" in {short_name(s.target) for s in parsed.statements}, raise_line
     assert parsed.unreadable == [], raise_line
 
 
@@ -437,8 +437,8 @@ def test_a_procedure_signature_does_not_cost_the_body(tmp_path):
           SELECT MAX(creat_ts) AS creat_ts FROM `{{p}}.{{d}}.sor_load_audit`;
         END;
     """})
-    assert "load_status" in {s.target for s in parsed.statements}
-    assert any("sor_load_audit" in {x.lower() for x in s.sources} for s in parsed.statements)
+    assert "load_status" in {short_name(s.target) for s in parsed.statements}
+    assert any("sor_load_audit" in {short_name(x).lower() for x in s.sources} for s in parsed.statements)
     assert parsed.unreadable == []
 
 
@@ -456,7 +456,7 @@ def test_a_loop_header_written_across_lines_still_names_its_table(tmp_path):
           END FOR;
         END;
     """})
-    assert any("sor_mapping" in {x.lower() for x in s.sources} for s in parsed.statements)
+    assert any("sor_mapping" in {short_name(x).lower() for x in s.sources} for s in parsed.statements)
 
 
 def test_a_scripting_word_inside_a_string_is_not_scripting(tmp_path):
@@ -472,8 +472,8 @@ def test_a_scripting_word_inside_a_string_is_not_scripting(tmp_path):
           FROM `{{t}}.{{s}}.note_source`;
         END;
     """})
-    assert "notes" in {s.target for s in parsed.statements}
-    assert any("note_source" in {x.lower() for x in s.sources} for s in parsed.statements)
+    assert "notes" in {short_name(s.target) for s in parsed.statements}
+    assert any("note_source" in {short_name(x).lower() for x in s.sources} for s in parsed.statements)
 
 
 def test_a_scripting_block_does_not_hide_the_statements_inside_it(tmp_path):
@@ -490,9 +490,9 @@ def test_a_scripting_block_does_not_hide_the_statements_inside_it(tmp_path):
           SET msg = @@error.message;
         END;
     """})
-    reading = {s.target for s in parsed.statements}
+    reading = {short_name(s.target) for s in parsed.statements}
     assert "web_activity" in reading
-    assert any("logon_activity" in {x.lower() for x in s.sources} for s in parsed.statements)
+    assert any("logon_activity" in {short_name(x).lower() for x in s.sources} for s in parsed.statements)
 
 
 def test_a_delete_that_filters_on_the_column_is_a_finding(tmp_path):
@@ -586,8 +586,8 @@ def test_a_cte_is_not_reported_as_a_table(tmp_path):
           SELECT cm_num FROM cardmember_raw
         );
     """})
-    stmt = next(s for s in parsed.statements if s.target == "out_tbl")
-    assert {x.lower() for x in stmt.sources} == {"cm_status"}
+    stmt = next(s for s in parsed.statements if short_name(s.target) == "out_tbl")
+    assert {short_name(x).lower() for x in stmt.sources} == {"cm_status"}
 
 
 def test_an_empty_rule_is_not_read_as_every_table_being_safe():

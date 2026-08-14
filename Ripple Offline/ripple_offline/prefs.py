@@ -43,6 +43,25 @@ DIALECT_CHOICES: tuple[dict[str, str], ...] = (
 DEFAULT_DIALECT = "bigquery"
 
 
+def default_hops() -> int:
+    """How many renames deep to follow, taken from the shared engine.
+
+    Not a number of its own. This was hard-coded to 4 here while the engine
+    moved to 10, so the program a colleague double-clicks would have gone on
+    quietly stopping six hops short of every published table -- the exact
+    failure the engine change was made to fix, shipped only to the machine
+    where nobody can check it.
+    """
+    from ripple.config import Settings
+
+    return Settings().max_hops
+
+
+def max_hops_ceiling() -> int:
+    """The deepest this program will follow, however deep it is asked to."""
+    return 25
+
+
 def default_production() -> str:
     from ripple.config import DEFAULT_PRODUCTION
 
@@ -53,7 +72,7 @@ DEFAULTS: dict[str, Any] = {
     "repoPath": "",
     "repoLabel": "",
     "sqlDialect": DEFAULT_DIALECT,
-    "maxHops": 4,
+    "maxHops": 10,
     # Which table names are the ones this team publishes. Online this is an
     # environment variable set by whoever deploys Ripple. Offline there is
     # nobody to set one, and leaving it at _PROD on a repository that names
@@ -93,7 +112,7 @@ def load() -> dict[str, Any]:
             out[key] = raw[key]
     if not valid_dialect(str(out["sqlDialect"])):
         out["sqlDialect"] = DEFAULT_DIALECT
-    out["maxHops"] = max(1, min(8, int(out["maxHops"] or 4)))
+    out["maxHops"] = max(1, min(max_hops_ceiling(), int(out["maxHops"] or default_hops())))
     if not str(out["prodTables"]).strip():
         out["prodTables"] = default_production()
     return out
@@ -110,7 +129,7 @@ def save(values: dict[str, Any]) -> dict[str, Any]:
     keep["repoLabel"] = str(keep["repoLabel"] or "").strip() or folder_label(keep["repoPath"])
     if not valid_dialect(str(keep["sqlDialect"])):
         keep["sqlDialect"] = DEFAULT_DIALECT
-    keep["maxHops"] = max(1, min(8, int(keep["maxHops"] or 4)))
+    keep["maxHops"] = max(1, min(max_hops_ceiling(), int(keep["maxHops"] or default_hops())))
     # An empty box would mean "no table is ever production", which would report
     # every repository as clean. Falling back to the default is the only safe
     # reading of an empty box here.
@@ -148,7 +167,7 @@ def apply(values: dict[str, Any]) -> None:
     settings.repo_label = str(values.get("repoLabel") or "") or folder_label(settings.repo_path)
     settings.repo_branch = git_branch(settings.repo_path)
     settings.sql_dialect = str(values.get("sqlDialect") or "")
-    settings.max_hops = int(values.get("maxHops") or 4)
+    settings.max_hops = int(values.get("maxHops") or default_hops())
     # The pasted list, in whatever shape it arrived. An empty one falls back to
     # the shipped default inside set_production, because "nothing is production"
     # would report every repository as clean.

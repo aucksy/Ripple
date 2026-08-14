@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ripple.config import Settings, parse_production_rule       # noqa: E402
 from ripple.scanner.lineage import trace                        # noqa: E402
 from ripple.scanner.repo import RepoIndex                       # noqa: E402
-from ripple.scanner.sqlread import output_names, parse_repo, usages_of  # noqa: E402
+from ripple.scanner.sqlread import output_names, parse_repo, short_name, usages_of       # noqa: E402
 
 
 def _repo(tmp_path: Path, files: dict, production: str = "_published"):
@@ -54,7 +54,7 @@ def test_a_column_reshaped_and_passed_through_keeps_both_names(tmp_path):
                cm13
         FROM customer_demographics;
     """})
-    stmt = next(s for s in parsed.statements if s.target == "stage_one")
+    stmt = next(s for s in parsed.statements if short_name(s.target) == "stage_one")
     names = [n.lower() for n in output_names(stmt, "cm13")]
     assert "cm13" in names and "cm13_str" in names
     # The one carried through unchanged comes first, so it survives the cap and
@@ -92,7 +92,7 @@ def test_a_statement_with_very_many_derived_columns_stays_bounded(tmp_path):
         {derived}
         FROM customer_demographics;
     """})
-    stmt = next(s for s in parsed.statements if s.target == "stage_wide")
+    stmt = next(s for s in parsed.statements if short_name(s.target) == "stage_wide")
     names = output_names(stmt, "cm13")
     assert len(names) <= 6
     assert names[0].lower() == "cm13"

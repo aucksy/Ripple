@@ -20,6 +20,29 @@ def test_the_default_dialect_is_bigquery(clean_home):
     assert prefs.load()["sqlDialect"] == "bigquery"
 
 
+def test_the_hop_limit_matches_the_shared_engine(clean_home):
+    """The number of renames Ripple follows is not a setting of this build's own.
+
+    It was hard-coded to 4 here while the engine moved to 10, which would have
+    shipped the old, too-shallow behaviour to the one machine where nobody can
+    check it. Offline is a wrapper, so this number has to come from the engine.
+    """
+    from ripple.config import Settings
+
+    assert prefs.DEFAULTS["maxHops"] == Settings().max_hops
+    assert prefs.load()["maxHops"] == Settings().max_hops
+
+
+def test_the_hop_limit_can_be_raised_far_enough_to_follow_a_cut_trail(clean_home):
+    """The result screen offers to follow a cut-short trail at twice the depth.
+    A ceiling below that would make the button do nothing."""
+    from ripple.config import Settings
+
+    assert prefs.max_hops_ceiling() >= Settings().max_hops * 2
+    saved = prefs.save({"repoPath": str(MOCKREPO), "maxHops": 20})
+    assert saved["maxHops"] == 20
+
+
 def test_nothing_is_configured_on_a_fresh_machine(clean_home):
     assert prefs.configured(prefs.load()) is False
 

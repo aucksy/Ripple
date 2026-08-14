@@ -1055,15 +1055,24 @@ function doConnect() {
 }
 //</online-only>
 
-function runScan() {
+/* deeper is set when a trail was cut short by the hop limit and the person
+   asked for it to be followed further. It applies to that one scan; the setting
+   on the settings screen is left where it was. */
+function runScan(deeper) {
   run(async () => {
     S.scan = await api('/api/scan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ upstream: S.vals.upstream, changeKind: S.vals.changeKind || 'unknown' }),
+      body: JSON.stringify({
+        upstream: S.vals.upstream,
+        changeKind: S.vals.changeKind || 'unknown',
+        ...(deeper ? { maxHops: deeper } : {}),
+      }),
     });
     S.summary = null; S.openGroup = 'p0'; S.openRow = null; S.graphTab = 0;
     goto(4);
-  }, 'Searching every file for these names…');
+  }, deeper
+    ? `Following the same attributes again, up to ${deeper} renames deep…`
+    : 'Searching every file for these names…');
 }
 
 // ── step 4 ────────────────────────────────────────────────────────────────
@@ -1130,6 +1139,18 @@ function step4(root) {
   const uncovered = [
     ['To check by hand', st.couldNotRead, st.couldNotRead ? 'var(--amber)' : '', 'Ripple could not follow these'],
   ];
+  // A trail Ripple gave up on is not a trail that ended, and a table it cannot
+  // see inside is not a table it has read. Both used to be invisible on this
+  // screen, so a result built on either looked exactly like one built on the
+  // whole picture.
+  if (st.trailsCutShort) {
+    uncovered.push(['Trails cut short', st.trailsCutShort, 'var(--red)',
+      `Stopped at ${sc.maxHops} renames deep`]);
+  }
+  if (st.tablesNotVisible) {
+    uncovered.push(['Tables not fully readable', st.tablesNotVisible, 'var(--amber)',
+      'Built with SELECT * — no column list']);
+  }
   // Only ever shown when there are some. A "0 never opened" card would be a
   // reassurance nobody asked for.
   if (st.neverOpened) {
@@ -1141,7 +1162,7 @@ function step4(root) {
   }
   box.append(el('span', { className: 'lbl', style: 'display:block;margin:22px 0 10px',
     textContent: 'What this result does not cover' }));
-  const gaps3 = el('div', { className: 'stats three' });
+  const gaps3 = el('div', { className: 'stats ' + (uncovered.length > 3 ? 'five' : 'three') });
   uncovered.forEach(c => gaps3.append(statCard(c)));
   box.append(gaps3);
   // Only a reassurance when there was something to be reassured about. "Every
@@ -1156,6 +1177,7 @@ function step4(root) {
   // Before the findings, not after them: this is the card that says how much of
   // the repository the findings are a statement about.
   renderNeverOpened(box, sc);
+  renderTrailGaps(box, sc);
 
   const groups = x(root, 'groups');
   groups.append(el('span', { className: 'lbl', style: 'display:block;margin-bottom:2px',
@@ -1300,6 +1322,13 @@ function groupCard(g, key, tag, tagStyle) {
         r.certain === false
           ? el('span', { className: 'badge sm grey', style: 'margin-left:6px',
               textContent: 'table not stated' })
+          : null,
+        // The chain got here through a table whose column list is not written
+        // down. The row is real; what is inferred is that the column still
+        // travels under this name on the far side of the star.
+        r.inferredHops
+          ? el('span', { className: 'badge sm amber', style: 'margin-left:6px',
+              textContent: r.viaStar ? 'column list not visible' : 'inferred' })
           : null),
       el('span', {}, el('span', { className: 'badge sm ' + (r.mode === 'Direct pull' ? 'blue' : 'violet'), textContent: r.mode })),
       el('span', { className: 'caret', textContent: '›' }));
@@ -1339,7 +1368,27 @@ function renderChecks(box, sc) {
       el('span', { className: 'badge sm ' + badge[0], textContent: badge[1] }),
       (a.endsAt || []).length
         ? el('span', { className: 'small muted', textContent: 'ends at ' + a.endsAt.join(', ') })
+        : null,
+      // Kept apart from "ends at" on purpose. They read the same and mean
+      // opposite things: one is where the code ran out, the other is where
+      // Ripple stopped looking.
+      (a.cutShortAt || []).length
+        ? el('span', { className: 'badge sm red',
+            textContent: 'still going at ' + a.cutShortAt.join(', ') })
         : null));
+    if ((a.cutShortAt || []).length) {
+      p.append(el('div', { className: 'small muted', style: 'margin:4px 0 0 4px;line-height:1.55',
+        textContent: `Ripple follows ${sc.maxHops} renames and then stops. This trail had not `
+          + 'finished, so whether it reaches a published table is not something this scan '
+          + 'can tell you. There is a button above to follow it further.' }));
+    }
+    if ((a.notVisible || []).length) {
+      p.append(el('div', { className: 'small muted', style: 'margin:4px 0 0 4px;line-height:1.55',
+        textContent: `The trail goes through ${a.notVisible.join(', ')}, which `
+          + `${a.notVisible.length === 1 ? 'is' : 'are'} built with SELECT * — every column `
+          + `carried, none of them named. ${a.inferred} of the findings below sit past that `
+          + 'point and are worked out rather than read.' }));
+    }
     // How widely the name is used as a name. A scan for a column half the
     // warehouse shares looks identical on screen to a scan for one only this
     // table has, and the two are not remotely the same answer: the first
@@ -1396,6 +1445,23 @@ function detailFor(r) {
       `This statement reads more than one table with a column called ${r.attr}, and the SQL `
       + `does not say which one this is. Ripple has counted it as ${r.from}'s. Worth a look at `
       + 'the code below before acting on it.'));
+  }
+  // How much of the path to this row was read and how much was worked out. A
+  // row two hops past a SELECT * is exactly as real as the code below it, and
+  // exactly as uncertain about what the column is called by the time it lands.
+  if (r.inferredHops) {
+    d.append(el('div', { className: 'note warn', style: 'margin-top:10px' },
+      el('b', { textContent: r.viaStar
+        ? 'This step is a SELECT *. '
+        : `${r.inferredHops} step${r.inferredHops === 1 ? '' : 's'} on the way here could not be read. ` }),
+      r.viaStar
+        ? `The statement takes every column, so ${r.attr} is carried into ${r.inter} without `
+          + 'ever being named. The hop is real — that is what SELECT * does — but Ripple cannot '
+          + 'read the column list of the table it builds, so anything past this point is worked '
+          + 'out rather than read.'
+        : `A table earlier in this chain is built with SELECT *, so its column list is not in `
+          + `the code. This row is a real usage on a real line; what Ripple cannot promise is `
+          + `that ${r.attr} is still the name the column carries by the time it gets here.`));
   }
   const code = el('div', { className: 'code' });
   const head = el('div', { className: 'f' },
@@ -1495,6 +1561,90 @@ function renderNeverOpened(box, sc) {
   }
 }
 
+/* Three ways a trail can be shorter than the truth, all of them invisible until
+   now, and all of them producing a calm answer over less than the whole picture.
+
+   These are drawn on the RESULT, beside the findings they qualify. Two of them
+   were already known somewhere else in the app — the repository screen has
+   listed the tables built with SELECT * for months — and a warning on another
+   screen is a warning nobody reads while they are deciding whether to worry. */
+function renderTrailGaps(box, sc) {
+  // 1. The hop limit stopped the walk. This is a setting, and until now it was
+  //    reported as a fact: "the chain ends at t4 and does not reach production".
+  if (sc.cutShort?.length) {
+    const deeper = Math.min((sc.maxHops || 4) * 2, 25);
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px;border-color:var(--redln)' });
+    card.append(el('b', { style: 'display:block;font-size:14px', textContent:
+      `${sc.cutShort.length} trail${sc.cutShort.length === 1 ? '' : 's'} `
+      + `stopped because of a setting, not because the code ran out` }));
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      `Ripple follows a column through ${sc.maxHops} renames and then stops. `
+      + `${sc.cutShort.length === 1 ? 'This trail was' : 'These trails were'} still going. `
+      + 'Anything past this point has not been looked at, so "does not reach a published '
+      + 'table" is not something this result can tell you about them.' }));
+    const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
+    sc.cutShort.forEach(c => chips.append(el('span', { className: 'chip mono',
+      textContent: `${c.table} · ${c.attr}` })));
+    card.append(chips);
+    if (sc.maxHops < 25) {
+      const again = el('button', { className: 'ghost', style: 'margin-top:14px',
+        textContent: `Follow these ${deeper} renames deep instead` });
+      again.onclick = () => runScan(deeper);
+      card.append(again);
+      card.append(el('div', { className: 'small muted', style: 'margin-top:8px;line-height:1.55',
+        textContent: 'This runs the same scan again on the code already read — no files are '
+          + 'read a second time. It changes nothing on the settings screen.' }));
+    }
+    box.append(card);
+  }
+
+  // 2. A table built with SELECT * carries every column and names none of them.
+  if (sc.starTables?.length) {
+    const n = sc.starTables.length;
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px;border-color:var(--amberln)' });
+    card.append(el('b', { style: 'display:block;font-size:14px', textContent:
+      `${n} table${n === 1 ? '' : 's'} on this trail ${n === 1 ? 'has' : 'have'} no column list to read` }));
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      `${n === 1 ? 'It is' : 'They are'} built with SELECT *, which takes every column and writes `
+      + `none of them down. The attribute really does travel through — that is what SELECT * does — `
+      + 'so Ripple follows it and marks every step past that point as worked out rather than read.' }));
+    card.append(el('div', { className: 'small muted', style: 'margin-top:6px;line-height:1.55',
+      textContent: 'Ripple used to stop dead here instead, which turned a change that breaks a '
+        + 'published table into a clean result. What it cannot promise is that the column is '
+        + 'still called the same thing on the far side.' }));
+    const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
+    sc.starTables.forEach(s => chips.append(el('span', { className: 'chip mono',
+      textContent: `${s.table} — from ${s.from}` })));
+    card.append(chips);
+    box.append(card);
+  }
+
+  // 3. One name, more than one table, and nothing in the SQL to tell them apart.
+  if (sc.mergedNames?.length) {
+    const n = sc.mergedNames.length;
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px' });
+    card.append(el('span', { className: 'lbl', textContent:
+      `${n} table name${n === 1 ? '' : 's'} here may stand for more than one table` }));
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      'Ripple followed all of them, because missing a chain is worse than showing a row you '
+      + 'can dismiss by opening the file. Findings under these names may be about either '
+      + 'table, so check before acting on one.' }));
+    const chips = el('div', { className: 'chips', style: 'margin-top:10px' });
+    sc.mergedNames.forEach(m => chips.append(el('span', { className: 'chip mono',
+      textContent: m.reason === 'capitals'
+        ? `${m.spellings.join('  vs  ')} — same name, different capitals`
+        : `${m.table} — in ${m.datasets.join(', ')}` })));
+    card.append(chips);
+    if (sc.mergedNames.some(m => m.reason === 'capitals')) {
+      card.append(el('div', { className: 'small muted', style: 'margin-top:8px;line-height:1.55',
+        textContent: 'BigQuery treats capitals as significant, so two names differing only by '
+          + 'case really are two tables there. Ripple cannot tell whether that is what your '
+          + 'code means or just how it was typed.' }));
+    }
+    box.append(card);
+  }
+}
+
 /* The honest half of the report: what Ripple could NOT account for. Styled to
    stand out, never to shrink — a clean finding list is only worth what was read. */
 function renderGaps(box, sc) {
@@ -1560,9 +1710,16 @@ function step5(root) {
   // table Ripple has not been told is published — which is most of them when
   // the published-table list is wrong, exactly when it matters most.
   const anyProd = gs.some(g => (g.branches || []).length);
+  // "None of these reach a published table" is a claim, and it is not one this
+  // picture can make while some of its branches were cut short by a setting.
+  const anyCut = (S.scan?.cutShort || []).length;
   x(root, 'sub').textContent = anyProd
     ? 'Where the changed attribute travels, what it is called at each step, and which published tables it reaches.'
-    : 'Where the changed attribute travels, and what it is called at each step. None of these branches reach a table on your published list.';
+    : anyCut
+      ? `Where the changed attribute travels, and what it is called at each step. Ripple stopped `
+        + `following ${anyCut === 1 ? 'one branch' : `${anyCut} branches`} at ${S.scan.maxHops} `
+        + `renames deep, so where ${anyCut === 1 ? 'it ends' : 'they end'} is not known.`
+      : 'Where the changed attribute travels, and what it is called at each step. None of these branches reach a table on your published list.';
   if (!gs.length) {
     map.append(el('div', { className: 'note good', style: 'max-width:600px;padding:22px 26px' },
       el('b', { textContent: 'No downstream lineage found', style: 'display:block;font-size:15px' }),
@@ -1650,6 +1807,16 @@ function nodeEl(n) {
   if (n.alias) d.append(el('div', { className: 'al' },
     el('span', { textContent: 'alias' }),
     el('span', { className: 'chip alias', textContent: n.alias })));
+  // The two things a box on this map can hide. Drawn on the box itself, because
+  // a picture of a chain is exactly where somebody reads "and then it stops".
+  if (n.inferred) {
+    d.append(el('div', { className: 'small muted', style: 'margin-top:5px;line-height:1.4',
+      textContent: 'built with SELECT * — column list not visible' }));
+  }
+  if (n.cut) {
+    d.append(el('div', { className: 'small', style: 'margin-top:5px;line-height:1.4;color:var(--red)',
+      textContent: 'Ripple stopped here — hop limit, not the end of the chain' }));
+  }
   return d;
 }
 

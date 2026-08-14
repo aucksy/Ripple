@@ -6,6 +6,7 @@ runs from the command line, from a test, or from this API.
 """
 from __future__ import annotations
 
+import copy
 import os
 from pathlib import Path
 from typing import Any
@@ -148,6 +149,10 @@ class UpstreamIn(BaseModel):
 class ScanIn(BaseModel):
     upstream: list[UpstreamIn]
     changeKind: str = "unknown"
+    # How many renames deep to follow, for this scan only. Sent by the screen
+    # when a trail was cut short by the limit, so "run it again, deeper" is one
+    # button on the result rather than a trip to the settings screen and back.
+    maxHops: int | None = None
 
 
 class SummaryIn(BaseModel):
@@ -515,14 +520,27 @@ def read_email_text(payload: PasteIn) -> dict:
     return out
 
 
+# The deepest Ripple will follow a rename, however deep it is asked to. Not a
+# guess about pipelines -- a stop on a scan that has clearly gone wrong, set far
+# above any real chain. Each extra hop is more statements to look at, and a scan
+# nobody can cancel is worse than one that stopped too soon.
+HOP_CEILING = 25
+
+
 @app.post("/api/scan")
 def scan(payload: ScanIn) -> dict:
     idx, parsed, _ = repo_state()
     upstream = [{"table": u.table, "attrs": u.attrs} for u in payload.upstream]
     if not upstream:
         raise HTTPException(status_code=400, detail="No upstream tables were supplied.")
+    cfg = settings
+    if payload.maxHops and payload.maxHops != settings.max_hops:
+        # This scan only. The setting on the settings screen is left alone, so
+        # running one scan deeper does not quietly change every later scan.
+        cfg = copy.copy(settings)
+        cfg.max_hops = max(1, min(int(payload.maxHops), HOP_CEILING))
     try:
-        res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=settings,
+        res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=cfg,
                     on_progress=progress.reader("scanning"))
     finally:
         progress.finish()

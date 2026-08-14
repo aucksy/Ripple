@@ -78,7 +78,14 @@ def summarise(scan: dict, vals: dict) -> dict:
     # follow -- the fix that is missing may well be in one of them.
     files_scanned = scan.get("filesScanned", 0)
     never_opened = stats.get("neverOpened", 0)
-    blind = never_opened + len(unreadable)
+    # Two more ways this answer covers less than the whole picture, and both used
+    # to be silent. A trail Ripple stopped following at its hop limit, and a
+    # table built with SELECT * whose column list is nowhere in the code. Either
+    # one makes "no impact" a sentence about how far Ripple looked rather than
+    # about the pipeline -- and this is the paragraph that gets forwarded.
+    cut_short = scan.get("cutShort", [])
+    star_tables = scan.get("starTables", [])
+    blind = never_opened + len(unreadable) + len(cut_short)
 
     def _blind_phrase() -> str:
         bits = []
@@ -86,28 +93,57 @@ def summarise(scan: dict, vals: dict) -> dict:
             bits.append(f"{_plural(never_opened, 'file')} could not be opened at all")
         if unreadable:
             bits.append(f"{_plural(len(unreadable), 'file')} could not be followed")
+        if cut_short:
+            bits.append(f"{_plural(len(cut_short), 'trail')} was stopped at "
+                        f"{scan.get('maxHops', 4)} renames deep and was still going"
+                        if len(cut_short) == 1 else
+                        f"{len(cut_short)} trails were stopped at "
+                        f"{scan.get('maxHops', 4)} renames deep and were still going")
         return " and ".join(bits)
+
+    def _inferred_phrase() -> str:
+        if not star_tables:
+            return ""
+        return (f" {_plural(len(star_tables), 'table')} on the way "
+                f"{'is' if len(star_tables) == 1 else 'are'} built with SELECT *, so the column "
+                f"list could not be read and the steps past "
+                f"{'it' if len(star_tables) == 1 else 'them'} are worked out rather than read.")
 
     if not groups and elsewhere:
         # Found, and consumed -- but nothing it feeds is on the list of tables
         # this team publishes. That is either a genuinely internal chain or a
         # production naming rule that does not match this repository, and only
         # a person can tell which. So the wording says exactly that.
-        end_names = [g["prod"] for g in reached]
+        # A chain that Ripple stopped following has not ended, so it must not be
+        # described with the word "end". That sentence used to be printed on the
+        # screen where somebody decides whether to worry, about a chain that was
+        # still going when the hop limit stopped the walk.
+        cut_names = [c["table"] for c in cut_short]
+        end_names = [g["prod"] for g in reached if not g.get("cut")]
         headline = (f"{_plural(len(elsewhere), 'usage')} found - none of them reaching "
                     f"a table on your published list")
         narrative = (
             f"{attrs} is used in {_plural(len({r.get('file') for r in elsewhere}), 'file')} "
             f"of the {scan.get('filesScanned', 0)} scanned. "
             + (f"Those chains end at {_names(end_names)}. " if end_names else "")
+            + (f"Ripple stopped following {_names(cut_names)} at "
+               f"{scan.get('maxHops', 4)} renames deep - "
+               f"{'that trail was' if len(cut_names) == 1 else 'those trails were'} still going, "
+               f"so nothing past that point has been looked at. " if cut_names else "")
             + "None of those names match the rule Ripple has been given for a table this "
               "team publishes, so this is not a clean result - it is an unfinished one. "
               "Check the rule on the settings screen before replying."
+            + _inferred_phrase()
         )
         bullets = [f"{r['inter']} - {r['logic'].lower()} on {r['alias']}" for r in elsewhere[:4]]
         bullets.append("Nothing here matched the production naming rule, so Ripple cannot say "
                        "whether these tables are ones anybody outside the team reads.")
-        actions = [
+        if cut_names:
+            bullets.append(f"{_plural(len(cut_names), 'trail')} was cut short by the hop limit "
+                           f"rather than by the code. Run the scan again, deeper, before "
+                           f"treating this as the whole answer.")
+        actions = ([f"Follow the trails Ripple stopped at - they were still going at "
+                    f"{scan.get('maxHops', 4)} renames deep."] if cut_names else []) + [
             "Check the production table rule on the settings screen against how your tables "
             "are really named, then run the scan again.",
             "Until then, treat the tables listed above as impacted.",
@@ -138,6 +174,7 @@ def summarise(scan: dict, vals: dict) -> dict:
             f"to any production table this team publishes."
             + (f" It is not a clean result for the whole repository: {_blind_phrase()}, "
                f"so nothing in those is covered either way." if blind else "")
+            + _inferred_phrase()
         )
         bullets = [
             f"No production table depends on {attrs}.",
@@ -264,9 +301,11 @@ def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
     elif not groups:
         # "No impact, proceed as planned" is the single most consequential
         # sentence this tool writes. It is only ever sent when the whole
-        # repository really was read.
+        # repository really was read -- and a trail Ripple stopped following at
+        # its own hop limit is not the whole repository having been read.
         blind = (scan.get("stats", {}).get("neverOpened", 0)
-                 + len(scan.get("unreadable", [])))
+                 + len(scan.get("unreadable", []))
+                 + len(scan.get("cutShort", [])))
         if blind:
             subject = f"RE: {subject_base} - no impact found so far"
             body = (

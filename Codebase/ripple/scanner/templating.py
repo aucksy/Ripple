@@ -112,6 +112,27 @@ def _named(m: "re.Match[str]") -> str:
     return _identifier(m.group("body")) + _keep_lines(m.group(0))
 
 
+def placeholder_names(text: str) -> set[str]:
+    """The identifiers ``fill_placeholders`` would put in, upper case.
+
+    A placeholder is not a name. It is a hole where a name goes, and nothing in
+    the file says what fills it. One file writes a table as
+    ``{{tgt_project_id}}.{{stage_dataset}}.card_guid_umdl`` and the DAG that
+    reads it writes ``{{ params.src }}.raw.card_guid_umdl`` -- "stage_dataset"
+    and "raw" are not two datasets, one of them is a hole.
+
+    Knowing which words came out of a hole is what stops Ripple deciding that
+    two names are two different tables on the strength of the placeholder
+    somebody happened to type. Getting that wrong cuts a real chain in half and
+    reports no impact, which is the one answer this tool exists to prevent.
+    """
+    out: set[str] = set()
+    for pattern in (_VAR, _DOLLAR, _BRACE):
+        for m in pattern.finditer(text):
+            out.add(_identifier(m.group("body")).upper())
+    return out
+
+
 def fill_placeholders(text: str) -> str:
     """The same SQL with every placeholder replaced by a name that parses."""
     out = _COMMENT.sub(_blank, text)

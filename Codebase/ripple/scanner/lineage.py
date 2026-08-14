@@ -15,12 +15,32 @@ from sqlglot import exp
 
 from ..config import Settings, settings as default_settings
 from .repo import RepoIndex
-from .sqlread import ParsedRepo, Usage, mode_of, locate, output_names, snippet, usages_of
+from .sqlread import (
+    ParsedRepo,
+    Usage,
+    canonical,
+    dataset_of,
+    same_table,
+    mode_of,
+    locate,
+    output_names,
+    short_name,
+    snippet,
+    usages_of,
+)
 
 # What a given kind of change does to a given kind of usage.
+#
+# "star" is in none of them, and that is deliberate. A SELECT * does not fail
+# when a column disappears -- it quietly builds a narrower table, and the thing
+# that breaks is whatever reads the missing column further down. Calling the
+# star hop itself breaking would put a red badge on the one row in the chain
+# that carries on working.
 BREAKS = {
-    "removal":      {"filter", "join_key", "ranking", "dedup_key", "transform", "aggregation", "select"},
-    "rename":       {"filter", "join_key", "ranking", "dedup_key", "transform", "aggregation", "select"},
+    "removal":      {"filter", "join_key", "ranking", "dedup_key", "transform", "aggregation",
+                     "excluded", "select"},
+    "rename":       {"filter", "join_key", "ranking", "dedup_key", "transform", "aggregation",
+                     "excluded", "select"},
     "value_change": {"filter", "join_key", "transform"},
     "type_change":  {"filter", "join_key", "transform"},
     "unknown":      {"filter", "join_key", "ranking", "dedup_key", "transform"},
@@ -32,6 +52,16 @@ NO_LOCAL_FIX = {"ranking", "dedup_key"}
 def _impact_sentence(u: Usage, change_type: str, target: str | None) -> str:
     tgt = target or "the next table"
     lit = f" '{u.detail}'" if u.kind == "filter" and u.detail else ""
+    if u.kind == "star":
+        return (f"This statement takes every column with SELECT *, so the column is carried into "
+                f"{tgt} without ever being named. Nothing here fails on the day of the change - "
+                f"{tgt} is simply built without the column, and whatever reads it further down is "
+                f"what breaks. Ripple cannot see {tgt}'s column list, so everything past this "
+                f"point is worked out rather than read.")
+    if u.kind == "excluded":
+        return (f"This statement takes every column EXCEPT this one by name. The column never "
+                f"reaches {tgt}, so the trail stops here - but the name is written down, so "
+                f"removing or renaming it makes this statement itself fail.")
     if u.kind == "filter":
         if change_type in ("removal", "rename"):
             return (f"Used in a filter here. Once the column is gone this query fails outright, "
@@ -88,6 +118,12 @@ class Finding:
     # than one table the statement reads and the SQL did not say whose it is.
     # Shown, never dropped -- and never asserted either.
     certain: bool = True
+    # This hop is carried by a SELECT *, so the table it builds has no column
+    # list Ripple can read. The hop is real; everything past it is inferred.
+    via_star: bool = False
+    # How many SELECT * hops are behind this finding, counting this one. Zero
+    # means every step to here was written down in the SQL.
+    inferred_hops: int = 0
 
     def key(self) -> tuple:
         return (self.file, self.source_table, self.source_column, self.kind)
@@ -115,6 +151,23 @@ class ScanResult:
     # tick, and that green tick is the only thing this tool sells.
     held_online: list[str] = field(default_factory=list)
     too_long: list[str] = field(default_factory=list)
+    # Tables the chain went through that are built with SELECT *. Their column
+    # list is nowhere in the SQL, so every hop past one of them is worked out
+    # rather than read. This belongs on the scan result and nowhere else: the
+    # repository screen has listed these tables for months, and nothing joined
+    # it up to the answer, so a scan said "no impact" while the warning sat on
+    # a screen nobody was looking at.
+    star_tables: list[dict] = field(default_factory=list)
+    # Trails Ripple stopped following because the hop limit was reached, not
+    # because the code ran out. Without this the setting gets reported as a fact
+    # about the warehouse: "the chain ends at t4, it does not reach production".
+    cut_short: list[dict] = field(default_factory=list)
+    # Table names this repository uses in more than one dataset, where the SQL
+    # being followed did not say which one it meant. Ripple treats them as one
+    # table -- losing the chain is the worse mistake -- and says so here, so a
+    # finding under one of these names is read as being about either.
+    merged_names: list[dict] = field(default_factory=list)
+    max_hops: int = 0
     files_scanned: int = 0
     files_matched: int = 0
     risk: str = "none"
@@ -130,6 +183,10 @@ class ScanResult:
             "mentionsOnly": self.mentions_only,
             "heldOnline": self.held_online,
             "pathTooLong": self.too_long,
+            "starTables": self.star_tables,
+            "cutShort": self.cut_short,
+            "mergedNames": self.merged_names,
+            "maxHops": self.max_hops,
             "filesScanned": self.files_scanned,
             "filesMatched": self.files_matched,
             "risk": self.risk,
@@ -154,6 +211,13 @@ class ScanResult:
             "breakingUsages": len([f for f in self.findings if f.breaking]),
             "couldNotRead": len(self.unreadable),
             "neverOpened": len(self.held_online) + len(self.too_long),
+            # Tables on the trail whose column list is not written down, and
+            # findings that sit on the far side of one. Both counts, because
+            # "3 tables Ripple could not see inside" and "40 findings that
+            # depend on them" are different sizes of the same problem.
+            "tablesNotVisible": len(self.star_tables),
+            "inferredFindings": len([f for f in self.findings if f.inferred_hops]),
+            "trailsCutShort": len(self.cut_short),
         }
 
 
@@ -186,15 +250,21 @@ def trace(
     """
     cfg = cfg or default_settings
     res = ScanResult()
+    res.max_hops = cfg.max_hops
     res.files_scanned = len(index.files)
     res.unreadable = list(parsed.unreadable)
     res.held_online = list(index.held_online)
     res.too_long = list(index.too_long)
     breaks = BREAKS.get(change_type, BREAKS["unknown"])
 
+    # Searched on the table's own name, not on the whole thing somebody typed.
+    # "prj.raw_dataset.customer_demographics" appears in the files as a name with
+    # placeholders where the project and dataset are, so looking for it in full
+    # matches nothing at all -- and "0 files mention this" is the most convincing
+    # possible way to say "no impact".
     all_names: list[str] = []
     for u in upstream:
-        all_names.append(u["table"])
+        all_names.append(short_name(u["table"]))
         all_names.extend(u.get("attrs") or [])
     matched_files = {m.file for m in index.search(all_names)}
     res.files_matched = len(matched_files)
@@ -208,26 +278,108 @@ def trace(
     prod_groups: dict[str, list[Finding]] = {}
     # the same, for chains that end at a table nothing further is built from
     end_groups: dict[str, list[Finding]] = {}
+    # tables whose column list is not written down, and where that was found
+    star_seen: dict[str, dict] = {}
+    cut_seen: dict[tuple, dict] = {}
+    merged_seen: dict[str, dict] = {}
+
+    def note_if_merged(name: str, matched: list, hop: int) -> None:
+        """Say when following this name really did pull in more than one table.
+
+        Reported because it happened, not because it might have. Two tables of
+        the same name in two named datasets are kept apart, and nothing is said;
+        what gets reported is a match that only held because one side said
+        nothing -- ``archive_dataset.cust_stage`` matched by a bare
+        ``cust_stage`` somewhere else.
+
+        Ripple always follows those, because missing a chain is far worse than
+        showing a row somebody can dismiss by opening the file. What it must not
+        do is stay quiet, or the finding reads as a fact about one table when it
+        may be about the other.
+
+        Capitals are the same problem wearing a different hat: BigQuery treats
+        ccm_Wireless_Enroll and ccm_wireless_enroll as two different tables, and
+        Ripple matches them as one.
+        """
+        key = short_name(name).upper()
+        if key in merged_seen:
+            return
+        spellings = parsed.spellings_for(name)
+        if len(spellings) > 1:
+            merged_seen[key] = {
+                "table": short_name(name), "reason": "capitals",
+                "spellings": spellings, "datasets": parsed.datasets_for(name),
+            }
+            return
+        def record() -> None:
+            merged_seen[key] = {
+                "table": short_name(name), "reason": "dataset",
+                "spellings": spellings, "datasets": parsed.datasets_for(name),
+            }
+
+        if hop == 0:
+            # The first name came from a person, not from the code. Somebody
+            # typing "customer_demographics" without its dataset is not an
+            # ambiguity in the warehouse, and flagging it would put a warning on
+            # every scan ever run. It only matters if the repository really does
+            # have that name in more than one dataset.
+            if len(parsed.datasets_for(name)) > 1:
+                record()
+            return
+        here = dataset_of(name).upper()
+        for stmt in matched:
+            for src in stmt.sources:
+                if same_table(src, name) and dataset_of(src).upper() != here:
+                    record()
+                    return
+
+    def show(name: str) -> str:
+        """A table name as it should appear on screen. Dataset-qualified only
+        where this repository uses the same short name in two datasets."""
+        return parsed.display(name)
 
     for up in upstream:
-        table = up["table"]
+        # What was typed is what gets shown; what gets followed is the table it
+        # names. A project id in front of it is dropped, so a name typed in full
+        # still finds the same table the SQL writes with a placeholder there.
+        typed = up["table"]
+        table = canonical(typed)
         for attr in up.get("attrs") or []:
             branches: list[list[dict]] = []
             end_branches: list[list[dict]] = []
             attr_findings: list[Finding] = []
+            attr_cut: list[dict] = []
 
             def walk(cur_table: str, cur_col: str, hop: int, path: list[dict],
-                     chain: list[Finding], seen: set) -> bool:
-                """Follow the column onwards. True if anything was recorded."""
+                     chain: list[Finding], seen: set, inferred: int) -> tuple[bool, bool]:
+                """Follow the column onwards.
+
+                Returns (anything recorded, the hop limit stopped us). The second
+                half is the whole point: without it a trail Ripple gave up on
+                looks exactly like a trail that genuinely ended, and the screen
+                where somebody decides whether to worry reports a setting as a
+                fact about their warehouse.
+                """
                 if hop >= cfg.max_hops:
-                    return False
+                    entry = cut_seen.setdefault(
+                        (cur_table.upper(), cur_col.upper()),
+                        {"table": show(cur_table), "attr": cur_col, "hop": hop, "roots": []},
+                    )
+                    if attr not in entry["roots"]:
+                        entry["roots"].append(attr)
+                    if entry not in attr_cut:
+                        attr_cut.append(entry)
+                    return False, True
                 key = (cur_table.upper(), cur_col.upper())
                 if key in seen:
-                    return False
+                    return False, False
                 seen = seen | {key}
                 recorded = False
+                truncated = False
+                matched = parsed.reading(cur_table)
+                note_if_merged(cur_table, matched, hop)
 
-                for stmt in parsed.reading(cur_table):
+                for stmt in matched:
                     looked[0] += 1
                     if on_progress is not None and looked[0] % 200 == 0:
                         on_progress(looked[0], 0,
@@ -239,7 +391,7 @@ def trace(
                     src = index.get(stmt.file)
                     if src is None:
                         continue
-                    hit = locate(src, cur_col, primary.kind, stmt.line_offset)
+                    hit = locate(src, cur_col, primary.kind, stmt.line_offset, stmt.line_end)
                     note = {
                         "filter": "Filter - stops matching after the change",
                         "join_key": "Join key - verify both sides change together",
@@ -247,18 +399,22 @@ def trace(
                         "dedup_key": "Decides which row survives",
                         "transform": "Value is reshaped here",
                         "aggregation": "Group label changes with the value",
+                        "excluded": "Named in EXCEPT - dropped here, and breaks here",
+                        "star": "SELECT * - carried on without being named",
                         "select": f"Carried forward as {primary.alias or cur_col}",
                     }.get(primary.kind, "Used here")
 
+                    carried_by_star = any(u.via_star for u in us)
                     f = Finding(
-                        source_table=cur_table,
+                        source_table=show(cur_table),
                         source_column=cur_col,
-                        target_table=stmt.target,
+                        target_table=show(stmt.target) if stmt.target else None,
                         alias=primary.alias or cur_col,
                         logic=primary.label,
                         kind=primary.kind,
                         mode=mode_of(us),
-                        impact=_impact_sentence(primary, change_type, stmt.target),
+                        impact=_impact_sentence(primary, change_type,
+                                                show(stmt.target) if stmt.target else None),
                         breaking=primary.kind in breaks,
                         no_local_fix=primary.kind in NO_LOCAL_FIX
                         and change_type in ("removal", "rename"),
@@ -267,6 +423,8 @@ def trace(
                         lines=snippet(src, hit, note),
                         hop=hop,
                         certain=primary.certain,
+                        via_star=carried_by_star,
+                        inferred_hops=inferred + (1 if carried_by_star else 0),
                     )
                     findings_by_key.setdefault(f.key(), f)
                     f = findings_by_key[f.key()]
@@ -279,47 +437,84 @@ def trace(
                     tgt = stmt.target
                     if not tgt:
                         continue
+                    shown = show(tgt)
                     node = {
-                        "name": tgt,
-                        "kind": _kind_of_node(tgt, cfg),
+                        "name": shown,
+                        "kind": _kind_of_node(short_name(tgt), cfg),
                         "alias": primary.alias or cur_col,
                     }
+                    if carried_by_star:
+                        # This table is built with SELECT *, so its column list
+                        # is nowhere in the repository. The hop is real and the
+                        # ones past it are worked out, and both facts travel with
+                        # the result rather than living on another screen.
+                        node["inferred"] = True
+                        entry = star_seen.setdefault(shown, {
+                            "table": shown, "file": stmt.file, "from": show(cur_table),
+                            "attr": cur_col, "roots": [],
+                        })
+                        if attr not in entry["roots"]:
+                            entry["roots"].append(attr)
+                    # SELECT * EXCEPT(col) drops the column by name. It does not
+                    # reach this table, so there is nothing to follow onwards --
+                    # but the statement is still broken by the change, which is
+                    # why the finding above was kept.
+                    if primary.kind == "excluded":
+                        branch = path + [node]
+                        if branch not in end_branches:
+                            end_branches.append(branch)
+                        _collect(end_groups, shown, new_chain)
+                        recorded = True
+                        continue
                     # A column can leave a statement under more than one name --
                     # reshaped into one column and passed through unchanged as
                     # another, in the same SELECT. Following only one of them
                     # stopped the chain one table short of the published table
                     # that reads the other, and reported no production impact.
                     onwards = output_names(stmt, cur_col)
-                    if cfg.is_production_table(tgt):
+                    onward_inferred = inferred + (1 if carried_by_star else 0)
+                    if cfg.is_production_table(short_name(tgt)):
                         node["prod"] = True
                         branch = path + [node]
                         if branch not in branches:
                             branches.append(branch)
-                        _collect(prod_groups, tgt, new_chain)
+                        _collect(prod_groups, shown, new_chain)
                         recorded = True
                         # And keep going. One published table feeding another is
                         # exactly how a change spreads, and stopping at the first
                         # one under-counts the number this whole tool is judged
                         # on -- while showing a shorter chain than the real one.
                         for onward in onwards:
-                            walk(tgt, onward, hop + 1, path + [node], new_chain, seen)
+                            _, hit_cap = walk(tgt, onward, hop + 1, path + [node],
+                                              new_chain, seen, onward_inferred)
+                            truncated = truncated or hit_cap
                         continue
-                    if any(walk(tgt, onward, hop + 1, path + [node], new_chain, seen)
-                           for onward in onwards):
+                    # Every onward name is followed. This used to be an any(),
+                    # which stops at the first one that finds something -- so a
+                    # column leaving under two names had its second name dropped
+                    # exactly when the first name found something, which is most
+                    # of the time.
+                    results = [walk(tgt, onward, hop + 1, path + [node], new_chain,
+                                    seen, onward_inferred)
+                               for onward in onwards]
+                    truncated = truncated or any(cap for _, cap in results)
+                    if any(done for done, _ in results):
                         recorded = True
                     else:
                         # Nothing further is built from this table, so the trail
-                        # ends here. Recorded rather than dropped: an end that
-                        # does not happen to match the production naming rule is
-                        # still a table somebody has to look at.
+                        # ends here -- unless the hop limit is what stopped us,
+                        # in which case the trail does not end here at all and
+                        # the node says so.
+                        if any(cap for _, cap in results):
+                            node["cut"] = True
                         branch = path + [node]
                         if branch not in end_branches:
                             end_branches.append(branch)
-                        _collect(end_groups, tgt, new_chain)
+                        _collect(end_groups, shown, new_chain)
                         recorded = True
-                return recorded
+                return recorded, truncated
 
-            walk(table, attr, 0, [], [], set())
+            walk(table, attr, 0, [], [], set(), 0)
 
             # A chain that carries on past a published table is drawn once, at
             # its full length. The shorter version of it is the same chain with
@@ -329,11 +524,11 @@ def trace(
 
             res.findings.extend([f for f in attr_findings if f not in res.findings])
             if branches or end_branches:
-                graphs.append({"attr": attr, "table": table,
+                graphs.append({"attr": attr, "table": typed,
                                "branches": branches, "endBranches": end_branches})
             res.attributes.append(
                 {
-                    "table": table,
+                    "table": typed,
                     "attr": attr,
                     "found": len(attr_findings),
                     "files": len({f.file for f in attr_findings}),
@@ -342,7 +537,17 @@ def trace(
                     # not in this repository at all.
                     "mentionedIn": len({m.file for m in index.search([attr])}),
                     "reachesProduction": bool(branches),
-                    "endsAt": sorted({b[-1]["name"] for b in end_branches}),
+                    # Only the branches that genuinely ran out of code. A branch
+                    # Ripple stopped following has not ended, and putting it here
+                    # is what turned a setting into a claim about the warehouse.
+                    "endsAt": sorted({b[-1]["name"] for b in end_branches
+                                      if not b[-1].get("cut")}),
+                    "cutShortAt": sorted({c["table"] for c in attr_cut}),
+                    # Hops on this attribute's trail where the column list was
+                    # not written down, and findings that sit past one of them.
+                    "notVisible": sorted({f.target_table for f in attr_findings
+                                          if f.via_star and f.target_table}),
+                    "inferred": len([f for f in attr_findings if f.inferred_hops]),
                     # How widely this column name is used as a name. A scan for
                     # a name half the warehouse shares is a different kind of
                     # answer from a scan for a name only one table has, and the
@@ -372,14 +577,21 @@ def trace(
         for prod, fs in _worst_first(prod_groups)
     ]
     placed = {f.key() for fs in prod_groups.values() for f in fs}
+    cut_tables = {c["table"] for c in cut_seen.values()}
     res.reached = [
         {
             "prod": table,
-            "note": "Last table in the chain - not matched by your production naming rule",
+            "note": ("Ripple stopped following here - the hop limit was reached, so this is "
+                     f"not where the chain ends" if table in cut_tables else
+                     "Last table in the chain - not matched by your production naming rule"),
+            "cut": table in cut_tables,
             "rows": [_finding_row(f) for f in fs],
         }
         for table, fs in _worst_first(end_groups)
     ]
+    res.star_tables = sorted(star_seen.values(), key=lambda s: s["table"].upper())
+    res.cut_short = sorted(cut_seen.values(), key=lambda c: c["table"].upper())
+    res.merged_names = sorted(merged_seen.values(), key=lambda m: m["table"].upper())
     placed |= {f.key() for fs in end_groups.values() for f in fs}
     res.other = [_finding_row(f) for f in res.findings if f.key() not in placed]
 
@@ -602,6 +814,8 @@ def _finding_row(f: Finding) -> dict:
         "lang": f.lang,
         "lines": f.lines,
         "certain": f.certain,
+        "viaStar": f.via_star,
+        "inferredHops": f.inferred_hops,
     }
 
 
