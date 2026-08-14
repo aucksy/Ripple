@@ -144,8 +144,21 @@ def main() -> int:
             except Exception:
                 pass
 
+        # Built as a windowed program, this has no console: no Ctrl-C, and no
+        # window to close. Closing the browser used to leave it running where
+        # nobody could see it, holding its own folder open so the folder could
+        # not be deleted. The open page now says it is there every few seconds,
+        # and when it stops saying so, this stops.
         import uvicorn
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+        from ripple_offline import lifecycle
+
+        lifecycle.reset()
+        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+        server = uvicorn.Server(config)
+        lifecycle.attach(server)
+        lifecycle.watch()
+        server.run()
+        print("\n  Ripple has stopped. You can close the browser tab.\n")
         return 0
     except SystemExit:
         raise

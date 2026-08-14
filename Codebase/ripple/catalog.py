@@ -74,9 +74,13 @@ def build_catalog(parsed: ParsedRepo) -> Catalog:
             for e in stmt.select.expressions:
                 if isinstance(e, exp.Star):
                     cols = []
+                    # Not a dead end. A scan follows the column straight through
+                    # a star and marks the steps past it as inferred; this note
+                    # says what the catalogue is missing, not what the scan is.
                     cat.gaps.append(
                         {"table": target, "file": stmt.file,
-                         "reason": "built with SELECT * - the real column list is not visible here"}
+                         "reason": "built with SELECT * - a scan follows your column through it, "
+                                   "but the column names it publishes are not written down"}
                     )
                     break
                 if isinstance(e, exp.Alias):
