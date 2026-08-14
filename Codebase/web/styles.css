@@ -333,7 +333,12 @@ select.statussel{width:auto;padding:5px 9px;font-size:12.5px}
 
 /* ── footers & progress ──────────────────────────────── */
 .foot{display:flex;align-items:center;gap:14px;margin-top:24px}
-.spin{width:9px;height:9px;border-radius:50%;background:var(--blue);animation:pulse 1s ease-in-out infinite}
+/* flex-shrink:0 is load-bearing. Every .spin sits in a flex row next to a long
+   sentence, and without it the browser shrinks the 9px dot to about 5.6px wide
+   while leaving it 9px tall -- so a round dot renders as a narrow ellipse and
+   reads as half a dot that failed to draw. Measured, not guessed. */
+.spin{width:9px;height:9px;flex-shrink:0;border-radius:50%;background:var(--blue);
+  animation:pulse 1s ease-in-out infinite}
 .bar{height:8px;border-radius:4px;background:#E3EAF3;overflow:hidden;margin-top:12px}
 .bar>i{display:block;height:100%;background:var(--blue);border-radius:4px;transition:width .12s linear}
 .big{font-size:32px;font-weight:800;font-variant-numeric:tabular-nums}

@@ -72,6 +72,17 @@ def test_the_settings_screen_asks_for_the_two_things_that_matter(built):
     assert "Repository folder" in js and "How the SQL is read" in js
 
 
+def test_the_built_page_can_close_the_program(built):
+    """Without this the only way to stop Ripple is Task Manager, and until it is
+    stopped its own folder cannot be deleted. Both halves have to be in the page
+    that actually ships: the repeating "still here", and the goodbye."""
+    js = (built / "app.js").read_text(encoding="utf-8")
+    assert "/api/alive" in js, "nothing tells the program a page is open"
+    assert "/api/leaving" in js, "nothing tells it the tab was closed"
+    assert "sendBeacon" in js, "a goodbye sent with fetch does not survive the tab closing"
+    assert "/api/quit" in js and "Close Ripple" in js, "no visible way to stop it"
+
+
 def test_the_page_says_which_edition_it_is(built):
     assert "Ripple Offline" in (built / "index.html").read_text(encoding="utf-8")
 

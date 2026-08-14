@@ -16,6 +16,55 @@
    rather than a wizard that would scan nothing and say nothing was found. */
 function afterBoot() {
   if (S.health && !S.health.configured) S.view = 'settings';
+  keepAlive();
+}
+
+// ── telling the program somebody is still here ────────────────────────────
+/* The built program has no console window and nothing to close. Closing this
+   tab used to leave it running where nobody could see it, holding its own
+   folder open — so the folder could not be deleted, the port stayed taken, and
+   the only way out was Task Manager.
+
+   So this page says it is here, every few seconds, and says goodbye on the way
+   out. The goodbye is the reliable half: sendBeacon is delivered even as the
+   tab is closing, which fetch is not. The repeating beat is the backstop for a
+   browser that was killed outright and never got to say anything.
+
+   BEAT is deliberately shorter than the program's quiet limit by a long way —
+   a hidden tab is throttled to about one timer a minute, and being throttled
+   must never look like being gone. */
+const BEAT = 10000;
+
+function keepAlive() {
+  if (S.beatTimer) return;
+  const beat = () => { fetch('/api/alive', { method: 'POST' }).catch(() => {}); };
+  beat();
+  S.beatTimer = setInterval(beat, BEAT);
+  // pagehide covers closing the tab, closing the window and navigating away,
+  // in every browser that matters. It also fires on a refresh, which is why
+  // the program treats this as "start a short clock", not "stop now".
+  addEventListener('pagehide', () => {
+    try { navigator.sendBeacon('/api/leaving'); } catch (e) { /* going anyway */ }
+  });
+}
+
+/* Stop the program, and say so, rather than leaving a dead tab that looks
+   exactly like a working one. */
+function closeRipple() {
+  if (S.beatTimer) { clearInterval(S.beatTimer); S.beatTimer = null; }
+  fetch('/api/quit', { method: 'POST' }).catch(() => {});
+  // The reply may never arrive — the server is shutting down as it answers —
+  // so the screen changes on the way out rather than waiting for it.
+  setTimeout(() => {
+    document.body.innerHTML = '';
+    document.body.append(el('div', { className: 'empty', style: 'padding-top:120px' },
+      el('b', { textContent: 'Ripple has stopped.' }),
+      el('div', { className: 'small muted', style: 'margin-top:10px;line-height:1.6',
+        textContent: 'You can close this tab. The program is no longer running, so its folder '
+          + 'can be moved or deleted now.' }),
+      el('div', { className: 'small faint', style: 'margin-top:10px',
+        textContent: 'To use Ripple again, double-click Ripple Offline.exe.' })));
+  }, 250);
 }
 
 // ── what step 3 says when the folder is not there ─────────────────────────
@@ -99,8 +148,29 @@ function settingsView(root) {
       + 'but the headline, the risk level and the drafted reply all follow it. '
       + 'Press Save below to use it.'));
   grid.append(el('div', {}, folderCard(h, o), dialectCard(h, o), prod, saveRow(h, o)),
-              el('div', { className: 'rail' }, whereCard(h), guardCard(), factsCard(h)));
+              el('div', { className: 'rail' }, whereCard(h), guardCard(), factsCard(h),
+                 closeCard()));
   root.append(grid);
+}
+
+/* The way out. There is no console window and no application window, so
+   without this the only way to stop Ripple is Task Manager — and until it is
+   stopped, its own folder cannot be deleted or moved. */
+function closeCard() {
+  const card = el('div', { className: 'card pad lg', style: 'margin-top:18px' });
+  card.append(el('span', { className: 'lbl', textContent: 'Finished with Ripple' }));
+  card.append(el('div', { className: 'small muted', style: 'margin-top:10px;line-height:1.55',
+    textContent: 'Ripple runs as a small program on this machine, not inside the browser, so '
+      + 'closing this tab is not the same as closing Ripple. While it is running its own '
+      + 'folder cannot be deleted or moved.' }));
+  const stop = el('button', { className: 'ghost', style: 'margin-top:12px',
+    textContent: 'Close Ripple' });
+  stop.onclick = () => closeRipple();
+  card.append(stop);
+  card.append(el('div', { className: 'small faint', style: 'margin-top:10px;line-height:1.55',
+    textContent: 'It also closes itself a few minutes after the last tab is shut, so a '
+      + 'forgotten one does not sit there holding the folder open.' }));
+  return card;
 }
 
 /* The folder to scan. Typing a path always works; the picker is only offered

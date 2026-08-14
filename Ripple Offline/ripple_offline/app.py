@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import folderpick, nonet, paths, prefs, synced
+from . import folderpick, lifecycle, nonet, paths, prefs, synced
 
 # The shared engine. Importing this package has already put it on the path.
 from ripple import narrative, production, progress, store          # noqa: E402
@@ -196,6 +196,31 @@ class SettingsIn(BaseModel):
 @app.get("/api/health")
 def health() -> dict:
     return _health()
+
+
+# ── knowing when to stop ───────────────────────────────────────────────────
+# Without these, closing the browser leaves the program running where nobody can
+# see it: the folder cannot be deleted, the port stays taken, and the only way
+# out is Task Manager. See ripple_offline/lifecycle.py.
+@app.post("/api/alive")
+def alive() -> dict:
+    """The open page saying it is still there. Sent every few seconds."""
+    lifecycle.beat()
+    return {"ok": True}
+
+
+@app.post("/api/leaving")
+def going() -> dict:
+    """The page is closing. Starts a short clock rather than stopping now, so a
+    refresh -- which sends exactly this -- does not take Ripple down with it."""
+    lifecycle.leaving()
+    return {"ok": True}
+
+
+@app.post("/api/quit")
+def quit_now() -> dict:
+    """The Close Ripple button. Stops the program and lets go of the folder."""
+    return {"ok": True, "reason": lifecycle.stop("closed from the screen")}
 
 
 @app.get("/api/progress")

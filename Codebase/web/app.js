@@ -863,8 +863,20 @@ function step3(root) {
         el('div', { className: 'small faint', textContent: 'columns found' }))));
     const g = x(root, 'gaps'); g.innerHTML = '';
     if (cat.gaps.length) {
-      const box = el('div', { className: 'note warn' });
-      box.append(el('b', { textContent: `${cat.gaps.length} table${cat.gaps.length === 1 ? '' : 's'} Ripple could not fully read` }));
+      // This list used to be headed "tables Ripple could not fully read", which
+      // read as a list of dead ends — and while the scan really did stop at
+      // them, that was true. It no longer is: a scan follows the column
+      // straight through a SELECT * and marks every step past it. Leaving the
+      // old heading up would have somebody reading this page as the reason a
+      // result was short, when it is not.
+      const box = el('div', { className: 'note info' });
+      box.append(el('b', { textContent: `${cat.gaps.length} table${cat.gaps.length === 1 ? '' : 's'} `
+        + `here ${cat.gaps.length === 1 ? 'has' : 'have'} no column list written down` }));
+      box.append(el('div', { style: 'margin-top:6px;line-height:1.55', textContent:
+        'A scan still follows your attribute through these — a SELECT * carries every column, '
+        + 'so the trail does not stop here. What Ripple cannot do is name the columns inside '
+        + 'them, so every step past one is marked on the result as worked out rather than read. '
+        + 'This is a fact about how the code is written, not a gap in the scan.' }));
       cat.gaps.forEach(gap => box.append(el('div', { style: 'margin-top:6px' },
         el('span', { className: 'mono', textContent: gap.table }), ' — ' + gap.reason)));
       g.append(box);

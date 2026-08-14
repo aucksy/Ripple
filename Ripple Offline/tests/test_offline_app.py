@@ -240,3 +240,41 @@ def test_the_offline_page_is_served(client):
     page = client.get("/")
     assert page.status_code == 200
     assert "Ripple Offline" in page.text
+
+
+# ── knowing when to stop ───────────────────────────────────────────────────
+def test_the_page_can_say_it_is_still_there(client):
+    """The program has no console window and no window of its own, so the open
+    page is the only thing that knows anybody is using it."""
+    from ripple_offline import lifecycle
+
+    lifecycle.reset()
+    assert client.post("/api/alive").json() == {"ok": True}
+    assert lifecycle.facts()["secondsSinceBeat"] is not None
+
+
+def test_saying_goodbye_does_not_stop_it_on_the_spot(client):
+    """A refresh sends the same goodbye. Stopping on it would close Ripple
+    every time somebody pressed F5."""
+    from ripple_offline import lifecycle
+
+    lifecycle.reset()
+    client.post("/api/alive")
+    assert client.post("/api/leaving").json() == {"ok": True}
+    assert lifecycle.stopping() is False
+
+
+def test_the_close_button_stops_it(client):
+    from ripple_offline import lifecycle
+
+    lifecycle.reset()
+
+    class FakeServer:
+        should_exit = False
+
+    server = FakeServer()
+    lifecycle.attach(server)
+    out = client.post("/api/quit").json()
+    assert out["ok"] is True
+    assert server.should_exit is True, "the program is still running after being told to stop"
+    lifecycle.reset()
