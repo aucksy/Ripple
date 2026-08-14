@@ -27,6 +27,7 @@ from .templating import (
     fill_placeholders,
     has_blocks,
     has_placeholders,
+    placeholder_names,
     unwrap_blocks,
 )
 
@@ -44,11 +45,14 @@ LOGIC_LABEL = {
     "dedup_key": "Dedup key",
     "aggregation": "Aggregation",
     "transform": "Transform",
+    "excluded": "Named in EXCEPT",
     "select": "Select",
+    "star": "Carried by SELECT *",
 }
 # Most consequential first: if a column is used several ways in one statement,
 # this decides which one heads the finding.
-KIND_PRIORITY = ["ranking", "dedup_key", "filter", "join_key", "transform", "aggregation", "select"]
+KIND_PRIORITY = ["ranking", "dedup_key", "filter", "join_key", "transform", "aggregation",
+                 "excluded", "select", "star"]
 
 # Words that make a line likely to be the one a given usage lives on.
 KIND_MARKERS = {
@@ -58,8 +62,91 @@ KIND_MARKERS = {
     "aggregation": ("GROUP BY",),
     "dedup_key": ("MAX(", "MIN(", "GROUP BY"),
     "transform": ("SUBSTR", "CAST", "TRIM", "UPPER", "LOWER", "COALESCE", "CONCAT", "("),
+    "excluded": ("EXCEPT", "SELECT"),
     "select": ("SELECT", " AS "),
+    "star": ("SELECT *", "SELECT"),
 }
+
+
+# ── one table's name, and whether two names are the same table ─────────────
+# ``prj.raw_dataset.customer_demographics`` and
+# ``prj.archive_dataset.customer_demographics`` are two different tables. Ripple
+# used to keep only the last part of a name, so a change to one produced
+# findings for the code that reads the other -- and in the warehouse this was
+# built for the same table name really does appear in a source dataset and a
+# stage dataset.
+#
+# The project is deliberately left out. It is templated in nearly every file
+# ({{tgt_project_id}}, {{src_project_id}}), so including it would split one real
+# table into two on the strength of which placeholder somebody happened to type.
+# The dataset is the part that says which table this is.
+def short_name(table: str) -> str:
+    """The table's own name, without the dataset in front of it."""
+    return (table or "").rsplit(".", 1)[-1]
+
+
+def dataset_of(table: str) -> str:
+    """The dataset a name was qualified with, or '' if the SQL did not say."""
+    parts = (table or "").rsplit(".", 1)
+    return parts[0] if len(parts) == 2 else ""
+
+
+def canonical(table: str) -> str:
+    """A name cut down to the part that identifies the table: ``dataset.name``.
+
+    Names arrive with a project in front of them -- typed into the notification,
+    pasted off a screen, or written that way in the SQL. The project is dropped
+    for the reason given above: it is a placeholder in nearly every file here, so
+    comparing it would split one real table into two.
+    """
+    parts = [p for p in (table or "").split(".") if p]
+    return ".".join(parts[-2:]) if parts else (table or "")
+
+
+def same_table(a: str, b: str) -> bool:
+    """Are these two names the same table?
+
+    The short name always has to match. The dataset can only rule a match OUT,
+    and only when BOTH sides carry one -- these files are templated, so a great
+    many names in the repository are written with a placeholder where a dataset
+    goes, and treating "no dataset given" as "a different table" would cut every
+    one of those chains. Two placeholders that fill to the same value produce the
+    same word here, so they go on matching.
+    """
+    if short_name(a).upper() != short_name(b).upper():
+        return False
+    left, right = dataset_of(a).upper(), dataset_of(b).upper()
+    return not (left and right and left != right)
+
+
+def _qualify(t: exp.Table) -> str:
+    """One table node as ``dataset.name``, or just ``name`` when unqualified."""
+    name = t.name
+    if not name:
+        return ""
+    db = t.text("db")
+    return f"{db}.{name}" if db else name
+
+
+def _forget_templated_datasets(stmt: exp.Expression, holes: set[str]) -> None:
+    """Take off any dataset that is really a placeholder.
+
+    Ripple fills placeholders in with an ordinary word so the statement parses,
+    which leaves ``{{stage_dataset}}`` looking exactly like a dataset called
+    stage_dataset. It is not one -- it is a hole, and the file next door writes
+    the very same dataset as a different hole.
+
+    Treating those two words as two datasets would split one real table in two,
+    cut the chain between them, and report no impact. So a dataset that came out
+    of a placeholder is recorded as what it honestly is: not stated. A name with
+    no dataset goes on matching any dataset, which is the safe direction --
+    Ripple would rather show a finding somebody can dismiss by opening the file
+    than hide one nobody will ever know was missed.
+    """
+    for t in stmt.find_all(exp.Table):
+        db = t.text("db")
+        if db and db.upper() in holes:
+            t.set("db", None)
 
 
 @dataclass
@@ -73,6 +160,11 @@ class Usage:
     # most joins have the name on both sides, and "cm13" on its own does not say
     # whose. False means the usage is real and the table is a guess.
     certain: bool = True
+    # Whether this column only leaves the statement because of a SELECT *. The
+    # column really is carried through -- that is what a star does -- but the
+    # column list is not written down anywhere, so nothing here can be pointed
+    # at. Every finding on the far side of one of these is inferred, and says so.
+    via_star: bool = False
 
     @property
     def label(self) -> str:
@@ -84,6 +176,9 @@ class Statement:
     file: str
     lang: str
     line_offset: int
+    # The last line of the file this statement occupies. A finding is only ever
+    # pointed at a line inside its own statement -- see _with_lines.
+    line_end: int
     sql: str
     target: str | None
     sources: set[str]
@@ -123,19 +218,84 @@ class ParsedRepo:
     # Built on demand by reading(); see the note there.
     _by_source: dict | None = field(default=None, repr=False, compare=False)
     _indexed: int = field(default=-1, repr=False, compare=False)
+    _ambiguous: set = field(default_factory=set, repr=False, compare=False)
+    _datasets: dict = field(default_factory=dict, repr=False, compare=False)
+    _spellings: dict = field(default_factory=dict, repr=False, compare=False)
 
     def reading(self, table: str) -> list[Statement]:
         # Indexed rather than searched. A scan asks this once per table it
         # visits, and on a repository of a few thousand statements walking the
         # whole list each time was a large part of what a scan cost.
-        if self._by_source is None or self._indexed != len(self.statements):
-            by_source: dict[str, list[Statement]] = {}
-            for s in self.statements:
-                for src in s.sources:
-                    by_source.setdefault(src.upper(), []).append(s)
-            self._by_source = by_source
-            self._indexed = len(self.statements)
-        return self._by_source.get(table.upper(), [])
+        #
+        # Indexed on the short name and then filtered on the dataset, so a name
+        # the SQL qualified is not merged with a same-named table in another
+        # dataset -- and a name it did not qualify still matches everything, as
+        # it must, because nothing has been said to tell them apart.
+        self._index()
+        candidates = self._by_source.get(short_name(table).upper(), [])
+        if not dataset_of(table):
+            return candidates
+        return [s for s in candidates if any(same_table(src, table) for src in s.sources)]
+
+    def _index(self) -> None:
+        if self._by_source is not None and self._indexed == len(self.statements):
+            return
+        by_source: dict[str, list[Statement]] = {}
+        seen: dict[str, set[str]] = {}
+        spelt: dict[str, set[str]] = {}
+        bare: set[str] = set()
+        for s in self.statements:
+            for src in s.sources:
+                by_source.setdefault(short_name(src).upper(), []).append(s)
+            for name in list(s.sources) + ([s.target] if s.target else []):
+                short = short_name(name)
+                ds = dataset_of(name)
+                if ds:
+                    seen.setdefault(short.upper(), set()).add(ds.upper())
+                else:
+                    bare.add(short.upper())
+                # How this name is actually spelt, capitals and all. BigQuery
+                # treats ccm_Wireless_Enroll and ccm_wireless_enroll as two
+                # different tables. Ripple matches them as one, because losing a
+                # chain is the worse mistake -- and then says so, rather than
+                # letting a finding read as a fact about one of them.
+                spelt.setdefault(short.upper(), set()).add(short)
+        self._by_source = by_source
+        self._datasets = seen
+        self._spellings = spelt
+        # Names Ripple cannot be sure it is following one table under. Two ways:
+        # the same name in two different datasets, or one dataset plus somewhere
+        # else that names the table with no dataset at all -- the second is a
+        # merge just as much as the first, and it is the one that produced a
+        # finding about an archive table on a scan of the source table.
+        #
+        # In a fully templated repository almost no name has a dataset Ripple
+        # can read, so almost nothing is flagged. That is the point: this fires
+        # where there really is something to tell apart, and a warning printed
+        # over every table is one nobody reads.
+        self._ambiguous = {k for k, v in seen.items() if len(v) > 1 or k in bare}
+        self._indexed = len(self.statements)
+
+    def ambiguous_names(self) -> set[str]:
+        """Short table names this repository uses in more than one dataset."""
+        self._index()
+        return self._ambiguous
+
+    def datasets_for(self, table: str) -> list[str]:
+        """Every dataset this repository writes or reads this table name in."""
+        self._index()
+        return sorted(self._datasets.get(short_name(table).upper(), set()))
+
+    def spellings_for(self, table: str) -> list[str]:
+        """Every way this table name is capitalised in the repository."""
+        self._index()
+        return sorted(self._spellings.get(short_name(table).upper(), set()))
+
+    def display(self, table: str) -> str:
+        """The name to put on screen: qualified only where it has to be."""
+        if short_name(table).upper() in self.ambiguous_names():
+            return table
+        return short_name(table)
 
     def statements_in(self, path: str) -> list[Statement]:
         return [s for s in self.statements if s.file == path]
@@ -148,11 +308,11 @@ def _table_name(node: exp.Expression | None) -> str | None:
     if isinstance(node, exp.Schema):
         node = node.this
     if isinstance(node, exp.Table):
-        return node.name
+        return _qualify(node)
     if isinstance(node, exp.Expression):
         t = node.find(exp.Table)
         if t is not None:
-            return t.name
+            return _qualify(t)
     return None
 
 
@@ -249,16 +409,45 @@ def _first_code_line(chunk: str) -> str:
     return chunk.strip()[:120]
 
 
+def _with_lines(
+    statements: list[exp.Expression], text: str, base_line: int
+) -> list[tuple[exp.Expression, int, int]]:
+    """Give each statement the lines of the file it actually occupies.
+
+    sqlglot reads a whole block in one go and says nothing about where each
+    statement started, so every statement in a file used to carry the same
+    offset: the top of the block. A finding was then free to point at any line
+    in the file that happened to score well -- and in a 600-line generated file
+    with sixty statements, that regularly meant a finding about one table
+    pointing at a WHERE clause belonging to a different table entirely. The
+    finding was right and the line was somebody else's.
+
+    ``split_statements`` already knows where each statement begins, and costs a
+    single character scan rather than another parse. Where the two line up one
+    for one, each statement gets its real span; where they do not, the block
+    offset is used exactly as before rather than a span that might be wrong.
+    """
+    chunks = split_statements(text)
+    if len(chunks) != len(statements):
+        last = base_line + text.count("\n")
+        return [(s, base_line, last) for s in statements]
+    out: list[tuple[exp.Expression, int, int]] = []
+    for stmt, (chunk, line) in zip(statements, chunks):
+        start = base_line + line
+        out.append((stmt, start, start + chunk.strip().count("\n")))
+    return out
+
+
 def _parse_text(
     text: str, dialect: str | None, base_line: int
-) -> tuple[list[tuple[exp.Expression, int]], list[dict]]:
+) -> tuple[list[tuple[exp.Expression, int, int]], list[dict]]:
     """Parse a block; if it is refused, parse it one statement at a time."""
     try:
-        got = sqlglot.parse(text, read=dialect)
-        return [(s, base_line) for s in got if s is not None], []
+        got = [s for s in sqlglot.parse(text, read=dialect) if s is not None]
+        return _with_lines(got, text, base_line), []
     except Exception:
         pass
-    good: list[tuple[exp.Expression, int]] = []
+    good: list[tuple[exp.Expression, int, int]] = []
     bad: list[dict] = []
     for chunk, line in split_statements(text):
         try:
@@ -266,7 +455,9 @@ def _parse_text(
         except Exception:
             bad.append({"line": base_line + line + 1, "text": _first_code_line(chunk)})
             continue
-        good.extend((s, base_line + line) for s in got if s is not None)
+        start = base_line + line
+        end = start + chunk.strip().count("\n")
+        good.extend((s, start, end) for s in got if s is not None)
     return good, bad
 
 
@@ -350,14 +541,18 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
         # Templating is filled in and scripting keywords are dropped on the way
         # into the parser only. Everything shown on screen still comes from the
         # file exactly as it is written, on the line it is written on.
-        text = fill_placeholders(sql_text) if has_placeholders(sql_text) else sql_text
+        templated = has_placeholders(sql_text)
+        text = fill_placeholders(sql_text) if templated else sql_text
+        holes = placeholder_names(sql_text) if templated else set()
         # Handed straight over rather than asked about first: unwrap_blocks
         # gives the text back unchanged when there is no scripting in it, and
         # asking first meant walking every line of every file twice.
         text = unwrap_blocks(text)
         parsed, bad = _parse_text(text, dialect, offset)
         failures.extend(bad)
-        for stmt, line in parsed:
+        for stmt, line, line_end in parsed:
+            if holes:
+                _forget_templated_datasets(stmt, holes)
             # A scripting block, a loop, a procedure call, an EXECUTE IMMEDIATE.
             # Kept, not reported: whether it matters depends on whether the name
             # somebody is chasing turns up inside it, which is not known here.
@@ -371,9 +566,17 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
             sources: set[str] = set()
             skip = _cte_names(stmt)
             if select is not None:
-                for t in select.find_all(exp.Table):
-                    if t.name and t.name.upper() not in skip and t.name.upper() != (target or "").upper():
-                        sources.add(t.name)
+                # Every table the whole statement reads, not just the ones in
+                # its first SELECT. A union is two SELECTs side by side, and
+                # looking only at the first made the second half of every
+                # ..._BCA_UNION table invisible: the statement was never
+                # recorded as reading that table at all, so a change to it
+                # produced no findings anywhere and the scan came back clean.
+                for t in stmt.find_all(exp.Table):
+                    qualified = _qualify(t)
+                    if (qualified and t.name.upper() not in skip
+                            and not same_table(qualified, target or "")):
+                        sources.add(qualified)
             # A DELETE or an UPDATE reads the table it changes. Without this the
             # statement has no source, so nothing ever looks at its WHERE clause
             # -- and a filter on a column that is about to disappear is exactly
@@ -385,6 +588,7 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
                     file=f.path,
                     lang=f.lang,
                     line_offset=line,
+                    line_end=line_end,
                     sql=stmt.sql(),
                     target=target,
                     sources=sources,
@@ -502,38 +706,144 @@ def _one_entry_per_file(problems: list[dict]) -> list[dict]:
 # it does not say, nothing is thrown away -- the usage is kept and marked.
 
 
-def _sources_of(stmt: Statement) -> dict[str, str]:
-    """Every alias and table name this statement reads, pointing at its table."""
-    out: dict[str, str] = {}
+def _sources_of(stmt: Statement) -> dict[str, list[str]]:
+    """Every alias and table name this statement reads, and what each can mean.
+
+    A list rather than one name, because a bare ``customer_demographics`` in a
+    statement that reads it out of two datasets genuinely does not say which.
+    Answering that with whichever one happened to be parsed first is how a
+    change to the source table produced findings about the archive copy.
+    """
+    out: dict[str, list[str]] = {}
+
+    def add(key: str, value: str) -> None:
+        bucket = out.setdefault(key.upper(), [])
+        if value not in bucket:
+            bucket.append(value)
+
     if stmt.expr is None:
         return out
     for t in stmt.expr.find_all(exp.Table):
-        if not t.name:
+        qualified = _qualify(t)
+        if not qualified:
             continue
-        out.setdefault(t.name.upper(), t.name)
-        alias = t.alias
-        if alias:
-            out[alias.upper()] = t.name
+        add(t.name, qualified)
+        if t.alias:
+            add(t.alias, qualified)
     return out
 
 
 def _belongs_to(col: exp.Column, stmt: Statement, table: str,
-                sources: dict[str, str], ctes: set[str]) -> str:
+                sources: dict[str, list[str]], ctes: set[str]) -> str:
     """'yes', 'no' or 'unknown' -- is this column reference `table`'s?"""
     qualifier = col.table
     if not qualifier:
         # Unqualified. If the statement only reads one table it can only have
         # come from there. If it reads several, the SQL has not said.
         return "yes" if len(stmt.sources) <= 1 else "unknown"
-    resolved = sources.get(qualifier.upper())
-    if resolved is None:
+    options = sources.get(qualifier.upper())
+    if not options:
         return "unknown"                 # an alias from somewhere we cannot see
-    if resolved.upper() in ctes:
+    if any(short_name(o).upper() in ctes for o in options):
         # It came out of a WITH block, which was itself built from something.
         # That is exactly the chain being followed, so it is not a reason to
         # rule the usage out.
         return "unknown"
-    return "yes" if resolved.upper() == table.upper() else "no"
+    verdicts = {"yes" if same_table(o, table) else "no" for o in options}
+    if verdicts == {"yes"}:
+        return "yes"
+    if verdicts == {"no"}:
+        return "no"
+    # The name stands for two tables at once and one of them is this one. Kept,
+    # and marked -- never silently counted as a fact about either.
+    return "unknown"
+
+
+# ── SELECT *, which carries every column and names none of them ────────────
+def _direct_tables(sel: exp.Select) -> list[str]:
+    """The tables this SELECT reads in its own FROM and JOINs.
+
+    Its own, not a subquery's: a star in an outer SELECT covers whatever the
+    subquery below it hands up, and that subquery has a star check of its own.
+    """
+    out: list[str] = []
+    parts = [sel.args.get("from")] + list(sel.args.get("joins") or [])
+    for part in parts:
+        node = getattr(part, "this", None) if part is not None else None
+        if isinstance(node, exp.Table):
+            qualified = _qualify(node)
+            if qualified and qualified not in out:
+                out.append(qualified)
+    return out
+
+
+def _is_star(e: exp.Expression) -> bool:
+    """``*`` or ``a.*`` -- either way, not a column reference."""
+    return isinstance(e, exp.Star) or (isinstance(e, exp.Column)
+                                       and isinstance(e.this, exp.Star))
+
+
+def _star_of(e: exp.Expression) -> exp.Star:
+    return e if isinstance(e, exp.Star) else e.this
+
+
+def _stars_over(stmt: Statement, table: str, sources: dict[str, list[str]]) -> list[exp.Star]:
+    """Every ``SELECT *`` in this statement that covers `table`'s columns."""
+    if stmt.expr is None:
+        return []
+    found: list[exp.Star] = []
+    for sel in stmt.expr.find_all(exp.Select):
+        reads = _direct_tables(sel)
+        if not any(same_table(t, table) for t in reads):
+            continue
+        for e in sel.expressions:
+            if isinstance(e, exp.Star):
+                found.append(e)                      # SELECT * -- everything
+            elif isinstance(e, exp.Column) and isinstance(e.this, exp.Star):
+                # a.* -- only the table that alias stands for
+                for option in sources.get((e.table or "").upper(), []):
+                    if same_table(option, table):
+                        found.append(e.this)
+                        break
+    return found
+
+
+def _named_in_except(star: exp.Star, column: str) -> bool:
+    """``SELECT * EXCEPT(cm13)`` -- the one shape where a star drops a column."""
+    for c in star.args.get("except") or []:
+        if getattr(c, "name", "").upper() == column.upper():
+            return True
+    return False
+
+
+def star_carries(stmt: Statement, column: str, table: str,
+                 sources: dict[str, list[str]] | None = None) -> bool:
+    """Does a ``SELECT *`` carry this column of this table out of the statement?
+
+    ``SELECT * FROM customer_demographics`` really does publish every column
+    that table has, including the one being traced. The column list is simply
+    not written down anywhere a parser can read it.
+
+    Refusing to follow that was the largest hole in Ripple. Forty-four tables in
+    the repository this was built for are made this way, so the trail died at
+    the first one it met -- and a change that breaks a published table one hop
+    later came back as a clean, confident "no impact".
+    """
+    stars = _stars_over(stmt, table, sources if sources is not None else _sources_of(stmt))
+    return any(not _named_in_except(s, column) for s in stars)
+
+
+def star_excludes(stmt: Statement, column: str, table: str,
+                  sources: dict[str, list[str]] | None = None) -> bool:
+    """Is the column named in a ``SELECT * EXCEPT(...)`` of this statement?
+
+    Two things at once, and both matter. The column does not reach the table
+    this statement builds, so the chain genuinely stops -- and the statement
+    names the column out loud, so removing or renaming it makes this statement
+    fail on the day of the change.
+    """
+    stars = _stars_over(stmt, table, sources if sources is not None else _sources_of(stmt))
+    return any(_named_in_except(s, column) for s in stars)
 
 
 # ── working out how a column is used ───────────────────────────────────────
@@ -593,9 +903,7 @@ def output_names(stmt: Statement, column: str, limit: int = MAX_OUTPUT_NAMES) ->
     if cached is not None:
         return cached
     names = [column]
-    for direct_map, derived_map in _projections(stmt):
-        if direct_map is None:                      # SELECT * -- names pass through
-            continue
+    for direct_map, derived_map, passthrough, dropped in _projections(stmt):
         direct: list[str] = []
         derived: list[str] = []
         for name in names:
@@ -603,43 +911,130 @@ def output_names(stmt: Statement, column: str, limit: int = MAX_OUTPUT_NAMES) ->
         for name in names:
             derived.extend(derived_map.get(name.upper(), ()))
         found = _dedupe(direct + derived)
+        # A star carries the name through untouched -- unless the star names it
+        # in an EXCEPT, which is the one shape where a star drops a column.
+        # Written beside explicit columns -- SELECT *, CAST(cm13 AS STRING) AS
+        # cm13_str -- it leaves under BOTH names, and the untouched one is kept
+        # first because it is the one the rest of the warehouse is likeliest to
+        # be reading.
+        if passthrough:
+            kept = [n for n in names if n.upper() not in dropped]
+            found = _dedupe(kept + found)
+            if not found:
+                # Every name was dropped by an EXCEPT. The column really does
+                # stop here, and saying so is the point of tracking this at all.
+                return []
         # Not projected at this level at all. That is normal -- the column may
         # only be in a WHERE or a JOIN here -- so the name it had carries on
         # rather than the trail being dropped.
         names = found[:limit] if found else names
+    names = _through_insert_columns(stmt, names)
     stmt._names[column.upper()] = names
     return names
 
 
-def _projections(stmt: Statement) -> list[tuple[dict | None, dict]]:
-    """For each SELECT, inner to outer: which names each source column leaves as.
+def _through_insert_columns(stmt: Statement, names: list[str]) -> list[str]:
+    """Rename by position, the way ``INSERT INTO t (a, b) SELECT x, y`` does.
+
+    The load statement at the heart of every foundation file in this pipeline is
+    a TRUNCATE followed by an INSERT with the target's whole column list written
+    out, and the SELECT under it hands over values by position, not by name. So
+    the name the column carries downstream is the one in the INSERT's list -- and
+    following the SELECT's name instead walked off the end of the chain.
+
+    Only done when the two lists are plainly the same length and no star is in
+    the way. Where the arity cannot be checked, the name is left as it was
+    rather than guessed at.
+    """
+    if not isinstance(stmt.expr, exp.Insert) or stmt.select is None:
+        return names
+    schema = stmt.expr.this
+    if not isinstance(schema, exp.Schema):
+        return names
+    targets = [c.name for c in schema.expressions if getattr(c, "name", "")]
+    if not targets:
+        return names
+    positions: list[str] = []
+    for e in stmt.select.expressions:
+        if _is_star(e):
+            return names                      # arity unknown; nothing to line up
+        positions.append(e.alias if isinstance(e, exp.Alias)
+                         else e.name if isinstance(e, exp.Column) else "")
+    if len(positions) != len(targets):
+        return names
+    wanted = {n.upper() for n in names}
+    mapped = [targets[i] for i, p in enumerate(positions) if p and p.upper() in wanted]
+    return _dedupe(mapped) if mapped else names
+
+
+def _select_depth(sel: exp.Select) -> int:
+    """How many SELECTs this one is nested inside."""
+    depth = 0
+    node = sel.parent
+    while node is not None:
+        if isinstance(node, exp.Select):
+            depth += 1
+        node = node.parent
+    return depth
+
+
+def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
+    """For each level of SELECT, inner to outer: what each column leaves as.
 
     Built in one pass over the statement instead of once per column asked about.
     ``direct`` is the column carried through or plainly renamed; ``derived`` is
-    the column reshaped into something else. A ``None`` direct map means the
-    SELECT is a ``SELECT *`` and every name passes through untouched.
+    the column reshaped into something else; the flag says a ``SELECT *`` is
+    carrying every remaining name through untouched.
+
+    Grouped by how deeply nested each SELECT is, which is what makes a UNION
+    come out right. The two halves of a union are side by side, not one inside
+    the other, and treating the second as if it wrapped the first fed the wrong
+    map into the next step -- so a column renamed in the first half of
+    ``..._BCA_UNION`` was followed under the second half's name and the chain
+    went cold. SQL takes a union's output names from its FIRST branch, and so
+    does this: the branches are read in the order they are written.
     """
     if stmt._projected is not None:
         return stmt._projected
-    out: list[tuple[dict | None, dict]] = []
     selects = list(stmt.expr.find_all(exp.Select)) if stmt.expr is not None else []
-    for sel in reversed(selects):                   # innermost first
-        if any(isinstance(e, exp.Star) for e in sel.expressions):
-            out.append((None, {}))
-            continue
+    by_depth: dict[int, list[exp.Select]] = {}
+    for sel in selects:
+        by_depth.setdefault(_select_depth(sel), []).append(sel)
+
+    out: list[tuple[dict, dict, bool, set]] = []
+    for depth in sorted(by_depth, reverse=True):            # innermost first
         direct: dict[str, list[str]] = {}
         derived: dict[str, list[str]] = {}
-        for e in sel.expressions:
-            if isinstance(e, exp.Alias):
-                inner = e.this
-                if isinstance(inner, exp.Column):
-                    direct.setdefault(inner.name.upper(), []).append(e.alias)
-                else:
-                    for c in e.find_all(exp.Column):
-                        derived.setdefault(c.name.upper(), []).append(e.alias)
-            elif isinstance(e, exp.Column):
-                direct.setdefault(e.name.upper(), []).append(e.name)
-        out.append((direct, derived))
+        dropped: set[str] = set()
+        passthrough = False
+        for sel in by_depth[depth]:
+            for e in sel.expressions:
+                if _is_star(e):
+                    passthrough = True
+                    star = _star_of(e)
+                    for c in star.args.get("except") or []:
+                        dropped.add(getattr(c, "name", "").upper())
+                    # RENAME(cm13 AS cm13_new) and REPLACE(UPPER(cm13) AS cm13)
+                    # both change what leaves under which name, so a star is not
+                    # always a plain pass-through.
+                    for a in star.args.get("rename") or []:
+                        if isinstance(a, exp.Alias) and isinstance(a.this, exp.Column):
+                            dropped.add(a.this.name.upper())
+                            direct.setdefault(a.this.name.upper(), []).append(a.alias)
+                    for a in star.args.get("replace") or []:
+                        if isinstance(a, exp.Alias):
+                            for c in a.find_all(exp.Column):
+                                derived.setdefault(c.name.upper(), []).append(a.alias)
+                elif isinstance(e, exp.Alias):
+                    inner = e.this
+                    if isinstance(inner, exp.Column):
+                        direct.setdefault(inner.name.upper(), []).append(e.alias)
+                    else:
+                        for c in e.find_all(exp.Column):
+                            derived.setdefault(c.name.upper(), []).append(e.alias)
+                elif isinstance(e, exp.Column):
+                    direct.setdefault(e.name.upper(), []).append(e.name)
+        out.append((direct, derived, passthrough, dropped))
     stmt._projected = out
     return out
 
@@ -656,8 +1051,14 @@ def _dedupe(names: list[str]) -> list[str]:
 
 
 def output_name(stmt: Statement, column: str) -> str:
-    """The one name to show on screen for this column. See output_names."""
-    return output_names(stmt, column)[0]
+    """The one name to show on screen for this column. See output_names.
+
+    A statement can publish the column under no name at all -- SELECT * EXCEPT
+    drops it -- and the row on screen still has to say which column it is about,
+    so the name it arrived under is what gets shown.
+    """
+    names = output_names(stmt, column)
+    return names[0] if names else column
 
 
 def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
@@ -719,6 +1120,21 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
     for sel in stmt.expr.find_all(exp.Select):
         # 1. the select list
         for e in sel.expressions:
+            # A star is not a column reference, and the names hanging off one --
+            # EXCEPT(cm13), RENAME(cm13 AS x) -- are not usages of a column in a
+            # select list. Reading them as ordinary usages made
+            # "SELECT * EXCEPT(cm13)" report cm13 as carried onward, which is
+            # the exact opposite of what that statement does with it. The star
+            # is handled properly at the bottom of this function.
+            if _is_star(e):
+                for r in _star_of(e).args.get("replace") or []:
+                    # REPLACE(UPPER(cm13) AS cm13) genuinely reshapes the value.
+                    cols, sure = owned(r)
+                    if cols:
+                        found.append(Usage(kind="transform", column=column,
+                                           alias=alias_for_column, detail="REPLACE",
+                                           certain=sure))
+                continue
             cols, sure = owned(e)
             if not cols:
                 continue
@@ -772,6 +1188,18 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
                       detail=agg.__class__.__name__.upper(), certain=sure)
             )
 
+    # 7. SELECT * -- last, because anything written down beats anything inferred.
+    #
+    # Nothing above can see this: there is no column node to find. The column is
+    # carried all the same, and refusing to say so is what turned a change that
+    # breaks a published table one hop later into a clean result.
+    if table:
+        if star_excludes(stmt, column, table, sources):
+            found.append(Usage(kind="excluded", column=column, alias=alias_for_column))
+        elif star_carries(stmt, column, table, sources):
+            found.append(Usage(kind="star", column=column, alias=alias_for_column,
+                               via_star=True))
+
     return _best_of(found)
 
 
@@ -806,25 +1234,39 @@ def mode_of(usages: list[Usage]) -> str:
 
 
 # ── pointing at the right line of the real file ────────────────────────────
-def locate(f: SourceFile, column: str, kind: str, line_offset: int = 0) -> int:
-    """Best guess at the 1-based line where this usage lives."""
+def locate(f: SourceFile, column: str, kind: str, line_offset: int = 0,
+           line_end: int | None = None) -> int:
+    """Best guess at the 1-based line where this usage lives.
+
+    Bounded to the statement the finding is about. Without the upper bound a
+    finding could be sent to any line of the file that scored better -- and in a
+    generated file holding sixty statements, the best-scoring WHERE clause is
+    very often in somebody else's statement about somebody else's table.
+    """
     pat = re.compile(r"\b" + re.escape(column) + r"\b", re.IGNORECASE)
     markers = KIND_MARKERS.get(kind, ())
-    best, best_score = None, -1
-    for i, line in enumerate(f.lines, start=1):
-        if i <= line_offset:
-            continue
-        if not pat.search(line):
-            continue
-        up = line.upper()
-        score = 1 + sum(2 for m in markers if m in up)
-        if score > best_score:
-            best, best_score = i, score
-    if best is None:
-        for i, line in enumerate(f.lines, start=1):
-            if pat.search(line):
-                return i
-    return best or 1
+    last = len(f.lines) if line_end is None else min(line_end + 1, len(f.lines))
+
+    def best_between(low: int, high: int) -> int | None:
+        best, best_score = None, -1
+        for i in range(max(1, low + 1), min(high, len(f.lines)) + 1):
+            line = f.lines[i - 1]
+            if not pat.search(line):
+                continue
+            up = line.upper()
+            score = 1 + sum(2 for m in markers if m in up)
+            if score > best_score:
+                best, best_score = i, score
+        return best
+
+    inside = best_between(line_offset, last)
+    if inside is not None:
+        return inside
+    # Nothing inside the statement matched. That happens where the name only
+    # exists after a placeholder was filled in, so the statement is widened
+    # rather than the finding being dropped -- but only then.
+    anywhere = best_between(0, len(f.lines))
+    return anywhere or max(1, line_offset + 1)
 
 
 def snippet(f: SourceFile, hit_line: int, note: str, before: int = 2, after: int = 2) -> list[dict]:

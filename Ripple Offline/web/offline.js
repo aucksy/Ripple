@@ -41,7 +41,7 @@ function offState() {
     S.off = {
       path: (h && h.repo.path) || '',
       dialect: (h && h.sqlDialectId) || '',
-      hops: (h && h.maxHops) || 4,
+      hops: (h && h.maxHops) || 0,
       check: null,        // the answer to "check this folder", before saving
       msg: null,          // the answer to the last save
       working: '',        // which button is busy: 'check', 'browse' or 'save'

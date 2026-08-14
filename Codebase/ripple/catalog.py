@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from sqlglot import exp
 
-from .scanner.sqlread import ParsedRepo
+from .scanner.sqlread import ParsedRepo, short_name
 
 
 @dataclass
@@ -64,7 +64,11 @@ def build_catalog(parsed: ParsedRepo) -> Catalog:
                 )
                 continue
         # CREATE TABLE x AS SELECT ... -- columns come from the query
-        target = stmt.target
+        #
+        # Keyed on the table's own name, without the dataset. What asks this
+        # catalogue anything is the notification, and a notification names a
+        # table the way a person writes one down.
+        target = short_name(stmt.target) if stmt.target else None
         if target and stmt.select is not None:
             cols = []
             for e in stmt.select.expressions:

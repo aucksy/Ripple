@@ -150,12 +150,18 @@ def test_a_lost_marker_around_the_key_form_stops_the_build(tmp_path):
 
 def test_something_new_that_reaches_out_stops_the_build(tmp_path):
     """And the backstop for anything the build does not know the name of: a way
-    out added to shared code fails with the word and the line it found."""
+    out added to shared code fails with the word and the line it found.
+
+    The line is found by the function's name rather than by its whole signature.
+    Adding one argument to runScan used to leave this test injecting nothing at
+    all -- so it passed, while testing nothing, which is the worst way for a
+    safeguard's own test to fail.
+    """
     fake = _copy_shared(tmp_path)
-    text = (fake / "app.js").read_text(encoding="utf-8")
-    text = text.replace("function runScan() {",
-                        "function runScan() {\n  fetch('https://api.groq.com/ping');")
-    (fake / "app.js").write_text(text, encoding="utf-8")
+    lines = (fake / "app.js").read_text(encoding="utf-8").splitlines()
+    at = next(i for i, l in enumerate(lines) if l.startswith("function runScan("))
+    lines.insert(at + 1, "  fetch('https://api.groq.com/ping');")
+    (fake / "app.js").write_text("\n".join(lines), encoding="utf-8")
     with pytest.raises(webbuild.BuildError, match="groq"):
         webbuild.build(out_dir=tmp_path / "out", shared_web=fake)
 

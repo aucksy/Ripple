@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ripple.config import Settings, parse_production_rule       # noqa: E402
 from ripple.scanner.lineage import trace                        # noqa: E402
 from ripple.scanner.repo import RepoIndex                       # noqa: E402
-from ripple.scanner.sqlread import parse_repo                   # noqa: E402
+from ripple.scanner.sqlread import parse_repo, short_name       # noqa: E402
 
 # Straight off the screen: an in-house helper that is handed the column name and
 # the table name as quoted strings, wrapped around the column itself.
@@ -61,7 +61,7 @@ def test_the_whole_statement_is_read(tmp_path):
     call qualified by a backticked dataset, and the scripting frame around all
     of it. Any one of these refusing costs the file."""
     _, _, parsed = _repo(tmp_path)
-    assert "acct_demographics_data" in {s.target for s in parsed.statements}
+    assert "acct_demographics_data" in {short_name(s.target) for s in parsed.statements}
     assert parsed.unreadable == []
 
 
@@ -70,8 +70,8 @@ def test_a_dataset_path_in_front_of_a_function_is_not_a_table(tmp_path):
     as a table would put a table on the dependency map that does not exist and
     that nobody could go and look at."""
     _, _, parsed = _repo(tmp_path)
-    stmt = next(s for s in parsed.statements if s.target == "acct_demographics_data")
-    assert {x.lower() for x in stmt.sources} == {"triumph_demographics"}
+    stmt = next(s for s in parsed.statements if short_name(s.target) == "acct_demographics_data")
+    assert {short_name(x).lower() for x in stmt.sources} == {"triumph_demographics"}
 
 
 def test_the_column_named_as_text_is_reported_even_though_the_file_has_findings(tmp_path):

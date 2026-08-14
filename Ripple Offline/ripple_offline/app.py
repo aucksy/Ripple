@@ -14,6 +14,7 @@ here — this is a thin layer, exactly as the online service is.
 """
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -151,6 +152,9 @@ class UpstreamIn(BaseModel):
 class ScanIn(BaseModel):
     upstream: list[UpstreamIn]
     changeKind: str = "unknown"
+    # For this scan only, when a trail was cut short by the hop limit and the
+    # screen offered to follow it further. Saved settings are left alone.
+    maxHops: int | None = None
 
 
 class SummaryIn(BaseModel):
@@ -184,7 +188,7 @@ class ProductionIn(BaseModel):
 class SettingsIn(BaseModel):
     repoPath: str = ""
     sqlDialect: str = prefs.DEFAULT_DIALECT
-    maxHops: int = 4
+    maxHops: int = 0                # 0 means "keep whatever is saved"
     prodTables: str = ""
 
 
@@ -357,8 +361,16 @@ def scan(payload: ScanIn) -> dict:
     upstream = [{"table": u.table, "attrs": u.attrs} for u in payload.upstream]
     if not upstream:
         raise HTTPException(status_code=400, detail="No upstream tables were supplied.")
+    cfg = settings
+    if payload.maxHops and payload.maxHops != settings.max_hops:
+        # The result screen offers to follow a cut-short trail further. Without
+        # this the button would be pressed, the scan would run at the saved
+        # depth, and the same cut-short answer would come back -- a button that
+        # does nothing, on the one screen that is meant to be honest.
+        cfg = copy.copy(settings)
+        cfg.max_hops = max(1, min(int(payload.maxHops), prefs.max_hops_ceiling()))
     try:
-        res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=settings,
+        res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=cfg,
                     on_progress=progress.reader("scanning"))
     finally:
         progress.finish()

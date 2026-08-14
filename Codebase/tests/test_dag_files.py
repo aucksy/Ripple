@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ripple.config import Settings                              # noqa: E402
 from ripple.scanner.repo import RepoIndex                       # noqa: E402
-from ripple.scanner.sqlread import parse_repo                   # noqa: E402
+from ripple.scanner.sqlread import parse_repo, short_name       # noqa: E402
 
 REAL_SQL = (
     "CREATE OR REPLACE TABLE `p.stage.customer_main_umdl` AS\n"
@@ -52,8 +52,8 @@ SELECT cm13, market_code FROM `{src}.raw.card_source`
 """
 sql = TEMPLATE.format(tgt=TGT, dataset=DS, src=SRC)
 '''})
-    assert "card_main_umdl" in {s.target for s in parsed.statements}
-    assert any("card_source" in {x.lower() for x in s.sources} for s in parsed.statements)
+    assert "card_main_umdl" in {short_name(s.target) for s in parsed.statements}
+    assert any("card_source" in {short_name(x).lower() for x in s.sources} for s in parsed.statements)
 
 
 def test_sql_in_an_f_string_is_read(tmp_path):
@@ -63,7 +63,7 @@ CREATE OR REPLACE TABLE `{TGT}.stage.loyalty_umdl` AS
 SELECT cm13, rwrd_pts FROM `{TGT}.raw.loyalty_source`
 """
 '''})
-    assert "loyalty_umdl" in {s.target for s in parsed.statements}
+    assert "loyalty_umdl" in {short_name(s.target) for s in parsed.statements}
 
 
 def test_a_dag_that_opens_a_sql_file_is_linked_to_it(tmp_path):

@@ -152,7 +152,23 @@ class Settings:
     sql_dialect: str = field(default_factory=lambda: _env("RIPPLE_SQL_DIALECT", ""))
 
     # How many renames deep to follow a column.
-    max_hops: int = field(default_factory=lambda: int(_env("RIPPLE_MAX_HOPS", "4")))
+    #
+    # This was 4, and 4 was measured to be wrong for the pipeline Ripple was
+    # built for. That pipeline runs source -> foundation -> tmp -> run_datetime
+    # -> union -> stage -> entity -> published, which is eight hops before a
+    # published table is reached at all, and further again to the reports built
+    # on top of it. On a generated repository of that exact shape, a limit of 4
+    # found NO production tables; 8 found all of them; 10 finished every trail
+    # with nothing left cut short. The cost of the change was 0.21s to 0.32s on
+    # that repository -- a scan is dominated by looking up statements, not by
+    # how deep it goes.
+    #
+    # A limit that is too low does not fail loudly. It reports "the chain ends
+    # here and does not reach production", which is a sentence about this
+    # number wearing the clothes of a sentence about the warehouse. A trail
+    # stopped by this limit is now reported as stopped, and can be followed
+    # further from the result screen.
+    max_hops: int = field(default_factory=lambda: int(_env("RIPPLE_MAX_HOPS", "10")))
 
     # Which tables count as the ones this team publishes. See the note at the
     # top of this file for why this is a setting and not a constant.
