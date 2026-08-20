@@ -68,6 +68,13 @@ up is all in the workshop, not the product:
   `python run.py`; what you lose is being able to hand it to somebody who has no
   Python. If that matters, it is one more reason to keep trying Phase 0 Route A
   and get onto the other kit.
+
+  One thing this saves you worrying about. The other kit's packaged program has a
+  folder inside it holding about 1,770 files, which looks alarming and is not:
+  none of them is written by hand, they are all put there by the packaging tool.
+  This kit never creates that folder at all, so there is nothing extra to write
+  and nothing extra to understand — you write the same thirty-odd Python files
+  and start it with `python run.py`.
 - **The AI email reader and the GitHub connection are out of reach.** Both need an
   internet library and a network. Neither is in either kit's twelve phases; the
   rules-based reader fills the same screens.

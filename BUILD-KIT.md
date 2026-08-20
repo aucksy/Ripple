@@ -1853,6 +1853,30 @@ folder, about 40 MB in total. Copy that folder anywhere, double-click the progra
 and Ripple starts and opens the browser — on a machine with no Python on it and
 nothing installed. Packaging takes about a minute and a half each time.
 
+**About the thousands of files in that other folder.** Open it and you will find
+roughly 1,770 files. **You do not write any of them, and you never look at them
+again.** They are put there by the packaging tool, every time, in about ninety
+seconds. Counted on a real build:
+
+| How many | What it is |
+|---|---|
+| ~923 | Python's own windowing library — it draws the "choose a folder" box and the error box |
+| ~605 | a timezone database, dragged in by the Outlook-email reader |
+| ~89 | the Outlook `.msg` reader |
+| ~72 | the SQL parser |
+| ~60 | Python itself, its standard library, and Windows DLLs |
+| ~20 | Ripple's own screens |
+
+**Not one of them is a file you typed.** Ripple's own Python — every phase in
+this kit — is compiled and tucked inside the `.exe` itself, which is why you
+cannot see it in there. The proof, if you want it: delete the whole output
+folder and run `build.py` again. The same 1,770 files come back.
+
+So the question "do I really have to write all that?" has a short answer: no.
+You write about thirty Python files across the phases below. The packaging tool
+supplies the rest, and re-supplies it every time you build.
+
+
 **First, add the packaging tool.** One more install, and only on the machine that
 does the building:
 
