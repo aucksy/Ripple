@@ -17,8 +17,26 @@ from datetime import date, datetime
 
 from .catalog import Catalog
 
-# A table or column name as people actually write them in these emails.
+# A SHOUTED_NAME. Narrow on purpose, and kept that way for the two jobs where
+# being narrow is right: telling a table name apart from a person's team, and
+# listing the names an email mentioned that this repository has never heard of.
 IDENT = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
+# Anything that could be a name at all, in whatever case it happens to be
+# written. Matching only SHOUTED_NAMES was a quiet disaster: BigQuery names are
+# written in lower case, his own repository has ccm_Wireless_Enroll in mixed
+# case, and a great many columns -- cm13, pub_guid -- are one word with no
+# underscore in them at all.
+#
+# An email reading "we are removing cm13 from customer_demographics ...
+# ACCOUNT_MASTER is unaffected" produced exactly one table to scan:
+# ACCOUNT_MASTER. The only one the email says is fine, with no warning of any
+# kind, and a clean confident result at the end of it.
+#
+# Being wide costs nothing here, because a token only becomes a table or a
+# column once the catalogue built from the repository confirms that it is one.
+# A spare name on the confirm screen is a tick somebody can clear; a missing
+# one is invisible.
+NAME_TOKEN = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*\b")
 
 DATE_PATTERNS = [
     (re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b"), "%Y-%m-%d"),
@@ -404,7 +422,7 @@ def extract_by_rules(n: Notification, cat: Catalog) -> dict:
     """
     n = enrich(n)                      # however this arrived, read its own text too
     text = n.text()
-    idents = [m.group(0) for m in IDENT.finditer(text)]
+    idents = [m.group(0) for m in NAME_TOKEN.finditer(text)]
     seen_tables: list[str] = []
     for tok in idents:
         if cat.has_table(tok) and tok.upper() not in [t.upper() for t in seen_tables]:
@@ -421,7 +439,11 @@ def extract_by_rules(n: Notification, cat: Catalog) -> dict:
 
     kind, label = classify_change(text)
     warnings = list(n.warnings)
-    unknown = [tok for tok in dict.fromkeys(idents)
+    # Only SHOUTED_NAMES are worth complaining about. Every ordinary word in the
+    # email is now checked against the catalogue above, and listing all of them
+    # back as "not in your repository" would bury the one line that matters.
+    shouted = [m.group(0) for m in IDENT.finditer(text)]
+    unknown = [tok for tok in dict.fromkeys(shouted)
                if not cat.has_table(tok) and not any(cat.has_column(t, tok) for t in seen_tables)]
     if unknown:
         warnings.append(

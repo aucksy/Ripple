@@ -15,3 +15,7 @@ Codebase/ripple.db
 .pytest_cache/
 .vercel/
 .env
+
+# Photographs taken on a phone, of a template from work. Same reason as Docs/:
+# this repository is public, and what is in the pictures is not.
+PPT/

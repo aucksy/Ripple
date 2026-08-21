@@ -38,12 +38,12 @@ from .sqlread import (
 # that carries on working.
 BREAKS = {
     "removal":      {"filter", "join_key", "ranking", "dedup_key", "transform", "aggregation",
-                     "excluded", "select"},
+                     "sort", "excluded", "select"},
     "rename":       {"filter", "join_key", "ranking", "dedup_key", "transform", "aggregation",
-                     "excluded", "select"},
+                     "sort", "excluded", "select"},
     "value_change": {"filter", "join_key", "transform"},
     "type_change":  {"filter", "join_key", "transform"},
-    "unknown":      {"filter", "join_key", "ranking", "dedup_key", "transform"},
+    "unknown":      {"filter", "join_key", "ranking", "dedup_key", "transform", "sort"},
 }
 # Usages with no local fix: the replacement has to come from the upstream team.
 NO_LOCAL_FIX = {"ranking", "dedup_key"}
@@ -78,8 +78,17 @@ def _impact_sentence(u: Usage, change_type: str, target: str | None) -> str:
                 "Without it the choice becomes arbitrary - the wrong record can win, and nothing "
                 "is raised to tell you.")
     if u.kind == "dedup_key":
+        if u.detail == "PARTITION BY":
+            return ("This column is the key the ranking is worked out within - one row is kept "
+                    "for each value of it. Take the column away and every row falls into a "
+                    f"single group, so {tgt} keeps one record for the whole table instead of "
+                    "one per key. Nothing fails on the day; the table is simply wrong.")
         return (f"{u.detail or 'An aggregate'} on this column decides which row survives. "
                 f"Without it {tgt} can publish stale records with no error.")
+    if u.kind == "sort":
+        return (f"The rows are sorted by this column on the way into {tgt}. The name is "
+                f"written down here, so removing or renaming it stops this statement running "
+                f"at all, and {tgt} stops loading.")
     if u.kind == "transform":
         fn = f" ({u.detail})" if u.detail else ""
         return (f"The value is reshaped here{fn}. A change in its format or length produces wrong "
@@ -124,9 +133,17 @@ class Finding:
     # How many SELECT * hops are behind this finding, counting this one. Zero
     # means every step to here was written down in the SQL.
     inferred_hops: int = 0
+    # The line the statement this finding lives in starts on. Part of what makes
+    # two findings the same finding, and the reason is worth writing down: one
+    # file very often builds several tables, and the same column of the same
+    # source table is filtered on in each of them. Without this the second and
+    # third statements were folded into the first, so the row shown under a
+    # published table pointed at another statement's lines and named another
+    # statement's target -- and the count of usages was quietly short.
+    at: int = 0
 
     def key(self) -> tuple:
-        return (self.file, self.source_table, self.source_column, self.kind)
+        return (self.file, self.at, self.source_table, self.source_column, self.kind)
 
 
 @dataclass
@@ -399,6 +416,7 @@ def trace(
                         "dedup_key": "Decides which row survives",
                         "transform": "Value is reshaped here",
                         "aggregation": "Group label changes with the value",
+                        "sort": "Sort order - the statement stops running if this goes",
                         "excluded": "Named in EXCEPT - dropped here, and breaks here",
                         "star": "SELECT * - carried on without being named",
                         "select": f"Carried forward as {primary.alias or cur_col}",
@@ -425,6 +443,7 @@ def trace(
                         certain=primary.certain,
                         via_star=carried_by_star,
                         inferred_hops=inferred + (1 if carried_by_star else 0),
+                        at=stmt.line_offset,
                     )
                     findings_by_key.setdefault(f.key(), f)
                     f = findings_by_key[f.key()]
@@ -780,7 +799,20 @@ def _tables_carrying(parsed: ParsedRepo, names: list[str]) -> tuple[dict[str, in
         all_tables.add(target)
         columns: list[str] = []
         schema = stmt.expr.this if isinstance(stmt.expr, exp.Create) else None
-        if isinstance(schema, exp.Schema):
+        if isinstance(stmt.expr, exp.Merge):
+            # A MERGE writes the published table's own column names on the left
+            # of every SET and in every INSERT list. Without reading them a
+            # MERGE-loaded table looked like a table with no columns at all, so
+            # a column name half the warehouse shares was counted as rare -- and
+            # "only one table has this name" is read as a reason to relax.
+            for when in stmt.expr.args.get("expressions") or []:
+                then = when.args.get("then")
+                if isinstance(then, exp.Update):
+                    columns += [e.this.name for e in then.args.get("expressions") or []
+                                if isinstance(e, exp.EQ) and isinstance(e.this, exp.Column)]
+                elif isinstance(then, exp.Insert) and isinstance(then.this, exp.Tuple):
+                    columns += [c.name for c in then.this.expressions if getattr(c, "name", "")]
+        elif isinstance(schema, exp.Schema):
             columns = [d.this.name for d in schema.expressions if isinstance(d, exp.ColumnDef)]
         elif stmt.select is not None:
             for e in stmt.select.expressions:

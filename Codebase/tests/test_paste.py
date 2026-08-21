@@ -202,3 +202,54 @@ def test_a_real_sentence_with_a_colon_is_still_the_description(cat):
         "Subject: change\n\n"
         "Impact: MARKET_CODE on CUSTOMER_DEMOGRAPHICS changes to full country names.\n"), cat)
     assert out["changeDesc"].startswith("Impact:")
+
+
+# ── names as they are actually written ─────────────────────────────────────
+LOWER_CASE_EMAIL = """From: Priya Raman <priya.raman@corp.example.com>
+Subject: Change to customer_demographics
+
+Hello,
+
+Effective 18 September 2026 we are changing segment_cd on
+customer_demographics. The market_code column moves at the same time.
+
+ACCOUNT_MASTER is unaffected by this change.
+
+- Priya Raman
+  C360 Data Governance
+"""
+
+
+def test_names_written_in_lower_case_are_found(cat):
+    """Ripple used to match only SHOUTED_NAMES. BigQuery names are written in
+    lower case, so an email like this one produced exactly one table to scan --
+    ACCOUNT_MASTER, the only one the email says is fine -- with no warning of
+    any kind and a clean, confident, useless result at the end of it."""
+    out = extract_by_rules(read_pasted(LOWER_CASE_EMAIL), cat)
+    found = {u["table"].upper(): [a.upper() for a in u["attrs"]] for u in out["upstream"]}
+    assert "CUSTOMER_DEMOGRAPHICS" in found, out["upstream"]
+    assert set(found["CUSTOMER_DEMOGRAPHICS"]) >= {"SEGMENT_CD", "MARKET_CODE"}, found
+    assert out["upstream"][0]["table"].upper() == "CUSTOMER_DEMOGRAPHICS", \
+        "the table the email is about comes first"
+
+
+def test_a_one_word_column_name_is_found(cat):
+    """cust_id has an underscore; plenty of real column names do not. A name
+    with no underscore in it never matched the old rule at all, so it never
+    reached the confirm screen and could not even be ticked by hand."""
+    out = extract_by_rules(read_pasted(
+        "From: A Sender <a@corp.example.com>\n"
+        "Subject: change\n\n"
+        "We are removing cust_id from customer_demographics.\n"), cat)
+    found = {u["table"].upper(): [a.upper() for a in u["attrs"]] for u in out["upstream"]}
+    assert "CUST_ID" in found.get("CUSTOMER_DEMOGRAPHICS", []), out["upstream"]
+
+
+def test_ordinary_english_words_are_not_reported_as_unknown_names(cat):
+    """Every word in the email is now checked against the catalogue. Only the
+    SHOUTED ones are worth listing back as "not in your repository" -- listing
+    all of them would bury the one line that matters."""
+    out = extract_by_rules(read_pasted(LOWER_CASE_EMAIL), cat)
+    listed = " ".join(out["warnings"])
+    for ordinary in ("Hello", "Effective", "September", "change", "unaffected"):
+        assert ordinary not in listed, listed

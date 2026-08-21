@@ -1018,10 +1018,17 @@ For each parsed statement build a Statement with:
            If the file is a program with exactly one write target, use that.
            More than one write target: report that lineage past this job is
            not traced, and say which tables.
-  sources  every table the SELECT reads, EXCLUDING names defined by WITH — a
-           CTE is a name for a query, and treating one as a table invents a
-           link that is not there. A DELETE or UPDATE also reads its own
-           target, or nothing ever looks at its WHERE clause.
+  sources  every table the statement reads, EXCLUDING names defined by
+           WITH — a CTE is a name for a query, and treating one as a table
+           invents a link that is not there. A DELETE or UPDATE also reads its
+           own target, or nothing ever looks at its WHERE clause.
+
+           Do NOT gate this on the statement having a SELECT in it. A MERGE
+           whose USING names a table, and an UPDATE ... FROM, both read a whole
+           second table and have no SELECT anywhere. Gating on one meant they
+           recorded no sources, were never indexed as reading anything, and no
+           scan could reach them — on BigQuery that is the statement that loads
+           the published table.
 
 Statements sqlglot returns as a Command — a procedure call, a loop, an
 EXECUTE IMMEDIATE, a scripting block — go into `opaque` keyed by file, with
@@ -1091,14 +1098,49 @@ HOW A COLUMN IS USED
 usages_of(stmt, column, table) -> Usage[]
 
 Look for the column in: the select list (Column -> select, anything else ->
-transform with the function name), WHERE and HAVING (filter, with the literal
-it is compared against as `detail`), JOIN ... ON (join_key), GROUP BY
-(aggregation), window ORDER BY (ranking — where removal is silent and awful),
-and MAX/MIN (dedup_key, which decides which row survives).
+transform with the function name), WHERE and HAVING and QUALIFY (filter, with
+the literal it is compared against as `detail`), JOIN ... ON (join_key),
+UNNEST in a join (transform), GROUP BY (aggregation), the statement's own
+ORDER BY (ranking if there is a LIMIT under it, otherwise sort), window ORDER
+BY (ranking — where removal is silent and awful), window PARTITION BY
+(dedup_key), and MAX/MIN (dedup_key, which decides which row survives).
+
+THIS LIST IS THE WHOLE GAME, AND A SHORT ONE IS THE WORST BUG THIS TOOL HAS.
+A clause you do not read is a column you cannot see, and the answer that comes
+back is not "unreadable" — it is "the name appears, but no lineage to a
+production table", which reads as a reassurance. Every one of these was found
+that way:
+
+  QUALIFY            BigQuery and Snowflake filter on a window result, and
+                     where nearly every dedup in a real pipeline is written.
+                     The column often appears NOWHERE else in the statement.
+  window PARTITION BY  the other half of a dedup. The ORDER BY picks the
+                     winner; the PARTITION BY says what it wins against. Take
+                     it away and one record survives for the whole table
+                     instead of one per key, silently.
+  WINDOW w AS (...)  the same dedup written as a named window clause instead
+                     of inline. Writing it the other way round is not a reason
+                     to miss it.
+  UNNEST             FROM t, UNNEST(col) has no ON clause to look at.
+  ORDER BY           writes the name down, so removing the column stops the
+                     statement compiling and the table stops loading.
 
 A DELETE or UPDATE has a WHERE clause and no SELECT at all. Requiring a SELECT
 made both invisible, so "DELETE FROM stage WHERE market_code = 'US'" was
 reported as no usage whatsoever.
+
+A MERGE is worse again, and it is how a published table is normally loaded on
+BigQuery, Snowflake and Databricks. When USING names a table directly there is
+no SELECT anywhere in the statement, so it recorded no sources at all, was
+never indexed as reading anything, and no scan could reach it however hard it
+looked. Read all four parts of one:
+  ON <condition>                       join_key
+  WHEN ... AND <condition> THEN ...    filter — often the only place the
+                                       column is named in the whole statement
+  THEN UPDATE SET t.market = s.col     the column is published as `market`
+  THEN INSERT (a, b) VALUES (x, y)     renames by position, like a plain INSERT
+The last two are renames: follow the target's name onwards, not the source's,
+or the chain walks off the end at the one statement that loads the table.
 
 Return the most informative reading of each kind, most consequential first:
 ranking, dedup_key, filter, join_key, transform, aggregation, select. One the
@@ -1174,8 +1216,17 @@ those was how a real breaking impact got shown as a clean result.
 
 A Finding carries: source table and column, target table, alias, the usage
 kind and its label, mode, a plain-English impact sentence, breaking,
-no_local_fix, file, lang, snippet lines, hop, certain, and `roots` — the
-attributes the person actually asked about. Two renames down, the column on a
+no_local_fix, file, lang, snippet lines, hop, certain, the line its own
+statement starts on, and `roots` — the attributes the person actually asked
+about.
+
+The line the statement starts on is part of what makes two findings the same
+finding, and it has to be. One file very often builds several tables and
+filters on the same source column in each of them. Keyed on file, table,
+column and kind alone, the second and third statements were folded into the
+first: the row shown under a published table pointed at another statement's
+lines, named another statement's target, and the count of usages was quietly
+short. Two renames down, the column on a
 row is no longer called what they typed, and without roots the row cannot be
 traced back to the question. roots must NOT be part of what makes two
 findings equal: one usage can be on the path of more than one attribute.
@@ -1300,7 +1351,19 @@ warnings[], extractedBy: "rules".
 
 Rules worth having: a table name in the text that IS in the catalogue is an
 upstream table; a column name that belongs to one of those tables is one of
-its attributes; a date in any common written form becomes ISO; words like
+its attributes; MATCH NAMES IN ANY CASE, and do not require an underscore.
+Matching only SHOUTED_NAMES looks reasonable and is a quiet disaster: BigQuery
+names are written in lower case, real repositories have tables like
+ccm_Wireless_Enroll in mixed case, and plenty of columns - cm13, pub_guid -
+are one word. An email reading "we are removing cm13 from
+customer_demographics ... ACCOUNT_MASTER is unaffected" produced exactly one
+table to scan: ACCOUNT_MASTER, the only one the email says is fine, with no
+warning of any kind. Being wide costs nothing, because a word only becomes a
+table or a column once the catalogue confirms it is one - and a spare name on
+the confirm screen is a tick somebody can clear, while a missing one is
+invisible. Keep the narrow SHOUTED_NAME rule for one job only: listing the
+names an email mentions that the repository has never heard of, which would
+otherwise become every ordinary word in the message; a date in any common written form becomes ISO; words like
 "decommission", "retire", "format change", "rename" pick the change kind.
 
 BE HONEST. Any table named in the notification that is NOT in the connected
