@@ -373,3 +373,193 @@ def test_an_unambiguous_table_is_still_shown_by_its_own_name(tmp_path):
     })
     assert [g["prod"] for g in out["groups"]] == ["final_published"]
     assert out["mergedNames"] == []
+
+
+# ── 8. clauses a column can hide in ────────────────────────────────────────
+# Every case below came back "the name appears, but no lineage to a production
+# table" -- the most reassuring sentence Ripple can print -- for a change that
+# stops a published table loading. They are one defect wearing several hats: the
+# reader had a list of the places in a statement a column can be used, and the
+# list was short. Grouped here so the next clause anyone adds gets a case too.
+def only_row(out: dict) -> dict:
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+    rows = [r for g in out["groups"] for r in g["rows"]]
+    assert len(rows) == 1, rows
+    return rows[0]
+
+
+def test_qualify_is_read_as_the_filter_it_is(tmp_path):
+    """QUALIFY is where nearly every dedup in a BigQuery pipeline is written.
+    Not reading it made the column invisible whenever it appeared nowhere else
+    in the statement -- and the standard dedup is exactly that shape."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            CREATE OR REPLACE TABLE final_published AS
+            SELECT pub_id, last_upd FROM customer_demographics
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY pub_id ORDER BY last_upd) = 1
+               AND cm13 = 'US';
+        """,
+    })
+    assert only_row(out)["logic"] == "Filter"
+    assert out["mentionsOnly"] == []
+
+
+def test_the_partition_key_of_a_ranking_is_a_dedup_key(tmp_path):
+    """PARTITION BY is the half of a dedup that was never read. The ORDER BY
+    picks the winner; the PARTITION BY says what it wins against. Remove it and
+    one record survives for the whole table instead of one per key."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            CREATE OR REPLACE TABLE final_published AS
+            SELECT pub_id, last_upd FROM customer_demographics
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY cm13 ORDER BY last_upd) = 1;
+        """,
+    })
+    row = only_row(out)
+    assert row["logic"] == "Dedup key"
+    assert row["noLocalFix"], "a missing partition key cannot be fixed downstream"
+    assert out["risk"] == "high"
+
+
+def test_a_named_window_clause_is_read_like_an_inline_one(tmp_path):
+    """WINDOW w AS (PARTITION BY cm13 ...) puts the same dedup somewhere else in
+    the statement. Writing it the other way round is not a reason to miss it."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            CREATE OR REPLACE TABLE final_published AS
+            SELECT pub_id, ROW_NUMBER() OVER w AS rn
+            FROM customer_demographics
+            WINDOW w AS (PARTITION BY cm13 ORDER BY last_upd);
+        """,
+    })
+    assert only_row(out)["logic"] == "Dedup key"
+
+
+def test_a_merge_that_names_its_source_table_is_followed(tmp_path):
+    """MERGE is how a published table is normally loaded. With USING naming a
+    table directly there is no SELECT in the statement at all, so it recorded no
+    sources, was never indexed as reading anything, and no scan could reach it
+    however hard it looked."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            MERGE INTO final_published t
+            USING customer_demographics s
+            ON t.pub_id = s.pub_id AND t.cm13 = s.cm13
+            WHEN MATCHED THEN UPDATE SET t.last_upd = s.last_upd;
+        """,
+    })
+    assert only_row(out)["logic"] == "Join key"
+
+
+def test_a_merge_renames_the_column_into_the_published_table(tmp_path):
+    """SET t.market = s.cm13 publishes cm13 as market, and the INSERT list
+    renames by position exactly as a plain INSERT does. Following the source's
+    own name walked off the end of the chain at the loading statement."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            MERGE INTO mid_stage t
+            USING customer_demographics s
+            ON t.pub_id = s.pub_id
+            WHEN MATCHED THEN UPDATE SET t.market = s.cm13
+            WHEN NOT MATCHED THEN INSERT (pub_id, market) VALUES (s.pub_id, s.cm13);
+        """,
+        "b.sql": """
+            CREATE OR REPLACE TABLE final_published AS
+            SELECT market FROM mid_stage WHERE market IS NOT NULL;
+        """,
+    })
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    hops = {(r["from"], r["attr"], r["alias"]) for g in out["groups"] for r in g["rows"]}
+    assert ("customer_demographics", "cm13", "market") in hops, hops
+    assert ("mid_stage", "market", "market") in hops, hops
+
+
+def test_the_condition_on_a_merge_when_is_read(tmp_path):
+    """WHEN MATCHED AND s.cm13 = 'DEAD' THEN DELETE decides which rows of a
+    published table are deleted, and is often the only place in the whole
+    statement the column is named."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            MERGE INTO final_published t
+            USING customer_demographics s
+            ON t.pub_id = s.pub_id
+            WHEN MATCHED AND s.cm13 = 'DEAD' THEN DELETE;
+        """,
+    })
+    assert only_row(out)["logic"] == "Filter"
+
+
+def test_an_update_reads_the_table_its_from_clause_names(tmp_path):
+    """UPDATE ... FROM reads a whole second table. Only the table being written
+    was ever recorded, so the source was invisible -- the same hole as MERGE,
+    one statement type along."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            UPDATE final_published t SET t.market = s.cm13
+            FROM customer_demographics s WHERE t.pub_id = s.pub_id;
+        """,
+    })
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert out["mentionsOnly"] == []
+
+
+def test_a_column_opened_out_by_unnest_is_reported(tmp_path):
+    """FROM t, UNNEST(cm13) has no ON clause to look at, and the column is named
+    nowhere else in the statement."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            CREATE OR REPLACE TABLE final_published AS
+            SELECT pub_id, c FROM customer_demographics, UNNEST(cm13) AS c;
+        """,
+    })
+    assert only_row(out)["logic"] == "Transform"
+
+
+def test_the_statements_own_order_by_is_reported(tmp_path):
+    """ORDER BY writes the name down, so removing the column stops the statement
+    compiling and the table stops loading. With a LIMIT under it the column also
+    decides which rows survive, which is the ranking case."""
+    plain = scan(tmp_path / "plain", {
+        "a.sql": """
+            CREATE OR REPLACE TABLE final_published AS
+            SELECT pub_id FROM customer_demographics ORDER BY cm13;
+        """,
+    })
+    row = only_row(plain)
+    assert row["logic"] == "Sort order"
+    assert row["breaking"], "the statement stops compiling without the column"
+    assert not row["noLocalFix"], "a sort order can be changed in this file"
+
+    limited = scan(tmp_path / "limited", {
+        "a.sql": """
+            CREATE OR REPLACE TABLE final_published AS
+            SELECT pub_id FROM customer_demographics ORDER BY cm13 LIMIT 100;
+        """,
+    })
+    assert only_row(limited)["logic"] == "Ranking", "with a LIMIT it picks the survivors"
+
+
+# ── 9. one file, several statements ────────────────────────────────────────
+def test_each_statement_in_a_file_is_its_own_finding(tmp_path):
+    """A finding used to be one per file, table, column and kind. One file very
+    often builds several tables and filters on the same source column in each,
+    so the second and third statements were folded into the first: the row shown
+    under the published table pointed at another statement's lines, named
+    another statement's target, and the count of usages was quietly short."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            CREATE OR REPLACE TABLE stage_one AS
+            SELECT pub_id FROM customer_demographics WHERE cm13 = 'A';
+
+            CREATE OR REPLACE TABLE stage_two AS
+            SELECT pub_id FROM customer_demographics WHERE cm13 = 'B';
+
+            CREATE OR REPLACE TABLE final_published AS
+            SELECT pub_id FROM customer_demographics WHERE cm13 = 'C';
+        """,
+    })
+    assert out["attributes"][0]["found"] == 3, "three statements, three usages"
+    row = only_row(out)
+    assert row["inter"] == "final_published", \
+        "the row under final_published must be the statement that builds it"
+    assert "final_published" in row["impact"], row["impact"]

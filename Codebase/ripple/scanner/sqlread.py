@@ -46,13 +46,14 @@ LOGIC_LABEL = {
     "aggregation": "Aggregation",
     "transform": "Transform",
     "excluded": "Named in EXCEPT",
+    "sort": "Sort order",
     "select": "Select",
     "star": "Carried by SELECT *",
 }
 # Most consequential first: if a column is used several ways in one statement,
 # this decides which one heads the finding.
 KIND_PRIORITY = ["ranking", "dedup_key", "filter", "join_key", "transform", "aggregation",
-                 "excluded", "select", "star"]
+                 "sort", "excluded", "select", "star"]
 
 # Words that make a line likely to be the one a given usage lives on.
 KIND_MARKERS = {
@@ -63,6 +64,7 @@ KIND_MARKERS = {
     "dedup_key": ("MAX(", "MIN(", "GROUP BY"),
     "transform": ("SUBSTR", "CAST", "TRIM", "UPPER", "LOWER", "COALESCE", "CONCAT", "("),
     "excluded": ("EXCEPT", "SELECT"),
+    "sort": ("ORDER BY",),
     "select": ("SELECT", " AS "),
     "star": ("SELECT *", "SELECT"),
 }
@@ -565,7 +567,13 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
             target = _target_of(stmt) or implied_target
             sources: set[str] = set()
             skip = _cte_names(stmt)
-            if select is not None:
+            # A MERGE whose USING names a table directly has no SELECT anywhere
+            # in it, so it recorded no sources -- which meant the statement that
+            # loads the published table was never indexed as reading anything,
+            # and no scan could reach it however hard it looked. The same is
+            # true of UPDATE ... FROM, which reads a whole second table and had
+            # only ever recorded the table it writes.
+            if select is not None or isinstance(stmt, (exp.Merge, exp.Delete, exp.Update)):
                 # Every table the whole statement reads, not just the ones in
                 # its first SELECT. A union is two SELECTs side by side, and
                 # looking only at the first made the second half of every
@@ -929,6 +937,7 @@ def output_names(stmt: Statement, column: str, limit: int = MAX_OUTPUT_NAMES) ->
         # rather than the trail being dropped.
         names = found[:limit] if found else names
     names = _through_insert_columns(stmt, names)
+    names = _through_merge_columns(stmt, names)
     stmt._names[column.upper()] = names
     return names
 
@@ -964,6 +973,47 @@ def _through_insert_columns(stmt: Statement, names: list[str]) -> list[str]:
         return names
     wanted = {n.upper() for n in names}
     mapped = [targets[i] for i, p in enumerate(positions) if p and p.upper() in wanted]
+    return _dedupe(mapped) if mapped else names
+
+
+def _through_merge_columns(stmt: Statement, names: list[str]) -> list[str]:
+    """The names a MERGE writes this column into the published table under.
+
+    ``WHEN MATCHED THEN UPDATE SET t.market = s.cm13`` publishes cm13 as market,
+    and ``WHEN NOT MATCHED THEN INSERT (pub_id, market) VALUES (s.pub_id, s.cm13)``
+    renames by position exactly as a plain INSERT does. Following the source's
+    own name instead walked straight off the end of the chain at the one
+    statement that loads the table everybody downstream reads.
+
+    Only done where the two lists are plainly the same length. Where the arity
+    cannot be checked the name is left as it was rather than guessed at.
+    """
+    if not isinstance(stmt.expr, exp.Merge):
+        return names
+    wanted = {n.upper() for n in names}
+    mapped: list[str] = []
+
+    def carries(value: exp.Expression | None) -> bool:
+        return value is not None and any(c.name.upper() in wanted
+                                         for c in value.find_all(exp.Column))
+
+    for when in stmt.expr.args.get("expressions") or []:
+        then = when.args.get("then")
+        if isinstance(then, exp.Update):
+            for setter in then.args.get("expressions") or []:
+                if isinstance(setter, exp.EQ) and isinstance(setter.this, exp.Column)                         and carries(setter.expression):
+                    mapped.append(setter.this.name)
+        elif isinstance(then, exp.Insert):
+            into = then.this
+            values = then.args.get("expression")
+            if not isinstance(into, exp.Tuple) or not isinstance(values, exp.Tuple):
+                continue
+            targets = [c.name for c in into.expressions]
+            if len(targets) != len(values.expressions):
+                continue
+            for target, value in zip(targets, values.expressions):
+                if target and carries(value):
+                    mapped.append(target)
     return _dedupe(mapped) if mapped else names
 
 
@@ -1114,6 +1164,42 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
                 found.append(Usage(kind="select", column=column, alias=alias_for_column,
                                    certain=sure))
 
+    # A MERGE is how a published table is normally loaded on BigQuery, Snowflake
+    # and Databricks. When USING names a table directly the statement has no
+    # SELECT of its own, so every check below was skipped and Ripple answered
+    # "the name appears, but no lineage to a production table" -- its single most
+    # reassuring sentence, printed about the very statement that loads the table.
+    if isinstance(stmt.expr, exp.Merge):
+        cols, sure = owned(stmt.expr.args.get("on"))
+        if cols:
+            found.append(Usage(kind="join_key", column=column, alias=alias_for_column,
+                               certain=sure))
+        for when in stmt.expr.args.get("expressions") or []:
+            # WHEN MATCHED AND s.cm13 = 'DEAD' THEN DELETE. The condition here
+            # decides which rows of a published table get deleted or updated,
+            # and it is often the only place in the whole statement the column
+            # is named at all.
+            cols, sure = owned(when.args.get("condition"))
+            for c in cols:
+                found.append(Usage(kind="filter", column=column, alias=alias_for_column,
+                                   detail=_literal_beside(when, c), certain=sure))
+            then = when.args.get("then")
+            if isinstance(then, exp.Update):
+                # Only the right-hand side. ``SET t.market = s.cm13`` reads
+                # s.cm13 and writes t.market, and reading the whole assignment
+                # would report the target's own column as a usage of the source.
+                for setter in then.args.get("expressions") or []:
+                    value = setter.args.get("expression") if isinstance(setter, exp.EQ) else setter
+                    cols, sure = owned(value)
+                    if cols:
+                        found.append(Usage(kind="select", column=column,
+                                           alias=alias_for_column, certain=sure))
+            elif isinstance(then, exp.Insert):
+                cols, sure = owned(then.args.get("expression"))
+                if cols:
+                    found.append(Usage(kind="select", column=column,
+                                       alias=alias_for_column, certain=sure))
+
     if stmt.select is None:
         return _best_of(found)
 
@@ -1149,8 +1235,14 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
                           detail=fn, certain=sure)
                 )
 
-        # 2. WHERE / HAVING
-        for clause_key in ("where", "having"):
+        # 2. WHERE / HAVING / QUALIFY
+        #
+        # QUALIFY is BigQuery's and Snowflake's filter on a window result, and
+        # it is where nearly every dedup in this kind of pipeline is written:
+        # QUALIFY ROW_NUMBER() OVER (PARTITION BY cm13 ORDER BY ts) = 1. Not
+        # reading it meant a column that appears nowhere else in the statement
+        # was invisible, and the scan came back with no impact at all.
+        for clause_key in ("where", "having", "qualify"):
             clause = sel.args.get(clause_key)
             cols, sure = owned(clause)
             for c in cols:
@@ -1166,11 +1258,32 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
                 found.append(Usage(kind="join_key", column=column, alias=alias_for_column,
                                    certain=sure))
 
+        # 3b. FROM t, UNNEST(cm13) -- an array column opened out into rows.
+        # There is no ON clause here, so the join check above sees nothing, and
+        # the column is named nowhere else in the statement.
+        for j in sel.args.get("joins") or []:
+            node = j.args.get("this")
+            if isinstance(node, exp.Unnest):
+                cols, sure = owned(node)
+                if cols:
+                    found.append(Usage(kind="transform", column=column,
+                                       alias=alias_for_column, detail="UNNEST",
+                                       certain=sure))
+
         # 4. GROUP BY
         cols, sure = owned(sel.args.get("group"))
         if cols:
             found.append(Usage(kind="aggregation", column=column, alias=alias_for_column,
                                certain=sure))
+
+        # 4b. the statement's own ORDER BY. With a LIMIT under it this decides
+        # which rows survive, which is the ranking case; without one it decides
+        # the order rows are written in. Either way the name is written down, so
+        # removing it stops the statement compiling and the table stops loading.
+        cols, sure = owned(sel.args.get("order"))
+        if cols:
+            found.append(Usage(kind="ranking" if sel.args.get("limit") else "sort",
+                               column=column, alias=alias_for_column, certain=sure))
 
     # 5. window ORDER BY -- the ranking case, where removal is silent and awful
     for w in stmt.expr.find_all(exp.Window):
@@ -1178,6 +1291,17 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
         if cols:
             found.append(Usage(kind="ranking", column=column, alias=alias_for_column,
                                certain=sure))
+        # PARTITION BY is the other half of a dedup and the half that was never
+        # read. The ORDER BY picks the winner; the PARTITION BY says what it
+        # wins against. Take the column away and every row falls into one group,
+        # so one record survives for the whole table instead of one per key --
+        # and nothing anywhere is raised to say so.
+        for part in w.args.get("partition_by") or []:
+            cols, sure = owned(part)
+            if cols:
+                found.append(Usage(kind="dedup_key", column=column, alias=alias_for_column,
+                                   detail="PARTITION BY", certain=sure))
+                break
 
     # 6. aggregates that pick which row survives
     for agg in list(stmt.expr.find_all(exp.Max)) + list(stmt.expr.find_all(exp.Min)):
