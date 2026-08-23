@@ -1030,6 +1030,69 @@ For each parsed statement build a Statement with:
            scan could reach them — on BigQuery that is the statement that loads
            the published table.
 
+           A WHOLE-TABLE COPY has no SELECT in it either, and it is how a
+           staging table is promoted into a published one:
+
+             CREATE OR REPLACE TABLE published.customers COPY  stage.customers
+             CREATE TABLE            published.customers CLONE stage.customers
+             CREATE TABLE            published.customers LIKE  stage.customers
+             ALTER TABLE stage.customers RENAME TO published.customers
+
+           That single line is what connects everything upstream to the table
+           people actually read. With no source recorded the trail died at the
+           staging table and the screen said "last table in the chain — not
+           matched by your production naming rule", which reads as an answer.
+
+           A whole-table copy carries every column and writes none of them
+           down, which is exactly what SELECT * means. So rewrite it, on the
+           parsed copy only, into `CREATE TABLE <target> AS SELECT * FROM
+           <source>` — then every piece that already follows a star works on it
+           unchanged: the column is carried on, the hop is marked worked out
+           rather than read, and the table is listed as one whose column list
+           cannot be seen. Keep the word the file used (COPY, CLONE, LIKE,
+           RENAME) on the Statement and carry it all the way to the screen. A
+           row that says "Carried by SELECT *" about a file that says COPY
+           sends somebody to the line to look for a statement that is not there,
+           and then to doubt the finding rather than the label.
+
+           CREATE SNAPSHOT TABLE is the same thing, but those two extra words
+           make the parser give up on the whole statement. Retry it with
+           "CREATE SNAPSHOT TABLE" replaced by "CREATE TABLE", and only after
+           the parser has already failed, so it costs nothing on the statements
+           that read normally.
+
+           BIGQUERY WILDCARD TABLES. Date-sharded tables are ordinary, and the
+           only way to read one is a wildcard:
+
+             SELECT cm13 FROM `prj.ds.customer_demographics_*`
+             WHERE _TABLE_SUFFIX BETWEEN '20260101' AND '20260131'
+
+           The source name recorded is `customer_demographics_*`, asterisk and
+           all. Nobody has a table called that, so scanning a real shard matched
+           nothing and scanning the family name matched nothing either — zero
+           findings, a clean "no impact", on a change that breaks a published
+           table.
+
+           What a wildcard matches is not a guess: BigQuery only allows the star
+           at the end, and it stands for every table in that dataset whose name
+           starts with the part in front of it. So a wildcard covers a name when
+           the name starts with that prefix. Match it in same_table AND in the
+           lookup index — the index is keyed on the exact short name, so fixing
+           only the comparison changes nothing.
+
+           One deliberate addition to BigQuery's own rule: a person asked what
+           breaks types the family the way they think of it — "customer_
+           demographics", with no trailing separator, which BigQuery would not
+           match. Match that too. It costs a row somebody can dismiss by opening
+           the file; refusing it costs the clean "no impact" this tool exists to
+           prevent. Do not go further than that: `ev` must never match
+           `events_*`.
+
+           Say so on the result. A finding reached through a wildcard names the
+           wildcard, as the file spells it, in a card beside the findings — never
+           on another screen. The dataset still rules a match out exactly as it
+           does for an ordinary name.
+
 Statements sqlglot returns as a Command — a procedure call, a loop, an
 EXECUTE IMMEDIATE, a scripting block — go into `opaque` keyed by file, with
 line, first code line, and the SQL text. Kept, not reported: whether they
@@ -1586,7 +1649,19 @@ The rest of the plumbing, in the same file:
 
 ROUTES — the same names, the same JSON, as the page already expects:
 
-GET  /api/health      the shape in the contract card: repo counts including
+GET  /api/health      includes `build` — which build this is, so a screen can
+                      say it. Nothing did, and "it does not work" has more than
+                      once turned out to be "that was fixed a while ago, on a
+                      copy that was never installed". Look in four places, best
+                      first: a stamp file written into a packaged folder at
+                      build time, the host's environment (Vercel sets
+                      VERCEL_GIT_COMMIT_SHA), git, and last the dates on
+                      Ripple's own files. Return where the answer came from as
+                      well as the answer, and say plainly on screen when it is
+                      the last one — a file date moves whenever anything is
+                      touched and proves nothing about what was installed. A
+                      guess dressed as a fact is worse than no line at all.
+                      Also: the shape in the contract card: repo counts including
                       heldOnline, pathTooLong, inSkippedDirs, skippedDirNames,
                       unreadable, statements, kinds[]; catalog counts;
                       sqlDialect; maxHops; production (the one-line form);
@@ -1974,6 +2049,20 @@ Build it as one function used by the whole app:
 The rest of the settings screen: what is connected, and a note explaining that
 this one setting decides whether "no production table is impacted" is a result
 or an accident.
+
+Also on the settings screen: a card saying WHICH BUILD IS RUNNING, from the
+`build` block of /api/health — the version, the commit if there is one, and the
+date. Underneath it, one line saying where that came from: read from the
+repository, recorded when the copy was packaged, reported by the host, or — when
+nothing better was found — the date of the newest file in the folder. That last
+one must say out loud that it is a guess. A file date moves whenever anything is
+touched and proves nothing about what anybody installed, and a guess that looks
+like a fact is worse than no line.
+
+Write this card once, as shared code, and call it from every edition's settings
+screen. It exists because the copy nobody can check is exactly the one that
+turns out to be months old, and putting it only on the screen you happen to be
+looking at is how the half-shipped fix happens.
 ````
 
 **Check it worked:** run a scan against a real folder and click through all seven

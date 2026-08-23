@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from dataclasses import replace
 
 from . import ai, narrative, production, progress, store
+from .build_info import build_info
 from .catalog import Catalog, build_catalog
 from .config import AI_MODELS, Settings, model_label, settings
 from .notification import Notification, extract_by_rules, read_pasted, read_upload
@@ -232,6 +233,10 @@ def health() -> dict:
     on_github = gh is not None
     return {
         "ok": True,
+        # Which build this is. There was no way to tell from any screen, and
+        # "it does not work" has more than once turned out to be "that was
+        # fixed a while ago, on a copy nobody installed".
+        "build": build_info(),
         "source": _state["source"],
         "github": gh,
         "tokenSet": bool(_active_token()),

@@ -17,6 +17,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ripple.config import Settings, parse_production_rule       # noqa: E402
@@ -563,3 +565,154 @@ def test_each_statement_in_a_file_is_its_own_finding(tmp_path):
     assert row["inter"] == "final_published", \
         "the row under final_published must be the statement that builds it"
     assert "final_published" in row["impact"], row["impact"]
+
+
+# ── 10. BigQuery wildcard tables ───────────────────────────────────────────
+# Date sharding is how a great deal of BigQuery source data is stored, and the
+# only way to read it is a wildcard:
+#
+#     SELECT cm13 FROM `prj.ds.customer_demographics_*`
+#     WHERE _TABLE_SUFFIX BETWEEN '20260101' AND '20260131'
+#
+# Ripple recorded the source as "customer_demographics_*", asterisk and all.
+# Nobody has a table called that. Scanning a real shard matched nothing, and
+# scanning the family name matched nothing either -- zero findings, a clean
+# "no impact", on a change that breaks a published table.
+WILDCARD = {
+    "a.sql": """
+        CREATE OR REPLACE TABLE stage_wild AS
+        SELECT cm13 FROM `prj.ds.customer_demographics_*`
+        WHERE _TABLE_SUFFIX BETWEEN '20260101' AND '20260131';
+    """,
+    "b.sql": """
+        CREATE OR REPLACE TABLE final_published AS
+        SELECT cm13 FROM stage_wild WHERE cm13 IS NOT NULL;
+    """,
+}
+
+
+def test_a_real_shard_is_found_by_the_wildcard_that_reads_it(tmp_path):
+    """The reproduction. A shard name is what a person types, and it used to
+    match nothing at all."""
+    out = scan(tmp_path, WILDCARD, table="customer_demographics_20260101")
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert out["stats"]["productionTables"] == 1
+    assert out["risk"] != "none"
+
+
+def test_the_family_name_a_person_types_is_found_too(tmp_path):
+    """BigQuery itself would not match "customer_demographics" against
+    "customer_demographics_*" -- the trailing separator is part of the prefix.
+    Ripple matches it anyway, because that is what somebody asked what breaks
+    actually types, and the cost of refusing is the clean "no impact" this
+    whole file exists to prevent."""
+    out = scan(tmp_path, WILDCARD, table="customer_demographics")
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_the_wildcard_is_named_on_the_result_not_somewhere_else(tmp_path):
+    """A caveat on a different screen from the answer it qualifies is a caveat
+    nobody reads. The finding says the table was reached through a wildcard,
+    and names the wildcard as the SQL spells it."""
+    out = scan(tmp_path, WILDCARD, table="customer_demographics_20260101")
+    wild = out["wildcardNames"]
+    assert len(wild) == 1, wild
+    assert wild[0]["table"] == "customer_demographics_20260101"
+    assert wild[0]["patterns"] == ["customer_demographics_*"], \
+        "spelt as the file spells it, not as the index keys it"
+
+
+def test_a_wildcard_does_not_swallow_an_unrelated_table(tmp_path):
+    """The star only stands for what comes after the prefix. A shorter name
+    that happens to start the same way is a different table, and matching it
+    would put a finding about somebody else's table on this result."""
+    out = scan(tmp_path, WILDCARD, table="cust")
+    assert out["groups"] == []
+    assert out["wildcardNames"] == []
+
+
+def test_nothing_is_said_when_the_wildcard_is_what_was_typed(tmp_path):
+    """Somebody who typed the asterisk knows the answer covers a family. A
+    warning printed on every scan is a warning nobody reads."""
+    out = scan(tmp_path, WILDCARD, table="customer_demographics_*")
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert out["wildcardNames"] == []
+
+
+def test_a_wildcard_in_another_dataset_is_still_a_different_table(tmp_path):
+    """The dataset rules a match out exactly as it does for an ordinary name.
+    A wildcard is not a licence to ignore what the SQL did say."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            CREATE OR REPLACE TABLE final_published AS
+            SELECT cm13 FROM `prj.archive_ds.customer_demographics_*`;
+        """,
+    }, table="live_ds.customer_demographics_20260101")
+    assert out["groups"] == [], "archive_ds and live_ds are two different tables"
+
+
+# ── 11. a staging table promoted into a published one ──────────────────────
+# The last step of a great many pipelines: build the table in a staging dataset,
+# check it, then promote it by copying or renaming it into the published one.
+# None of these four statements has a SELECT anywhere in it, so Ripple recorded
+# no source for any of them. The trail died at the staging table and the screen
+# said "last table in the chain - not matched by your production naming rule" --
+# a calm, confident answer, with the published table one line further down the
+# same folder never mentioned.
+PROMOTE = "CREATE OR REPLACE TABLE stage_x AS SELECT cm13 FROM customer_demographics;"
+
+
+def promote(tmp_path, statement: str) -> dict:
+    return scan(tmp_path, {"a.sql": PROMOTE, "b.sql": statement})
+
+
+@pytest.mark.parametrize("statement,word", [
+    ("CREATE OR REPLACE TABLE final_published COPY stage_x;", "COPY"),
+    ("CREATE TABLE final_published CLONE stage_x;", "CLONE"),
+    ("CREATE TABLE final_published LIKE stage_x;", "LIKE"),
+    ("CREATE SNAPSHOT TABLE final_published CLONE stage_x;", "CLONE"),
+    ("ALTER TABLE stage_x RENAME TO final_published;", "RENAME"),
+])
+def test_a_whole_table_copy_carries_the_chain_into_production(tmp_path, statement, word):
+    out = promote(tmp_path, statement)
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], statement
+    assert out["stats"]["productionTables"] == 1
+
+
+@pytest.mark.parametrize("statement,word", [
+    ("CREATE OR REPLACE TABLE final_published COPY stage_x;", "COPY"),
+    ("CREATE TABLE final_published CLONE stage_x;", "CLONE"),
+    ("ALTER TABLE stage_x RENAME TO final_published;", "RENAME"),
+])
+def test_a_copied_table_is_marked_worked_out_and_named_by_its_own_word(
+        tmp_path, statement, word):
+    """A copy carries every column and writes none of them down, which is what
+    SELECT * does -- so it is followed the same way and every step past it is
+    marked worked out rather than read. What it must NOT do is tell the reader
+    the file says SELECT *, because the file says COPY."""
+    out = promote(tmp_path, statement)
+    assert out["stats"]["inferredFindings"] >= 1, "the hop is worked out, not read"
+    assert out["stats"]["tablesNotVisible"] == 1
+    star = out["starTables"][0]
+    assert star["table"] == "final_published"
+    assert star["from"] == "stage_x"
+    assert star["how"] == word, "the card names the word the file actually uses"
+
+
+def test_an_ordinary_select_star_is_still_not_labelled_a_copy(tmp_path):
+    """The guard on the other side: a real SELECT * must not start claiming to
+    be a COPY, or the card lies in the opposite direction."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_x AS SELECT * FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_x;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert out["starTables"][0]["how"] == "", "an ordinary star has no copy word"
+
+
+def test_a_copy_of_an_unrelated_table_is_not_dragged_in(tmp_path):
+    """A promote step only carries the chain when it copies a table the chain
+    actually reached."""
+    out = scan(tmp_path, {
+        "a.sql": PROMOTE,
+        "b.sql": "CREATE OR REPLACE TABLE final_published COPY some_other_table;"})
+    assert out["groups"] == [], "final_published is a copy of a table with no cm13 in it"

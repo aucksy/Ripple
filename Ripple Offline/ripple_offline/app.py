@@ -27,6 +27,7 @@ from . import folderpick, lifecycle, nonet, paths, prefs, synced
 
 # The shared engine. Importing this package has already put it on the path.
 from ripple import narrative, production, progress, store          # noqa: E402
+from ripple.build_info import build_info                           # noqa: E402
 from ripple.catalog import Catalog, build_catalog                  # noqa: E402
 from ripple.config import settings                                 # noqa: E402
 from ripple.notification import extract_by_rules, read_pasted, read_upload  # noqa: E402
@@ -84,6 +85,10 @@ def _health() -> dict:
         kinds[f.lang] = kinds.get(f.lang, 0) + 1
     return {
         "ok": True,
+        # Which build this is. It matters most here: this is the copy running
+        # on a machine nobody can check, and an old one looks exactly like a
+        # new one. Written into the folder by build.py at packaging time.
+        "build": build_info(),
         "source": "folder",
         # Said out loud so the screen can state it rather than imply it.
         "offline": True,

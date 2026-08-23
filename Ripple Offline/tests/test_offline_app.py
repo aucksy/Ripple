@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -278,3 +279,24 @@ def test_the_close_button_stops_it(client):
     assert out["ok"] is True
     assert server.should_exit is True, "the program is still running after being told to stop"
     lifecycle.reset()
+
+
+# ── which build is this? ───────────────────────────────────────────────────
+# It matters more here than anywhere else. This is the copy running on a machine
+# nobody can check, handed over as a zip and copied from folder to folder, and
+# an old one looks exactly like a new one. "It does not work" has more than once
+# turned out to be "that was fixed a while ago, on a copy nobody replaced".
+def test_the_offline_health_says_which_build_it_is(client):
+    b = client.get("/api/health").json().get("build")
+    assert b, "the offline settings screen has nothing to show without this"
+    assert b["version"] and b["label"]
+    assert b["from"] in {"build", "host", "git", "files"}
+
+
+def test_the_offline_screen_shows_the_build_card():
+    """The stamp is only worth having if it is on a screen. The offline build
+    has its own settings view, so adding the card online does not put it here --
+    that is exactly how the online-only half of a fix gets shipped alone."""
+    offline_js = Path(__file__).resolve().parent.parent / "web" / "offline.js"
+    source = offline_js.read_text(encoding="utf-8")
+    assert "buildCard(h)" in source, "the offline settings screen must show the build stamp"

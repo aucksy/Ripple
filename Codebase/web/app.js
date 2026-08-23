@@ -153,6 +153,35 @@ const PROD_HELP =
   + 'of a table name (_PROD matches sales_prod), * matches anything (PROD_*), and * on '
   + 'its own means treat every table as published.';
 
+/* Which build is running. Shared by both editions on purpose: this exists
+   because "it does not work" has more than once turned out to be "that was
+   fixed a while ago, on a copy that was never installed", and the copy nobody
+   can check is exactly the offline one. Where the answer came from is shown
+   too — a commit hash is a fact, a file date is a guess, and they must never
+   read the same. */
+function buildCard(h) {
+  const b = h && h.build;
+  if (!b) return null;
+  const card = el('div', { className: 'card pad lg', style: 'margin-top:18px' });
+  card.append(el('span', { className: 'lbl', textContent: 'This build' }));
+  card.append(el('div', { className: 'mono', style: 'margin-top:10px;line-height:1.55',
+    textContent: b.label }));
+  if (b.from === 'files') {
+    card.append(el('div', { className: 'small muted', style: 'margin-top:8px;line-height:1.55',
+      textContent: 'No build record was found, so that is the date of the newest file in '
+        + 'this folder. It moves whenever anything is touched, and it does not tell you '
+        + 'whether this copy was ever installed anywhere.' }));
+  } else {
+    card.append(el('div', { className: 'small muted', style: 'margin-top:8px;line-height:1.55',
+      textContent: b.from === 'build'
+        ? 'Recorded when this copy was packaged.'
+        : b.from === 'host'
+        ? 'Reported by the host that deployed it.'
+        : 'Read from the repository this copy is running out of.' }));
+  }
+  return card;
+}
+
 function productionCard(opts = {}) {
   const p = productionState();
   const card = el('div', { className: 'card pad lg' });
@@ -1160,8 +1189,16 @@ function step4(root) {
       `Stopped at ${sc.maxHops} renames deep`]);
   }
   if (st.tablesNotVisible) {
+    // Some of these are not SELECT * at all — they are a whole table copied or
+    // renamed into another. This card used to say SELECT * about all of them,
+    // one card above the card that said "copied or renamed", so the screen
+    // contradicted itself about the same two tables.
+    const anyCopy = (sc.starTables || []).some(t => t.how);
+    const anyStar = (sc.starTables || []).some(t => !t.how);
     uncovered.push(['Tables not fully readable', st.tablesNotVisible, 'var(--amber)',
-      'Built with SELECT * — no column list']);
+      anyCopy && anyStar ? 'Copied whole, or SELECT * — no column list'
+        : anyCopy ? 'Copied or renamed whole — no column list'
+        : 'Built with SELECT * — no column list']);
   }
   // Only ever shown when there are some. A "0 never opened" card would be a
   // reassurance nobody asked for.
@@ -1396,9 +1433,8 @@ function renderChecks(box, sc) {
     }
     if ((a.notVisible || []).length) {
       p.append(el('div', { className: 'small muted', style: 'margin:4px 0 0 4px;line-height:1.55',
-        textContent: `The trail goes through ${a.notVisible.join(', ')}, which `
-          + `${a.notVisible.length === 1 ? 'is' : 'are'} built with SELECT * — every column `
-          + `carried, none of them named. ${a.inferred} of the findings below sit past that `
+        textContent: `The trail goes through ${a.notVisible.join(', ')} — every column `
+          + `carried on, none of them named. ${a.inferred} of the findings below sit past that `
           + 'point and are worked out rather than read.' }));
     }
     // How widely the name is used as a name. A scan for a column half the
@@ -1468,11 +1504,11 @@ function detailFor(r) {
         : `${r.inferredHops} step${r.inferredHops === 1 ? '' : 's'} on the way here could not be read. ` }),
       r.viaStar
         ? `The statement takes every column, so ${r.attr} is carried into ${r.inter} without `
-          + 'ever being named. The hop is real — that is what SELECT * does — but Ripple cannot '
-          + 'read the column list of the table it builds, so anything past this point is worked '
-          + 'out rather than read.'
-        : `A table earlier in this chain is built with SELECT *, so its column list is not in `
-          + `the code. This row is a real usage on a real line; what Ripple cannot promise is `
+          + `ever being named. The hop is real — that is what ${r.copiedBy || 'SELECT *'} does — `
+          + 'but Ripple cannot read the column list of the table it builds, so anything past '
+          + 'this point is worked out rather than read.'
+        : `A table earlier in this chain takes every column at once, so its column list is not `
+          + `in the code. This row is a real usage on a real line; what Ripple cannot promise is `
           + `that ${r.attr} is still the name the column carries by the time it gets here.`));
   }
   const code = el('div', { className: 'code' });
@@ -1613,20 +1649,33 @@ function renderTrailGaps(box, sc) {
   // 2. A table built with SELECT * carries every column and names none of them.
   if (sc.starTables?.length) {
     const n = sc.starTables.length;
+    // Some of these are not SELECT * at all — they are a staging table promoted
+    // into a published one with COPY, CLONE, LIKE or RENAME. Ripple follows them
+    // the same way, because they do the same thing, but the card has to name the
+    // word the file actually uses or it describes a statement that is not there.
+    const copies = sc.starTables.filter(s => s.how);
+    const stars = sc.starTables.length - copies.length;
     const card = el('div', { className: 'card pad lg', style: 'margin-top:20px;border-color:var(--amberln)' });
     card.append(el('b', { style: 'display:block;font-size:14px', textContent:
       `${n} table${n === 1 ? '' : 's'} on this trail ${n === 1 ? 'has' : 'have'} no column list to read` }));
     card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
-      `${n === 1 ? 'It is' : 'They are'} built with SELECT *, which takes every column and writes `
-      + `none of them down. The attribute really does travel through — that is what SELECT * does — `
-      + 'so Ripple follows it and marks every step past that point as worked out rather than read.' }));
+      (stars && copies.length
+        ? 'Some are built with SELECT *, and some are a whole table copied or renamed into another. '
+        : copies.length
+        ? `${n === 1 ? 'It is' : 'They are'} a whole table copied or renamed into another. `
+        : `${n === 1 ? 'It is' : 'They are'} built with SELECT *. `)
+      + 'Either way every column travels and none of them is written down. The attribute really '
+      + 'does go through — so Ripple follows it, and marks every step past that point as worked '
+      + 'out rather than read.' }));
     card.append(el('div', { className: 'small muted', style: 'margin-top:6px;line-height:1.55',
       textContent: 'Ripple used to stop dead here instead, which turned a change that breaks a '
         + 'published table into a clean result. What it cannot promise is that the column is '
         + 'still called the same thing on the far side.' }));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
     sc.starTables.forEach(s => chips.append(el('span', { className: 'chip mono',
-      textContent: `${s.table} — from ${s.from}` })));
+      textContent: s.how
+        ? `${s.table} — ${s.how} of ${s.from}`
+        : `${s.table} — from ${s.from}` })));
     card.append(chips);
     box.append(card);
   }
@@ -1653,6 +1702,27 @@ function renderTrailGaps(box, sc) {
           + 'case really are two tables there. Ripple cannot tell whether that is what your '
           + 'code means or just how it was typed.' }));
     }
+    box.append(card);
+  }
+
+  // 4. The SQL named a family of date-sharded tables, not the one being scanned.
+  //    This has to sit here, beside the findings it qualifies. Ripple used to
+  //    match the name literally, asterisk and all, so a scan of a real shard
+  //    matched nothing and printed a clean "no impact" — on a warehouse where
+  //    date sharding is how half the source tables are read.
+  if (sc.wildcardNames?.length) {
+    const n = sc.wildcardNames.length;
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px' });
+    card.append(el('span', { className: 'lbl', textContent:
+      `${n} table${n === 1 ? '' : 's'} here ${n === 1 ? 'is' : 'are'} read through a wildcard, not by name` }));
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      'The SQL asks for a whole family of date-sharded tables at once. The table you scanned '
+      + 'falls inside that family, so the usages below are real — but the file never says which '
+      + 'shard, and the same query reads the others too. A fix has to cover all of them.' }));
+    const chips = el('div', { className: 'chips', style: 'margin-top:10px' });
+    sc.wildcardNames.forEach(w => chips.append(el('span', { className: 'chip mono',
+      textContent: `${w.table} — matched by ${w.patterns.join(', ')}` })));
+    card.append(chips);
     box.append(card);
   }
 }
@@ -1823,7 +1893,8 @@ function nodeEl(n) {
   // a picture of a chain is exactly where somebody reads "and then it stops".
   if (n.inferred) {
     d.append(el('div', { className: 'small muted', style: 'margin-top:5px;line-height:1.4',
-      textContent: 'built with SELECT * — column list not visible' }));
+      textContent: (n.how ? `${n.how} of a whole table` : 'built with SELECT *')
+        + ' — column list not visible' }));
   }
   if (n.cut) {
     d.append(el('div', { className: 'small', style: 'margin-top:5px;line-height:1.4;color:var(--red)',
@@ -2113,7 +2184,7 @@ function settingsView(root) {
     el('span', { className: 'mono', textContent: 'RIPPLE_PROD_TABLES' }), ', ',
     el('span', { className: 'mono', textContent: 'GROQ_API_KEY' }), '. See the README.'));
 
-  grid.append(left, aiCard(h));
+  grid.append(left, el('div', {}, aiCard(h), buildCard(h)));
   root.append(grid);
 }
 

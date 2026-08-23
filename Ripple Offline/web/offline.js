@@ -149,7 +149,7 @@ function settingsView(root) {
       + 'Press Save below to use it.'));
   grid.append(el('div', {}, folderCard(h, o), dialectCard(h, o), prod, saveRow(h, o)),
               el('div', { className: 'rail' }, whereCard(h), guardCard(), factsCard(h),
-                 closeCard()));
+                 buildCard(h), closeCard()));
   root.append(grid);
 }
 

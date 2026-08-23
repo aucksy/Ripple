@@ -20,6 +20,7 @@ from .sqlread import (
     Usage,
     canonical,
     dataset_of,
+    is_wildcard,
     same_table,
     mode_of,
     locate,
@@ -49,11 +50,17 @@ BREAKS = {
 NO_LOCAL_FIX = {"ranking", "dedup_key"}
 
 
-def _impact_sentence(u: Usage, change_type: str, target: str | None) -> str:
+def _impact_sentence(u: Usage, change_type: str, target: str | None,
+                     copied_by: str = "") -> str:
     tgt = target or "the next table"
     lit = f" '{u.detail}'" if u.kind == "filter" and u.detail else ""
     if u.kind == "star":
-        return (f"This statement takes every column with SELECT *, so the column is carried into "
+        # A whole-table COPY does exactly what a SELECT * does, and is followed
+        # the same way -- but saying "SELECT *" about a file that says COPY
+        # sends somebody to the line to look for a statement that is not there.
+        how = (f"This statement copies the whole table with {copied_by}" if copied_by
+               else "This statement takes every column with SELECT *")
+        return (f"{how}, so the column is carried into "
                 f"{tgt} without ever being named. Nothing here fails on the day of the change - "
                 f"{tgt} is simply built without the column, and whatever reads it further down is "
                 f"what breaks. Ripple cannot see {tgt}'s column list, so everything past this "
@@ -130,6 +137,10 @@ class Finding:
     # This hop is carried by a SELECT *, so the table it builds has no column
     # list Ripple can read. The hop is real; everything past it is inferred.
     via_star: bool = False
+    # "" when the file really does say SELECT *; otherwise the word it used to
+    # copy a whole table instead - COPY, CLONE, LIKE or RENAME. Carried this far
+    # so no screen ever tells somebody the file says SELECT * when it does not.
+    copied_by: str = ""
     # How many SELECT * hops are behind this finding, counting this one. Zero
     # means every step to here was written down in the SQL.
     inferred_hops: int = 0
@@ -184,6 +195,12 @@ class ScanResult:
     # table -- losing the chain is the worse mistake -- and says so here, so a
     # finding under one of these names is read as being about either.
     merged_names: list[dict] = field(default_factory=list)
+    # Wildcard table names the chain was followed through -- ``events_*``. The
+    # SQL never named the table being scanned; it named a whole family of
+    # date-sharded tables, and this one falls inside it. The finding is real and
+    # the statement really does read this table, but "which shard" is a question
+    # the file does not answer, and the person acting on it has to know that.
+    wildcard_names: list[dict] = field(default_factory=list)
     max_hops: int = 0
     files_scanned: int = 0
     files_matched: int = 0
@@ -203,6 +220,7 @@ class ScanResult:
             "starTables": self.star_tables,
             "cutShort": self.cut_short,
             "mergedNames": self.merged_names,
+            "wildcardNames": self.wildcard_names,
             "maxHops": self.max_hops,
             "filesScanned": self.files_scanned,
             "filesMatched": self.files_matched,
@@ -283,6 +301,11 @@ def trace(
     for u in upstream:
         all_names.append(short_name(u["table"]))
         all_names.extend(u.get("attrs") or [])
+        # A date-sharded table is never written by its own name. The file says
+        # ``customer_demographics_*``, so searching the text for the shard finds
+        # nothing -- and then every honesty list built off that search is empty
+        # too, including the one that says "the name is in this file as text".
+        all_names.extend(parsed.wildcards_covering(u["table"]))
     matched_files = {m.file for m in index.search(all_names)}
     res.files_matched = len(matched_files)
     attr_names = [a for u in upstream for a in (u.get("attrs") or [])]
@@ -299,6 +322,28 @@ def trace(
     star_seen: dict[str, dict] = {}
     cut_seen: dict[tuple, dict] = {}
     merged_seen: dict[str, dict] = {}
+    wild_seen: dict[str, dict] = {}
+
+    def note_if_wildcard(name: str) -> None:
+        """Say when this table was only reached through a wildcard name.
+
+        The SQL did not name this table. It named ``customer_demographics_*``,
+        a whole family of date-sharded tables, and the one being scanned falls
+        inside it. The usage is real -- that query reads this table on any day
+        its suffix is in range -- but the file cannot say which shard, and a
+        finding that does not admit that reads as more precise than it is.
+
+        Nothing is said when the person typed the wildcard themselves. They
+        already know; a warning on every scan is a warning nobody reads.
+        """
+        if is_wildcard(name):
+            return
+        key = short_name(name).upper()
+        if key in wild_seen:
+            return
+        patterns = parsed.wildcards_covering(name)
+        if patterns:
+            wild_seen[key] = {"table": short_name(name), "patterns": patterns}
 
     def note_if_merged(name: str, matched: list, hop: int) -> None:
         """Say when following this name really did pull in more than one table.
@@ -395,6 +440,7 @@ def trace(
                 truncated = False
                 matched = parsed.reading(cur_table)
                 note_if_merged(cur_table, matched, hop)
+                note_if_wildcard(cur_table)
 
                 for stmt in matched:
                     looked[0] += 1
@@ -423,16 +469,27 @@ def trace(
                     }.get(primary.kind, "Used here")
 
                     carried_by_star = any(u.via_star for u in us)
+                    # A whole-table COPY, CLONE, LIKE or RENAME is followed as
+                    # the SELECT * it is, but those two words are nowhere in the
+                    # file. A row that says "Carried by SELECT *" sends somebody
+                    # to the line to look for a statement that is not there --
+                    # and then to doubt the finding rather than the label.
+                    logic = primary.label
+                    if stmt.whole_copy and primary.kind == "star":
+                        logic = f"Carried by {stmt.whole_copy}"
+                        note = (f"{stmt.whole_copy} of the whole table - every column "
+                                "carried on, none of them named")
                     f = Finding(
                         source_table=show(cur_table),
                         source_column=cur_col,
                         target_table=show(stmt.target) if stmt.target else None,
                         alias=primary.alias or cur_col,
-                        logic=primary.label,
+                        logic=logic,
                         kind=primary.kind,
                         mode=mode_of(us),
                         impact=_impact_sentence(primary, change_type,
-                                                show(stmt.target) if stmt.target else None),
+                                                show(stmt.target) if stmt.target else None,
+                                                stmt.whole_copy),
                         breaking=primary.kind in breaks,
                         no_local_fix=primary.kind in NO_LOCAL_FIX
                         and change_type in ("removal", "rename"),
@@ -442,6 +499,7 @@ def trace(
                         hop=hop,
                         certain=primary.certain,
                         via_star=carried_by_star,
+                        copied_by=stmt.whole_copy,
                         inferred_hops=inferred + (1 if carried_by_star else 0),
                         at=stmt.line_offset,
                     )
@@ -468,9 +526,16 @@ def trace(
                         # ones past it are worked out, and both facts travel with
                         # the result rather than living on another screen.
                         node["inferred"] = True
+                        node["how"] = stmt.whole_copy
                         entry = star_seen.setdefault(shown, {
                             "table": shown, "file": stmt.file, "from": show(cur_table),
                             "attr": cur_col, "roots": [],
+                            # A whole-table COPY, CLONE, LIKE or RENAME is
+                            # followed as the SELECT * it is, but the file does
+                            # not say SELECT * -- and a card describing a
+                            # statement that is not in the file is worse than
+                            # no card. Which word was written travels with it.
+                            "how": stmt.whole_copy,
                         })
                         if attr not in entry["roots"]:
                             entry["roots"].append(attr)
@@ -611,6 +676,7 @@ def trace(
     res.star_tables = sorted(star_seen.values(), key=lambda s: s["table"].upper())
     res.cut_short = sorted(cut_seen.values(), key=lambda c: c["table"].upper())
     res.merged_names = sorted(merged_seen.values(), key=lambda m: m["table"].upper())
+    res.wildcard_names = sorted(wild_seen.values(), key=lambda w: w["table"].upper())
     placed |= {f.key() for fs in end_groups.values() for f in fs}
     res.other = [_finding_row(f) for f in res.findings if f.key() not in placed]
 
@@ -847,6 +913,7 @@ def _finding_row(f: Finding) -> dict:
         "lines": f.lines,
         "certain": f.certain,
         "viaStar": f.via_star,
+        "copiedBy": f.copied_by,
         "inferredHops": f.inferred_hops,
     }
 

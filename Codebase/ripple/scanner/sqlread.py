@@ -105,18 +105,84 @@ def canonical(table: str) -> str:
     return ".".join(parts[-2:]) if parts else (table or "")
 
 
+# ── wildcard tables ────────────────────────────────────────────────────────
+# Date-sharded tables are ordinary in BigQuery, and the way every one of them is
+# read is a wildcard::
+#
+#     SELECT cm13 FROM `prj.ds.customer_demographics_*`
+#     WHERE _TABLE_SUFFIX BETWEEN '20260101' AND '20260131'
+#
+# The name in the file is ``customer_demographics_*``, asterisk and all. Nobody
+# has a table called that. The tables are ``customer_demographics_20260101`` and
+# three hundred siblings, and that is what a person types into a scan -- so the
+# name matched nothing, the chain was never followed, and the answer came back
+# as a clean "no impact" on a change that breaks a published table.
+#
+# What a wildcard matches is not a guess: BigQuery only allows the star at the
+# end, and it stands for every table in that dataset whose name starts with the
+# part in front of it. So a wildcard covers a name when the name starts with
+# that prefix.
+#
+# One deliberate addition to that rule. A person asked what breaks does not type
+# the shard, they type the family the way they think of it -- "customer_
+# demographics", with no trailing separator, which BigQuery itself would not
+# match. Refusing that would print the exact clean "no impact" this exists to
+# prevent, so the prefix with its trailing separator taken off matches too. It
+# costs a row somebody can dismiss by opening the file. Silence costs an outage.
+_STAR = "*"
+
+
+def is_wildcard(table: str) -> bool:
+    """Is this a BigQuery wildcard table name -- ``events_*``?"""
+    return short_name(table).endswith(_STAR)
+
+
+def wildcard_covers(pattern: str, name: str) -> bool:
+    """Does the wildcard name ``pattern`` cover the table name ``name``?
+
+    Both are compared on their short names, because the dataset is ruled on
+    separately by ``same_table`` for the reason given further up this file.
+    """
+    prefix = short_name(pattern).upper()
+    if not prefix.endswith(_STAR):
+        return False
+    prefix = prefix[:-1]
+    other = short_name(name).upper()
+    if other.endswith(_STAR):
+        # Two wildcards. They are the same family if either prefix contains the
+        # other -- ``customer_*`` and ``customer_demographics_*`` overlap, and
+        # following both is the safe direction.
+        other = other[:-1]
+        return other.startswith(prefix) or prefix.startswith(other)
+    if other.startswith(prefix):
+        return True                      # the real shard: customer_demographics_20260101
+    # The family named the way a person says it, without the separator the
+    # wildcard was written with. Deliberately tight: it matches the whole prefix
+    # bar its trailing separator and nothing shorter, so ``ev`` never matches
+    # ``events_*``.
+    return bool(prefix) and prefix.rstrip("_-") == other
+
+
 def same_table(a: str, b: str) -> bool:
     """Are these two names the same table?
 
-    The short name always has to match. The dataset can only rule a match OUT,
-    and only when BOTH sides carry one -- these files are templated, so a great
-    many names in the repository are written with a placeholder where a dataset
-    goes, and treating "no dataset given" as "a different table" would cut every
-    one of those chains. Two placeholders that fill to the same value produce the
-    same word here, so they go on matching.
+    The short name always has to match, or one of the two has to be a wildcard
+    covering the other. The dataset can only rule a match OUT, and only when
+    BOTH sides carry one -- these files are templated, so a great many names in
+    the repository are written with a placeholder where a dataset goes, and
+    treating "no dataset given" as "a different table" would cut every one of
+    those chains. Two placeholders that fill to the same value produce the same
+    word here, so they go on matching.
     """
     if short_name(a).upper() != short_name(b).upper():
-        return False
+        if is_wildcard(a):
+            if not wildcard_covers(a, b):
+                return False
+        elif is_wildcard(b):
+            if not wildcard_covers(b, a):
+                return False
+        else:
+            return False
     left, right = dataset_of(a).upper(), dataset_of(b).upper()
     return not (left and right and left != right)
 
@@ -186,6 +252,11 @@ class Statement:
     sources: set[str]
     select: exp.Select | None
     expr: exp.Expression | None
+    # "" for an ordinary statement; otherwise the word the file used to copy a
+    # whole table -- COPY, CLONE, LIKE or RENAME. The hop is followed as a
+    # SELECT *, because that is what it does, but the screen has to say what is
+    # actually written or it is describing a statement that is not there.
+    whole_copy: str = ""
     # Worked out once and kept. One scan asks the same statement about the same
     # column many times over, and on a 600-line statement each answer means
     # walking the whole expression tree again. Measured on a repository the size
@@ -223,6 +294,10 @@ class ParsedRepo:
     _ambiguous: set = field(default_factory=set, repr=False, compare=False)
     _datasets: dict = field(default_factory=dict, repr=False, compare=False)
     _spellings: dict = field(default_factory=dict, repr=False, compare=False)
+    # Wildcard source names, e.g. CUSTOMER_DEMOGRAPHICS_*, kept apart from the
+    # main index because they can never be found by an exact lookup. Almost
+    # always empty, and skipped entirely when it is.
+    _wildcards: dict = field(default_factory=dict, repr=False, compare=False)
 
     def reading(self, table: str) -> list[Statement]:
         # Indexed rather than searched. A scan asks this once per table it
@@ -235,20 +310,71 @@ class ParsedRepo:
         # it must, because nothing has been said to tell them apart.
         self._index()
         candidates = self._by_source.get(short_name(table).upper(), [])
+        if self._wildcards or is_wildcard(table):
+            candidates = self._plus_wildcards(table, candidates)
         if not dataset_of(table):
             return candidates
         return [s for s in candidates if any(same_table(src, table) for src in s.sources)]
+
+    def _plus_wildcards(self, table: str, candidates: list[Statement]) -> list[Statement]:
+        """The same statements, plus any reached only through a wildcard name.
+
+        An exact lookup can never find these: the key in the index is
+        ``CUSTOMER_DEMOGRAPHICS_*`` and the table being followed is
+        ``customer_demographics_20260101``. Missing them is what produced a
+        clean "no impact" on every date-sharded table in the warehouse.
+        """
+        short = short_name(table).upper()
+        extra: list[Statement] = []
+        for pattern, stmts in self._wildcards.items():
+            if pattern != short and wildcard_covers(pattern, short):
+                extra.extend(stmts)
+        if is_wildcard(table):
+            # The other way round: somebody asked about the family itself, so
+            # every shard read by name in the repository is part of the answer.
+            for key, stmts in self._by_source.items():
+                if key != short and wildcard_covers(short, key):
+                    extra.extend(stmts)
+        if not extra:
+            return candidates
+        out = list(candidates)
+        seen = {id(s) for s in out}
+        for s in extra:
+            if id(s) not in seen:
+                seen.add(id(s))
+                out.append(s)
+        return out
+
+    def wildcards_covering(self, table: str) -> list[str]:
+        """Wildcard names in this repository that take in ``table``.
+
+        Used to say so on the result. A finding that only exists because a
+        wildcard was followed reads as a plain fact about one table otherwise,
+        and the person acting on it has no way to know a whole family of shards
+        is what the SQL actually named.
+        """
+        self._index()
+        short = short_name(table).upper()
+        # Given back as the SQL spells it, not as the index keys it. This goes
+        # on screen and into the text search, and neither wants shouting.
+        return sorted(sorted(self._spellings.get(p, {p}))[0]
+                      for p in self._wildcards
+                      if p != short and wildcard_covers(p, short))
 
     def _index(self) -> None:
         if self._by_source is not None and self._indexed == len(self.statements):
             return
         by_source: dict[str, list[Statement]] = {}
+        wild: dict[str, list[Statement]] = {}
         seen: dict[str, set[str]] = {}
         spelt: dict[str, set[str]] = {}
         bare: set[str] = set()
         for s in self.statements:
             for src in s.sources:
-                by_source.setdefault(short_name(src).upper(), []).append(s)
+                key = short_name(src).upper()
+                by_source.setdefault(key, []).append(s)
+                if key.endswith(_STAR):
+                    wild.setdefault(key, []).append(s)
             for name in list(s.sources) + ([s.target] if s.target else []):
                 short = short_name(name)
                 ds = dataset_of(name)
@@ -263,6 +389,7 @@ class ParsedRepo:
                 # letting a finding read as a fact about one of them.
                 spelt.setdefault(short.upper(), set()).add(short)
         self._by_source = by_source
+        self._wildcards = wild
         self._datasets = seen
         self._spellings = spelt
         # Names Ripple cannot be sure it is following one table under. Two ways:
@@ -332,6 +459,108 @@ def _target_of(stmt: exp.Expression) -> str | None:
     if isinstance(stmt, (exp.Create, exp.Insert, exp.Merge, exp.Delete, exp.Update)):
         return _table_name(stmt.this)
     return None
+
+
+# ── a table built as a whole copy of another ───────────────────────────────
+# Four shapes, every one of them ordinary in a BigQuery pipeline, and not one of
+# them has a SELECT anywhere in it::
+#
+#     CREATE OR REPLACE TABLE published.customers COPY  stage.customers
+#     CREATE TABLE            published.customers CLONE stage.customers
+#     CREATE TABLE            published.customers LIKE  stage.customers
+#     ALTER TABLE stage.customers RENAME TO published.customers
+#
+# The last step of a great many pipelines is exactly this. The table is built in
+# a staging dataset, checked, and then promoted into the published one by
+# copying or renaming it -- so the promotion is the single line that connects
+# everything upstream to the table people actually read.
+#
+# Ripple recorded no source for any of these, so the trail died at the staging
+# table and the screen said "last table in the chain -- not matched by your
+# production naming rule". That is the worst thing this tool can print: a calm,
+# confident answer over less than the whole picture, on a change that breaks a
+# published table one line further down the same folder.
+#
+# A whole-table copy carries every column and writes none of them down, which is
+# precisely what ``SELECT *`` means. So it is turned into the ``SELECT *`` it
+# already is, on the parsed copy only, and everything that knows how to follow a
+# star -- carrying the column on, marking the hop as worked out rather than
+# read, and listing the table as one whose column list cannot be seen -- works
+# on it unchanged. What is shown on screen still says COPY, because that is what
+# the file says.
+_COPY_WORD = {True: "COPY", False: "CLONE"}
+
+
+def _copy_source(stmt: exp.Expression) -> tuple[exp.Table, str] | None:
+    """The table a CREATE ... COPY/CLONE/LIKE reads, and which word was used."""
+    if not isinstance(stmt, exp.Create):
+        return None
+    clone = stmt.args.get("clone")
+    if clone is not None and isinstance(clone.this, exp.Table):
+        return clone.this, _COPY_WORD[bool(clone.args.get("copy"))]
+    props = stmt.args.get("properties")
+    for p in (props.expressions if props is not None else []):
+        if isinstance(p, exp.LikeProperty) and isinstance(p.this, exp.Table):
+            return p.this, "LIKE"
+    return None
+
+
+# CREATE SNAPSHOT TABLE published.customers CLONE stage.customers
+#
+# A snapshot is a copy like any other, but those two extra words are enough for
+# the parser to give up on the whole statement and hand back something with no
+# tables in it at all. Retried without them -- and only once the parser has
+# already failed, so it costs nothing on any statement that reads normally.
+_SNAPSHOT = re.compile(r"^\s*CREATE\s+SNAPSHOT\s+TABLE\b", re.IGNORECASE)
+
+
+def _reparse_snapshot(raw: str, dialect: str | None) -> exp.Expression | None:
+    """A CREATE SNAPSHOT TABLE read as the plain table copy it is."""
+    if not _SNAPSHOT.match(raw):
+        return None
+    try:
+        again = sqlglot.parse_one(_SNAPSHOT.sub("CREATE TABLE", raw, count=1),
+                                  read=dialect)
+    except Exception:
+        return None
+    return again if isinstance(again, exp.Create) else None
+
+
+def _renamed_to(stmt: exp.Expression) -> exp.Table | None:
+    """The new name in ``ALTER TABLE old RENAME TO new``."""
+    if not isinstance(stmt, exp.Alter):
+        return None
+    for action in stmt.args.get("actions") or []:
+        if isinstance(action, exp.RenameTable) and isinstance(action.this, exp.Table):
+            return action.this
+    return None
+
+
+def _as_whole_copy(stmt: exp.Expression) -> tuple[exp.Expression, str] | None:
+    """This statement rewritten as the ``SELECT *`` it is, and how it was written.
+
+    Returns None for everything that is not a whole-table copy, which is nearly
+    every statement, so this costs two attribute lookups on the common path.
+    """
+    found = _copy_source(stmt)
+    if found is not None:
+        source, how = found
+        target = stmt.this
+    else:
+        target = _renamed_to(stmt)
+        if target is None:
+            return None
+        source, how = stmt.this, "RENAME"
+    if not isinstance(source, exp.Table) or not isinstance(target, exp.Table):
+        return None
+    return (
+        exp.Create(
+            this=target.copy(),
+            kind="TABLE",
+            expression=exp.Select(expressions=[exp.Star()]).from_(source.copy()),
+        ),
+        how,
+    )
 
 
 def _cte_names(stmt: exp.Expression) -> set[str]:
@@ -560,9 +789,20 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
             # somebody is chasing turns up inside it, which is not known here.
             if isinstance(stmt, exp.Command):
                 raw = stmt.sql()
-                opaque.append({"line": line + 1, "text": _first_code_line(raw),
-                               "sql": raw[:8000]})
-                continue
+                again = _reparse_snapshot(raw, dialect)
+                if again is None:
+                    opaque.append({"line": line + 1, "text": _first_code_line(raw),
+                                   "sql": raw[:8000]})
+                    continue
+                stmt = again
+            # A whole-table copy or a rename has no SELECT in it at all, so the
+            # chain used to stop dead on the one line that promotes a staging
+            # table into the published one. See the note above _copy_source.
+            written = stmt.sql()
+            whole_copy = ""
+            rewritten = _as_whole_copy(stmt)
+            if rewritten is not None:
+                stmt, whole_copy = rewritten
             select = stmt.find(exp.Select)
             target = _target_of(stmt) or implied_target
             sources: set[str] = set()
@@ -597,11 +837,12 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
                     lang=f.lang,
                     line_offset=line,
                     line_end=line_end,
-                    sql=stmt.sql(),
+                    sql=written,
                     target=target,
                     sources=sources,
                     select=select,
                     expr=stmt,
+                    whole_copy=whole_copy,
                 )
             )
     if failures:

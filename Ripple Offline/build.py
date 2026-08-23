@@ -18,6 +18,7 @@ Both are read at build time. Neither exists as a second copy on disk.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -30,6 +31,10 @@ sys.path.insert(0, str(HERE))
 
 from ripple_offline import webbuild                                  # noqa: E402
 from ripple_offline.engine import SHARED_DIR, SHARED_ENGINE          # noqa: E402
+
+# The one engine, again: the stamp writer lives beside the code it stamps.
+sys.path.insert(0, str(SHARED_DIR.parent))
+from ripple.build_info import write_stamp                            # noqa: E402
 
 APP_NAME = "Ripple Offline"
 WORK = HERE / "build"
@@ -239,6 +244,15 @@ def main() -> int:
         for f in SAMPLES.glob("*.eml"):
             shutil.copyfile(f, target / f.name)
         say(f"examples   : {len(list(target.glob('*.eml')))} example emails to try it with")
+
+    # ── which build this is ────────────────────────────────────────────────
+    # Recorded here because nothing inside the packaged folder can work it out.
+    # An executable has no git, and the file dates in there are the dates the
+    # files were copied -- true, useless, and impossible to tell from a real
+    # build date. Without this the settings screen falls back to a guess, and
+    # "it does not work" goes on meaning "an old copy nobody replaced".
+    stamp = write_stamp(out)
+    say(f"stamp      : {stamp.name} - {json.loads(stamp.read_text())['commit'] or 'no commit'}")
 
     note = write_it_note(out, exe)
     say(f"for IT     : {note.name} - the page to send if the program is blocked")
