@@ -202,6 +202,14 @@ class ScanResult:
     # the statement really does read this table, but "which shard" is a question
     # the file does not answer, and the person acting on it has to know that.
     wildcard_names: list[dict] = field(default_factory=list)
+    # Published tables that are not built FROM this column, but that stop being
+    # refreshed because the statement feeding them stops running on the day of
+    # the change. A different kind of impact from the findings above, and it
+    # must never be presented as the same one.
+    stops_loading: list[dict] = field(default_factory=list)
+    # True when the walk that found them hit its own ceiling. A cap nobody is
+    # told about reads as "there were only these".
+    stops_loading_capped: bool = False
     max_hops: int = 0
     files_scanned: int = 0
     files_matched: int = 0
@@ -222,6 +230,8 @@ class ScanResult:
             "cutShort": self.cut_short,
             "mergedNames": self.merged_names,
             "wildcardNames": self.wildcard_names,
+            "stopsLoading": self.stops_loading,
+            "stopsLoadingCapped": self.stops_loading_capped,
             "maxHops": self.max_hops,
             "filesScanned": self.files_scanned,
             "filesMatched": self.files_matched,
@@ -254,6 +264,10 @@ class ScanResult:
             "tablesNotVisible": len(self.star_tables),
             "inferredFindings": len([f for f in self.findings if f.inferred_hops]),
             "trailsCutShort": len(self.cut_short),
+            # Not added to productionTables: nothing about these tables'
+            # columns changes, and one number covering two different kinds of
+            # impact is a number that means neither.
+            "productionStopsLoading": len(self.stops_loading),
         }
 
 
@@ -741,6 +755,18 @@ def trace(
                 {"file": path, "reason": "name appears, but no lineage to a production table"}
             )
 
+    # A published table that stops being REFRESHED, rather than one whose
+    # column changes. See _stops_loading -- a column used only to filter or
+    # join never reaches the table the statement builds, so the trail for it
+    # ends there, but the statement stops running and the table stops loading.
+    broken: dict[str, str] = {}
+    for f in res.findings:
+        if f.breaking and f.target_table:
+            broken.setdefault(short_name(f.target_table).upper(), f.target_table)
+    res.stops_loading, res.stops_loading_capped = _stops_loading(
+        parsed, cfg, broken,
+        {short_name(g["prod"]).upper() for g in res.groups}, show)
+
     # A statement Ripple could not understand that names a table the chain
     # actually stood on. This is the quietest hole left in the reader: the file
     # parses, the readable statements produce findings, and the one statement
@@ -757,6 +783,60 @@ def trace(
 
     res.risk = _risk_of(res)
     return res
+
+
+# How many tables the downstream walk will look at before it stops. Reached
+# only by a table half the warehouse is built from; the number exists so a
+# pathological repository cannot turn one scan into a very long one.
+MAX_DOWNSTREAM = 400
+
+
+def _stops_loading(parsed: ParsedRepo, cfg: Settings, broken: dict[str, str],
+                   already: set[str], show) -> tuple[list[dict], bool]:
+    """Published tables that stop being refreshed because a job stops running.
+
+    A column used only in a WHERE, a JOIN or a GROUP BY never reaches the table
+    the statement builds, so the trail for that COLUMN genuinely ends there --
+    and Ripple said so, and stopped. But the statement itself stops working on
+    the day the column goes, so the table it builds stops being rebuilt, and
+    everything below it is served from data that is no longer being updated.
+
+    That is a real impact on a published table, and it was invisible. It is
+    also a DIFFERENT KIND of impact from the findings above -- nothing about
+    those tables' columns changes -- so it is reported separately and in its
+    own words. Folding the two together would be worse than not reporting it.
+
+    Followed at the level of tables, not columns: which column carries onwards
+    does not matter once the job feeding them has stopped.
+    """
+    if not broken:
+        return [], False
+    out: dict[str, dict] = {}
+    seen = set(broken)
+    frontier = [(table, [show(table)]) for table in broken.values()]
+    capped = False
+    for _ in range(max(1, cfg.max_hops)):
+        if not frontier:
+            break
+        nxt: list[tuple[str, list[str]]] = []
+        for table, path in frontier:
+            for stmt in parsed.reading(table):
+                target = stmt.target
+                if not target:
+                    continue
+                key = short_name(target).upper()
+                if key in seen:
+                    continue
+                if len(seen) >= MAX_DOWNSTREAM:
+                    capped = True
+                    continue
+                seen.add(key)
+                step = path + [show(target)]
+                if cfg.is_production_table(short_name(target)) and key not in already:
+                    out[key] = {"prod": show(target), "because": path[0], "via": step}
+                nxt.append((target, step))
+        frontier = nxt
+    return sorted(out.values(), key=lambda r: r["prod"].upper()), capped
 
 
 def _opaque_on_the_trail(index: RepoIndex, parsed: ParsedRepo, visited: set[str],

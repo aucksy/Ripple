@@ -1317,6 +1317,57 @@ current table, ask usages_of for the current column, record a Finding, then
 recurse into the statement's target under EVERY name the column leaves as,
 up to cfg.max_hops, with a seen-set so a cycle cannot loop.
 
+
+A TABLE THAT STOPS BEING REFRESHED IS A SECOND KIND OF IMPACT, AND MUST BE
+REPORTED SEPARATELY.
+
+A column used only in a WHERE, a JOIN or a GROUP BY never reaches the table the
+statement builds. The trail for that COLUMN genuinely ends there, and saying so
+is right. But the STATEMENT stops working on the day the column goes, so the
+table it builds stops being rebuilt — and every published table under that one
+goes on serving whatever it held yesterday. Nothing errors on the screen of
+whoever reads it. The numbers are simply out of date, and stay out of date.
+
+So: collect the tables built by any statement with a BREAKING finding on it,
+follow those tables DOWNSTREAM at the level of tables rather than columns (which
+column carries onwards stops mattering once the job has stopped), and report the
+published ones they reach.
+
+Three rules about how it is shown, and they matter more than the walk:
+
+* It is a DIFFERENT question from "what breaks", so it gets its own heading, its
+  own words and its own count. Folding it into the production-table number makes
+  one number that means neither thing.
+* Leave out any table already reported above. Saying it twice under two headings
+  reads as two problems.
+* Cap the walk (400 tables is plenty) and SAY SO when the cap is hit. A list cut
+  short without a word reads as "there were only these".
+
+
+A WHOLE ROW CAN BE CARRIED AS ONE VALUE, AND THAT IS A STAR TOO.
+
+BigQuery lets a query pass an entire row around as a single value, and the
+standard dbt-utils `deduplicate` macro is written exactly that way:
+
+    SELECT unique_row.* FROM (
+      SELECT ARRAY_AGG(original ORDER BY loaded_at DESC LIMIT 1)[OFFSET(0)]
+               AS unique_row
+      FROM customer_demographics original
+      GROUP BY id)
+
+`original` on its own — a bare name that is the table's ALIAS rather than any
+column of it — is the whole row. So `unique_row.*` publishes every column the
+table has, which is precisely what SELECT * means, and it has to be treated the
+same way: the column is carried on, and the table built from it is listed as one
+whose column list cannot be read.
+
+Miss it and a deduplicated staging table, an ordinary thing to find in a dbt
+repository, gives a clean "no impact" with no warning of any kind.
+
+Only a BARE reference counts. `original.loaded_at` is one column, and
+`STRUCT(a, b) AS s` is two named ones; treating either as a whole row would put
+every column of the table on a chain the statement never touched.
+
 When the target is on the published list: record it as a production group AND
 KEEP GOING. One published table feeding another is exactly how a change
 spreads, and stopping at the first under-counts the number the whole tool is

@@ -984,3 +984,119 @@ def test_an_unreadable_statement_about_something_else_is_not_reported(tmp_path):
         "a.sql": "CREATE OR REPLACE TABLE staging AS SELECT cm13 FROM customer_demographics;\n"
                  "CALL ds.publish_from_elsewhere();"})
     assert out["stats"]["couldNotRead"] == 0
+
+
+# ── 17. a table that stops being refreshed ─────────────────────────────────
+# A column used only in a WHERE, a JOIN or a GROUP BY never reaches the table
+# the statement builds, so the trail for that COLUMN really does end there --
+# and Ripple said so, and stopped. But the statement stops working on the day
+# the column goes, so the table it builds stops being rebuilt, and everything
+# under it is served from data nobody is updating any more. That is an outage
+# that arrives quietly, days later, and it was invisible.
+FILTER_ONLY = {
+    "a.sql": "CREATE OR REPLACE TABLE stage_f AS "
+             "SELECT id, amount FROM customer_demographics WHERE cm13 = 'US';",
+    "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT id, amount FROM stage_f;",
+}
+
+
+def test_a_published_table_below_a_broken_statement_is_named(tmp_path):
+    out = scan(tmp_path, FILTER_ONLY)
+    assert [g["prod"] for g in out["groups"]] == [], \
+        "cm13 genuinely does not reach final_published as a column"
+    stops = out["stopsLoading"]
+    assert [r["prod"] for r in stops] == ["final_published"]
+    assert stops[0]["because"] == "stage_f"
+    assert stops[0]["via"] == ["stage_f", "final_published"]
+    assert out["stats"]["productionStopsLoading"] == 1
+
+
+def test_it_is_counted_apart_from_the_tables_whose_columns_change(tmp_path):
+    """Two different kinds of impact. One number covering both is a number that
+    means neither, so the headline count must not absorb it."""
+    out = scan(tmp_path, FILTER_ONLY)
+    assert out["stats"]["productionTables"] == 0
+    assert out["stats"]["productionStopsLoading"] == 1
+
+
+def test_it_is_followed_more_than_one_hop_down(tmp_path):
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_f AS "
+                 "SELECT id FROM customer_demographics WHERE cm13 = 'US';",
+        "b.sql": "CREATE OR REPLACE TABLE mid_t AS SELECT id FROM stage_f;",
+        "c.sql": "CREATE OR REPLACE TABLE final_published AS SELECT id FROM mid_t;"})
+    stops = out["stopsLoading"]
+    assert [r["prod"] for r in stops] == ["final_published"]
+    assert stops[0]["via"] == ["stage_f", "mid_t", "final_published"]
+
+
+def test_a_table_already_reported_above_is_not_reported_twice(tmp_path):
+    """When the column really does travel, the table is in the findings. Saying
+    it again under a different heading reads as two problems."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_s AS SELECT cm13 FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_s;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert out["stopsLoading"] == []
+
+
+def test_nothing_breaking_means_nothing_stops(tmp_path):
+    """A value change does not stop a statement running, so nothing downstream
+    stops loading. This list must not fire on every scan."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_f AS SELECT id FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT id FROM stage_f;"},
+        change="value_change")
+    assert out["stopsLoading"] == []
+
+
+# ── 18. a whole row carried as one value ───────────────────────────────────
+# BigQuery lets a query carry an entire row around as a single value, and the
+# standard dbt-utils deduplicate macro is written exactly that way. Ripple's
+# whole honesty guarantee rests on admitting when a table's column list is not
+# written down -- and that admission fired for SELECT * and for alias.* over a
+# real table, but not for this. A deduplicated staging table, an ordinary thing
+# in a dbt repository, gave a clean "no impact" with no warning at all.
+DEDUP = {
+    "a.sql": "CREATE OR REPLACE TABLE stage_dedup AS\n"
+             "SELECT unique_row.* FROM (\n"
+             "  SELECT ARRAY_AGG(original ORDER BY original.loaded_at DESC LIMIT 1)[OFFSET(0)]"
+             " AS unique_row\n"
+             "  FROM customer_demographics original\n"
+             "  GROUP BY original.id);",
+    "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_dedup;",
+}
+
+
+def test_the_dbt_deduplicate_macro_does_not_stop_the_trail(tmp_path):
+    out = scan(tmp_path, DEDUP)
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_a_whole_row_star_admits_the_column_list_is_not_visible(tmp_path):
+    """It carries every column and names none of them, which is exactly what a
+    SELECT * does -- so it has to be marked the same way, or the finding on the
+    far side reads as read rather than worked out."""
+    out = scan(tmp_path, DEDUP)
+    assert [t["table"] for t in out["starTables"]] == ["stage_dedup"]
+    assert out["stats"]["inferredFindings"] >= 1
+
+
+def test_a_qualified_star_over_a_real_table_still_only_carries_that_table(tmp_path):
+    """The guard on the change above, restated: b.* is b's columns, not a's."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_star AS "
+                 "SELECT b.* FROM customer_demographics a JOIN other_side b ON a.k = b.k;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_star;"})
+    assert out["groups"] == []
+
+
+def test_a_struct_of_named_columns_is_not_a_whole_row(tmp_path):
+    """STRUCT(other_col AS z) names its columns. Treating it as a whole row
+    would put every column of the table on the chain, including ones the
+    statement plainly never touched."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE s1 AS SELECT p.* FROM "
+                 "(SELECT STRUCT(other_col AS z) AS p FROM customer_demographics);",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM s1;"})
+    assert out["groups"] == []

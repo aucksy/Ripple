@@ -1235,24 +1235,87 @@ def _star_of(e: exp.Expression) -> exp.Star:
     return e if isinstance(e, exp.Star) else e.this
 
 
+def _whole_row_aliases(stmt: Statement) -> dict[str, list[str]]:
+    """Names that stand for a WHOLE ROW of a table, and which table that is.
+
+    BigQuery lets a query carry a whole row around as one value, and the
+    standard dbt-utils ``deduplicate`` macro is written exactly that way::
+
+        SELECT unique_row.* FROM (
+          SELECT ARRAY_AGG(original ORDER BY loaded_at DESC LIMIT 1)[OFFSET(0)]
+                   AS unique_row
+          FROM customer_demographics original
+          GROUP BY id)
+
+    ``original`` on its own -- a bare name that is the table's alias rather than
+    any column of it -- is the entire row. So ``unique_row.*`` publishes every
+    column ``customer_demographics`` has, which is precisely what SELECT * means.
+
+    Ripple's whole honesty guarantee rests on admitting when a table's column
+    list is not written down, and that admission fired for ``SELECT *`` and for
+    ``alias.*`` over a real table, but not for this. A deduplicated staging
+    table -- an ordinary thing to find in a dbt repository -- gave a clean "no
+    impact" with no warning of any kind.
+
+    Only a BARE reference counts. ``original.loaded_at`` is one column, and
+    ``STRUCT(a, b) AS s`` is two named ones; neither is a whole row.
+    """
+    if stmt.expr is None:
+        return {}
+    out: dict[str, list[str]] = {}
+    for sel in stmt.expr.find_all(exp.Select):
+        # What this SELECT's own FROM and JOINs call the tables they read.
+        here: dict[str, str] = {}
+        parts = [from_of(sel)] + list(sel.args.get("joins") or [])
+        for part in parts:
+            node = getattr(part, "this", None) if part is not None else None
+            if not isinstance(node, exp.Table):
+                continue
+            qualified = _qualify(node)
+            if not qualified:
+                continue
+            here[(node.alias or node.name or "").upper()] = qualified
+        if not here:
+            continue
+        for e in sel.expressions:
+            if not isinstance(e, exp.Alias) or not e.alias:
+                continue
+            for col in e.find_all(exp.Column):
+                if col.table or isinstance(col.this, exp.Star):
+                    continue                      # one column, or a star already
+                owner = here.get(col.name.upper())
+                if owner:
+                    bucket = out.setdefault(e.alias.upper(), [])
+                    if owner not in bucket:
+                        bucket.append(owner)
+    return out
+
+
 def _stars_over(stmt: Statement, table: str, sources: dict[str, list[str]]) -> list[exp.Star]:
     """Every ``SELECT *`` in this statement that covers `table`'s columns."""
     if stmt.expr is None:
         return []
+    rows = _whole_row_aliases(stmt)
     found: list[exp.Star] = []
     for sel in stmt.expr.find_all(exp.Select):
         reads = _direct_tables(sel)
-        if not any(same_table(t, table) for t in reads):
-            continue
+        direct = any(same_table(t, table) for t in reads)
         for e in sel.expressions:
             if isinstance(e, exp.Star):
-                found.append(e)                      # SELECT * -- everything
+                if direct:
+                    found.append(e)                  # SELECT * -- everything
             elif isinstance(e, exp.Column) and isinstance(e.this, exp.Star):
-                # a.* -- only the table that alias stands for
-                for option in sources.get((e.table or "").upper(), []):
-                    if same_table(option, table):
-                        found.append(e.this)
-                        break
+                key = (e.table or "").upper()
+                # a.* -- only the table that alias stands for.
+                if direct and any(same_table(o, table) for o in sources.get(key, [])):
+                    found.append(e.this)
+                    continue
+                # x.* where x is a whole row of the table, carried as one value.
+                # Not gated on this SELECT reading the table: it does not, the
+                # subquery under it does, and the scoping is done where the
+                # alias is worked out.
+                if any(same_table(o, table) for o in rows.get(key, [])):
+                    found.append(e.this)
     return found
 
 

@@ -1167,6 +1167,17 @@ function step4(root) {
   ].forEach(c => reach.append(statCard(c)));
   box.append(reach);
 
+  // Kept OUT of "production tables at risk" on purpose. Nothing about these
+  // tables' columns changes — the job that fills them stops running — and one
+  // number covering two different kinds of impact is a number that means
+  // neither. Shown only when there are some.
+  if (st.productionStopsLoading) {
+    const also = el('div', { className: 'stats five', style: 'margin-top:14px' });
+    also.append(statCard(['Published tables that stop refreshing', st.productionStopsLoading,
+      'var(--red)', 'Their columns do not change — their data stops']));
+    box.append(also);
+  }
+
   const uncovered = [
     ['To check by hand', st.couldNotRead, st.couldNotRead ? 'var(--amber)' : '', 'Ripple could not follow these'],
   ];
@@ -1280,6 +1291,8 @@ function step4(root) {
     card.append(p);
     groups.append(card);
   }
+
+  renderStopsLoading(groups, sc);
 
   const gapBox = x(root, 'gaps');
   gapBox.innerHTML = '';
@@ -1715,6 +1728,51 @@ function renderTrailGaps(box, sc) {
     card.append(chips);
     box.append(card);
   }
+}
+
+/* Published tables that stop being REFRESHED, rather than ones whose columns
+   change. A different question, so it gets its own words and its own place —
+   folding it into the findings above would make both of them vaguer.
+
+   Why it exists: a column used only in a WHERE, a JOIN or a GROUP BY never
+   reaches the table the statement builds, so the trail for that COLUMN really
+   does end there, and Ripple said so and stopped. But the statement itself
+   stops working on the day the column goes. The table it builds stops being
+   rebuilt, and everything under it is served from data nobody is updating any
+   more — which is an outage that arrives quietly, days later. */
+function renderStopsLoading(box, sc) {
+  const rows = sc.stopsLoading || [];
+  if (!rows.length) return;
+  const n = rows.length;
+  box.append(el('span', { className: 'lbl', style: 'display:block;margin:26px 0 2px',
+    textContent: `${n} published table${n === 1 ? '' : 's'} stop${n === 1 ? 's' : ''} being refreshed` }));
+  const card = el('div', { className: 'card pad lg', style: 'margin-top:12px;border-color:var(--redln)' });
+  card.append(el('div', { style: 'line-height:1.55' },
+    el('b', { textContent: 'Not because a column of these changes. ' }),
+    'The change stops the statement that fills them from running at all, so they '
+    + 'go on holding whatever they held yesterday. Nothing fails on the screen of '
+    + 'whoever reads them — the numbers are simply out of date, and stay out of '
+    + 'date until somebody fixes the job.'));
+  rows.forEach(r => {
+    const line = el('div', { style: 'margin-top:14px' });
+    line.append(el('div', {},
+      el('span', { className: 'badge sm red', textContent: 'PRODUCTION TABLE' }),
+      el('span', { className: 'mono', style: 'margin-left:10px;font-weight:600',
+        textContent: r.prod })));
+    line.append(el('div', { className: 'small muted', style: 'margin-top:6px;line-height:1.55' },
+      'Because ',
+      el('span', { className: 'mono', textContent: r.because }),
+      ' stops loading. The path: ',
+      el('span', { className: 'mono', textContent: (r.via || []).join(' → ') })));
+    card.append(line);
+  });
+  if (sc.stopsLoadingCapped) {
+    card.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
+      el('b', { textContent: 'This list was cut short. ' }),
+      'Ripple stopped after looking at 400 tables downstream, so there may be more '
+      + 'than these. It is saying so rather than letting the list read as complete.'));
+  }
+  box.append(card);
 }
 
 /* The honest half of the report: what Ripple could NOT account for. Styled to

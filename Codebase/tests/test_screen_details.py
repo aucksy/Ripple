@@ -59,3 +59,51 @@ def test_the_repository_screen_no_longer_calls_a_select_star_table_a_dead_end():
     assert "could not fully read" not in card
     assert "no column list written down" in card
     assert "does not stop here" in card
+
+
+# ── several contact addresses, in BOTH ways in ─────────────────────────────
+# The reply goes to whoever sent the notification, and a notification is very
+# often addressed to two or three people. One address means the other two never
+# hear that their change breaks something.
+#
+# There are two ways into the app -- typing the change by hand, and uploading
+# the email -- and the box only has to be forgotten on one of them for half the
+# recipients to be dropped without anything on screen saying so.
+def test_the_contact_box_reads_every_address_it_is_given():
+    """Commas, semicolons, "Name <addr>", newlines, and the same address twice."""
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    line = next(l for l in js.splitlines() if l.strip().startswith("const EMAIL_RE"))
+    pattern = line.split("=", 1)[1].strip().rstrip(";")
+    # The screen's own regular expression, read out of the screen's own file, so
+    # this cannot pass while the app uses a different one.
+    body = pattern[1:pattern.rfind("/")]
+    flags = pattern[pattern.rfind("/") + 1:]
+    import re
+    rx = re.compile(body.replace("\\d", "[0-9]"), re.I if "i" in flags else 0)
+
+    def addresses(text: str) -> list[str]:
+        return sorted({a.lower() for a in rx.findall(text)})
+
+    assert addresses("priya@corp.com, marcus@corp.com") == \
+        ["marcus@corp.com", "priya@corp.com"]
+    assert addresses("Priya Raman <priya@corp.com>; Marcus <marcus@corp.com>") == \
+        ["marcus@corp.com", "priya@corp.com"]
+    assert addresses("a@x.com\nb@x.com") == ["a@x.com", "b@x.com"]
+    assert addresses("one@x.com, One@X.com") == ["one@x.com"], "the same person once"
+    assert addresses("nobody here") == []
+
+
+def test_both_ways_in_collect_every_address():
+    """Manual mode and a read email must both fill pocEmails. Forgetting one of
+    them drops half the recipients with nothing on screen to show for it."""
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    assert "pocEmails: emailList(S.man.pocEmail)" in js, \
+        "manual mode must read every address typed into the contact box"
+    assert "pocEmails: emailList(out.pocEmail)" in js, \
+        "a notification that was read must keep every address it named"
+
+
+def test_the_reply_screen_uses_all_of_them():
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    assert "S.vals.pocEmails?.length ? S.vals.pocEmails" in js, \
+        "the drafted reply must be addressed to everyone, not to the first one"
