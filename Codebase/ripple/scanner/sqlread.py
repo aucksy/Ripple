@@ -23,6 +23,9 @@ from .repo import (
     written_tables,
 )
 from . import rescue
+from .dialectcompat import (
+    RENAME_NODE, from_of, merge_whens, star_except,
+)
 from .templating import (
     describe as describe_templating,
     fill_placeholders,
@@ -694,7 +697,7 @@ def _renamed_to(stmt: exp.Expression) -> exp.Table | None:
     if not isinstance(stmt, exp.Alter):
         return None
     for action in stmt.args.get("actions") or []:
-        if isinstance(action, exp.RenameTable) and isinstance(action.this, exp.Table):
+        if isinstance(action, RENAME_NODE) and isinstance(action.this, exp.Table):
             return action.this
     return None
 
@@ -1212,7 +1215,7 @@ def _direct_tables(sel: exp.Select) -> list[str]:
     subquery below it hands up, and that subquery has a star check of its own.
     """
     out: list[str] = []
-    parts = [sel.args.get("from")] + list(sel.args.get("joins") or [])
+    parts = [from_of(sel)] + list(sel.args.get("joins") or [])
     for part in parts:
         node = getattr(part, "this", None) if part is not None else None
         if isinstance(node, exp.Table):
@@ -1255,7 +1258,7 @@ def _stars_over(stmt: Statement, table: str, sources: dict[str, list[str]]) -> l
 
 def _named_in_except(star: exp.Star, column: str) -> bool:
     """``SELECT * EXCEPT(cm13)`` -- the one shape where a star drops a column."""
-    for c in star.args.get("except") or []:
+    for c in star_except(star):
         if getattr(c, "name", "").upper() == column.upper():
             return True
     return False
@@ -1478,7 +1481,7 @@ def _through_merge_columns(stmt: Statement, names: list[str]) -> list[str]:
         return value is not None and any(c.name.upper() in wanted
                                          for c in value.find_all(exp.Column))
 
-    for when in stmt.expr.args.get("expressions") or []:
+    for when in merge_whens(stmt.expr):
         then = when.args.get("then")
         if isinstance(then, exp.Update):
             for setter in then.args.get("expressions") or []:
@@ -1543,7 +1546,7 @@ def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
                 if _is_star(e):
                     passthrough = True
                     star = _star_of(e)
-                    for c in star.args.get("except") or []:
+                    for c in star_except(star):
                         dropped.add(getattr(c, "name", "").upper())
                     # RENAME(cm13 AS cm13_new) and REPLACE(UPPER(cm13) AS cm13)
                     # both change what leaves under which name, so a star is not
@@ -1655,7 +1658,7 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
         if cols:
             found.append(Usage(kind="join_key", column=column, alias=alias_for_column,
                                certain=sure))
-        for when in stmt.expr.args.get("expressions") or []:
+        for when in merge_whens(stmt.expr):
             # WHEN MATCHED AND s.cm13 = 'DEAD' THEN DELETE. The condition here
             # decides which rows of a published table get deleted or updated,
             # and it is often the only place in the whole statement the column

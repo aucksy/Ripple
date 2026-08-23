@@ -86,7 +86,7 @@ up is all in the workshop, not the product:
 Four things decide whether this is worth beginning.
 
 **1. Do Phase 0 first, and get a version number back.** Until
-`python -c "import sqlglot; print(sqlglot.__version__)"` prints `25.24.0` from
+`python -c "import sqlglot; print(sqlglot.__version__)"` prints `30.17.0` from
 inside your project folder, there is no point writing any code. Phase 0 is four
 routes in order; one of them will work.
 
@@ -207,7 +207,31 @@ no separate engine. It does not have to be *installed*. A copy of the folder sit
 next to your code is enough, and Python will find it. It also has **no dependencies
 of its own**, so there is no second thing to chase.
 
-**Pin the version: 25.24.0.** Every phase in this kit is written against how that
+
+READ THE PARSE TREE THROUGH ONE SMALL MODULE, NOT DIRECTLY. sqlglot renames the
+keys inside its own nodes between major versions, and the renames that matter
+are SILENT -- the old key just returns None, so the code carries on and finds
+nothing. Measured on the upgrade from 25.24.0 to 30.17.0:
+
+    Star.args["except"]        -> "except_"     SELECT * EXCEPT(col) stops
+                                                being noticed, so a column
+                                                dropped BY NAME is reported as
+                                                carried through
+    Merge.args["expressions"]  -> "whens"       every rename a MERGE makes
+                                                disappears, and a MERGE is how
+                                                a published table is loaded
+    Select.args["from"]        -> "from_"       the check that decides which
+                                                tables a SELECT * covers finds
+                                                nothing
+    exp.RenameTable            -> exp.AlterRename   (the only loud one)
+
+Nothing raises. Every test goes on passing and the answers go quietly wrong.
+Put those four reads behind functions in one file, and write tests that fail
+LOUDLY when a key stops resolving -- against the real parser, because the gap
+being guarded is exactly the one between what the code expects and what the
+library returns.
+
+**Pin the version: 30.17.0.** Every phase in this kit is written against how that
 version behaves. A much newer one will probably work and may quietly differ.
 
 ## The proof, for every route below
@@ -218,7 +242,7 @@ Run this **from inside `ripple-build`**, and nowhere else:
 python -c "import sqlglot; print(sqlglot.__version__)"
 ```
 
-It must print exactly `25.24.0`. Anything else — an error, a blank, a different
+It must print exactly `30.17.0`. Anything else — an error, a blank, a different
 number — means that route did not land and you move to the next one. When it
 prints, Phase 0 is done and you never think about it again.
 
@@ -252,7 +276,7 @@ phrase; it is a thing they either have or do not, and they will know immediately
 **If you get an address, run this:**
 
 ```
-python -m pip install --index-url https://YOUR-MIRROR-HERE/simple sqlglot==25.24.0
+python -m pip install --index-url https://YOUR-MIRROR-HERE/simple sqlglot==30.17.0
 ```
 
 **While you are there, one more thing worth thirty seconds.** Some networks are not
@@ -266,7 +290,7 @@ netsh winhttp show proxy
 If that names a server, try it:
 
 ```
-python -m pip install --proxy http://YOUR-PROXY:PORT sqlglot==25.24.0
+python -m pip install --proxy http://YOUR-PROXY:PORT sqlglot==30.17.0
 ```
 
 **Proof:** the command above. Run it from `ripple-build`.
@@ -286,7 +310,7 @@ people need to read code.
 **1. Open this in your browser:**
 
 ```
-https://github.com/tobymao/sqlglot/archive/refs/tags/v25.24.0.zip
+https://github.com/tobymao/sqlglot/archive/refs/tags/v30.17.0.zip
 ```
 
 If it downloads, GitHub is reachable and this route works. If it does not, go to
@@ -296,20 +320,20 @@ Route C.
 internet, which can make Python refuse to load it:
 
 ```powershell
-Unblock-File $env:USERPROFILE\Downloads\sqlglot-25.24.0.zip
+Unblock-File $env:USERPROFILE\Downloads\sqlglot-30.17.0.zip
 ```
 
 ```powershell
-Expand-Archive $env:USERPROFILE\Downloads\sqlglot-25.24.0.zip -DestinationPath $env:USERPROFILE\Downloads\sqlglot-src
+Expand-Archive $env:USERPROFILE\Downloads\sqlglot-30.17.0.zip -DestinationPath $env:USERPROFILE\Downloads\sqlglot-src
 ```
 
 **3. Take ONE folder out of it — the inner one.** The zip contains a folder called
-`sqlglot-25.24.0`, and inside that is another called `sqlglot`. **The inner one is
+`sqlglot-30.17.0`, and inside that is another called `sqlglot`. **The inner one is
 the parser**; the outer one is the project around it — tests, documentation, build
 files — and none of that is wanted. Copy the inner one into your project:
 
 ```powershell
-Copy-Item $env:USERPROFILE\Downloads\sqlglot-src\sqlglot-25.24.0\sqlglot -Destination .\ripple-build\sqlglot -Recurse
+Copy-Item $env:USERPROFILE\Downloads\sqlglot-src\sqlglot-30.17.0\sqlglot -Destination .\ripple-build\sqlglot -Recurse
 ```
 
 **4. Fix the one thing the zip is missing.** This will catch you out, so do it now
@@ -320,7 +344,7 @@ before that happens. Without it, `import sqlglot` prints a red error line and
 fix is one small file. Create `ripple-build\sqlglot\_version.py` containing exactly:
 
 ```python
-__version__ = version = '25.24.0'
+__version__ = version = '30.17.0'
 __version_tuple__ = version_tuple = (25, 24, 0)
 ```
 
@@ -339,10 +363,10 @@ tethered to a spare machine, anything outside the corporate network — fetch th
 file:
 
 ```
-python -m pip download sqlglot==25.24.0 --no-deps --dest D:\ripple-parts
+python -m pip download sqlglot==30.17.0 --no-deps --dest D:\ripple-parts
 ```
 
-That produces one file, `sqlglot-25.24.0-py3-none-any.whl`, **415 KB**. The
+That produces one file, `sqlglot-30.17.0-py3-none-any.whl`, **415 KB**. The
 `py3-none-any` in the name means it is not tied to any Python version or any kind
 of machine — the same file works on your 3.10 laptop. `--no-deps` is safe here
 because sqlglot has no dependencies.
@@ -354,13 +378,13 @@ OneDrive, Teams, emailing it to yourself. It is under half a megabyte.
 network in this command; nothing is fetched:
 
 ```
-python -m pip install --no-index --find-links=C:\ripple-parts sqlglot==25.24.0
+python -m pip install --no-index --find-links=C:\ripple-parts sqlglot==30.17.0
 ```
 
 If that is refused for permissions, add `--user`:
 
 ```
-python -m pip install --user --no-index --find-links=C:\ripple-parts sqlglot==25.24.0
+python -m pip install --user --no-index --find-links=C:\ripple-parts sqlglot==30.17.0
 ```
 
 **Proof:** the command above. This route is the one where it also works from
@@ -377,7 +401,7 @@ pip is not involved. Use it if pip refuses to install even from a local file.
 where it landed:
 
 ```
-python -m pip install sqlglot==25.24.0
+python -m pip install sqlglot==30.17.0
 ```
 
 ```
@@ -460,7 +484,7 @@ Python 3.10, and only what comes with it. No pip, no packages, no internet.
 - Tests are unittest, built in. No pytest: no fixtures, no tmp_path, no
   @parametrize, no bare assert. Use unittest.TestCase, self.assertEqual and
   friends, self.subTest for a table of cases, and tempfile for temp folders.
-- sqlglot 25.24.0 for SQL. It is already sitting in the project folder as
+- sqlglot 30.17.0 for SQL. It is already sitting in the project folder as
   plain files. Import it normally; never write code that installs it, checks
   for it, or falls back when it is missing.
 - Everything else must come from the standard library: json, sqlite3, email,
@@ -2152,7 +2176,7 @@ The first four are new in this kit — they are what proves the offline plumbing
 holds. The other twelve are the tool itself.
 
 1. **The parser is really there.** `python -c "import sqlglot; print(sqlglot.__version__)"`
-   from `ripple-build` prints `25.24.0`, with no error line above it.
+   from `ripple-build` prints `30.17.0`, with no error line above it.
 2. **The page is styled.** Colours, the navy sidebar, rounded cards. Black text on
    white means the stylesheet was served as the wrong type — Phase 8, point 4.
 3. **The progress line moves during a long scan**, counting real files. If it sits

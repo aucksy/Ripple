@@ -1,5 +1,5 @@
 # Ripple - everything it needs, and nothing else.
-sqlglot==25.24.0          # reads SQL properly, so a column can be followed through renames
+sqlglot==30.17.0         # reads SQL properly, so a column can be followed through renames
 fastapi==0.115.0          # the web service
 uvicorn==0.30.6           # runs it
 python-multipart==0.0.9   # file uploads

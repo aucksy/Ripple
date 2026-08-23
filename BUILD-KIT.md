@@ -112,7 +112,7 @@ locked door and none of them is:
 whole line.
 
 ```
-python -m pip install --user sqlglot==25.24.0 fastapi==0.115.0 uvicorn==0.30.6 pydantic==2.13.4 typing-inspection==0.4.2 python-multipart==0.0.9 extract-msg==0.48.7 httpx==0.27.2 pytest==8.3.3
+python -m pip install --user sqlglot==30.17.0 fastapi==0.115.0 uvicorn==0.30.6 pydantic==2.13.4 typing-inspection==0.4.2 python-multipart==0.0.9 extract-msg==0.48.7 httpx==0.27.2 pytest==8.3.3
 ```
 
 What each one is for, so nothing on that line is a mystery:
@@ -147,7 +147,7 @@ come down.
 python -c "import sqlglot,fastapi,uvicorn,pydantic,multipart,extract_msg,httpx,pytest;print('all set - sqlglot',sqlglot.__version__)"
 ```
 
-You want `all set - sqlglot 25.24.0`. If instead it names one thing it could not
+You want `all set - sqlglot 30.17.0`. If instead it names one thing it could not
 find, install that one on its own and run this again.
 
 ---
@@ -363,7 +363,32 @@ is a worse screen.
 STACK
 Python 3.10 or newer — assume 3.10, so put "from __future__ import annotations"
 at the top of every module. FastAPI + uvicorn + pydantic for the service, and
-sqlglot 25.24.0 for the SQL: write against how that version behaves.
+sqlglot 30.17.0 for the SQL: write against how that version behaves.
+
+READ THE PARSE TREE THROUGH ONE SMALL MODULE, NOT DIRECTLY. sqlglot renames the
+keys inside its own nodes between major versions, and the renames that matter
+are SILENT -- the old key just returns None, so the code carries on and finds
+nothing. Measured on the upgrade from 25.24.0 to 30.17.0:
+
+    Star.args["except"]        -> "except_"     SELECT * EXCEPT(col) stops
+                                                being noticed, so a column
+                                                dropped BY NAME is reported as
+                                                carried through
+    Merge.args["expressions"]  -> "whens"       every rename a MERGE makes
+                                                disappears, and a MERGE is how
+                                                a published table is loaded
+    Select.args["from"]        -> "from_"       the check that decides which
+                                                tables a SELECT * covers finds
+                                                nothing
+    exp.RenameTable            -> exp.AlterRename   (the only loud one)
+
+Nothing raises. Every test goes on passing and the answers go quietly wrong.
+Put those four reads behind functions in one file, and write tests that fail
+LOUDLY when a key stops resolving -- against the real parser, because the gap
+being guarded is exactly the one between what the code expects and what the
+library returns.
+
+
 The front end is plain HTML, CSS and JavaScript in three files — no build
 step, no framework, no npm, no CDN, no TypeScript, no inline event handlers.
 Tests with pytest.

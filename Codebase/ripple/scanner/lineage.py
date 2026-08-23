@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from sqlglot import exp
 
 from ..config import Settings, settings as default_settings
+from .dialectcompat import merge_whens
 from .repo import RepoIndex
 from .sqlread import (
     ParsedRepo,
@@ -919,7 +920,7 @@ def _tables_carrying(parsed: ParsedRepo, names: list[str]) -> tuple[dict[str, in
             # MERGE-loaded table looked like a table with no columns at all, so
             # a column name half the warehouse shares was counted as rare -- and
             # "only one table has this name" is read as a reason to relax.
-            for when in stmt.expr.args.get("expressions") or []:
+            for when in merge_whens(stmt.expr):
                 then = when.args.get("then")
                 if isinstance(then, exp.Update):
                     columns += [e.this.name for e in then.args.get("expressions") or []
