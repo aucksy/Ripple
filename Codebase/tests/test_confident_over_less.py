@@ -2321,3 +2321,110 @@ def test_a_call_to_a_procedure_that_is_not_in_the_repository_reports_nothing(tmp
                  "SELECT cm13 FROM customer_demographics;\n"
                  "CALL ds.something_defined_elsewhere();"})
     assert out["stats"]["couldNotRead"] == 0, out["unreadable"]
+
+
+# ── the guards the round-four hunt earned ──────────────────────────────────
+# Everything this round widened -- the rename fixpoint, the star vote, the CALL
+# edge, the scoped alias map, the script variable -- can only be trusted for as
+# long as it still refuses a chain that is not there.
+
+
+def test_a_long_chain_of_renames_in_one_with_is_followed_to_the_end(tmp_path):
+    """Six renames, all at one SELECT depth. The fixpoint has to walk the whole
+    way, not one step and not to its own cap."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_x AS WITH\n"
+                 " c0 AS (SELECT cm13 AS n1 FROM customer_demographics),\n"
+                 " c1 AS (SELECT n1 AS n2 FROM c0),\n"
+                 " c2 AS (SELECT n2 AS n3 FROM c1),\n"
+                 " c3 AS (SELECT n3 AS n4 FROM c2),\n"
+                 " c4 AS (SELECT n4 AS n5 FROM c3),\n"
+                 " c5 AS (SELECT n5 AS n6 FROM c4)\n"
+                 "SELECT n6 FROM c5;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT n6 FROM stage_x;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_a_rename_cycle_in_one_with_terminates(tmp_path):
+    """a becomes b becomes a. The fixpoint grows a bounded set, so this ends --
+    but it is pinned, because a hang here would look exactly like a slow scan."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_x AS WITH\n"
+                 " p AS (SELECT cm13 AS a FROM customer_demographics),\n"
+                 " q AS (SELECT a AS b FROM p),\n"
+                 " r AS (SELECT b AS a FROM q)\n"
+                 "SELECT a FROM r;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT a FROM stage_x;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_a_loop_variable_named_like_the_column_invents_nothing(tmp_path):
+    """The guard on binding script variables by name. A loop row called cm13 is
+    a row, not the column being scanned."""
+    out = scan(tmp_path, {
+        "a.sql": "FOR cm13 IN (SELECT x FROM unrelated_source) DO\n"
+                 "  INSERT INTO final_published (x) VALUES (cm13.x);\nEND FOR;\n"
+                 "CREATE OR REPLACE TABLE other_tbl AS "
+                 "SELECT cm13 FROM customer_demographics;"})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+
+
+def test_a_declared_variable_named_like_the_column_invents_nothing(tmp_path):
+    """The same guard for a scalar."""
+    out = scan(tmp_path, {
+        "a.sql": "DECLARE cm13 DATE DEFAULT (SELECT MAX(x) FROM unrelated_source);\n"
+                 "CREATE OR REPLACE TABLE final_published AS SELECT y FROM orders "
+                 "WHERE dt > cm13;"})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+
+
+def test_a_script_variable_works_wherever_it_is_written_in_the_file(tmp_path):
+    """The DECLARE below the statement that reads it. BigQuery hoists nothing,
+    but Ripple reads the file as a whole and the fence is per file, so the order
+    the two are written in must not decide whether the chain is found."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE final_published AS SELECT y FROM orders "
+                 "WHERE dt > cutoff;\n"
+                 "DECLARE cutoff DATE DEFAULT (SELECT MAX(cm13) FROM customer_demographics);"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_two_temp_tables_and_one_call_are_both_hops(tmp_path):
+    """The caller builds one temp table, the procedure builds a second out of
+    it, and the caller reads that. Both directions of the CALL edge at once."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE TEMP TABLE stg AS SELECT k, cm13 FROM customer_demographics;\n"
+                 "CALL ds.p();\n"
+                 "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stg2;",
+        "b.sql": "CREATE OR REPLACE PROCEDURE ds.p()\nBEGIN\n"
+                 "  CREATE TEMP TABLE stg2 AS SELECT k, cm13 FROM stg;\nEND;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_a_loop_body_that_writes_only_literals_carries_nothing(tmp_path):
+    """The guard on reading an INSERT's VALUES. Nothing of the column reaches
+    the table, so nothing may be reported as though it did."""
+    out = scan(tmp_path, {
+        "a.sql": "FOR rec IN (SELECT k, cm13 FROM customer_demographics) DO\n"
+                 "  INSERT INTO final_published (k, seg) VALUES (1, 'fixed');\nEND FOR;"})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+
+
+def test_a_non_sql_quoted_shell_argument_is_not_mined(tmp_path):
+    """The guard on the shell argument miner. A quoted argument that is not SQL
+    must not become a statement."""
+    _, _, parsed = build(tmp_path, {
+        "j.sh": "#!/bin/bash\npsql -c 'this is a sentence about customer_demographics "
+                "and cm13 that goes on for quite a while but is not a query'\n"})
+    assert [s.target for s in parsed.statements] == [], \
+        [s.target for s in parsed.statements]
+
+
+def test_bigquery_pipe_syntax_is_followed(tmp_path):
+    """BigQuery's newer spelling of the same query. Pinned because a dialect
+    that stops parsing is silent -- the file reads as empty, not as broken."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_x AS\nFROM customer_demographics\n"
+                 "|> SELECT k, cm13;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_x;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
