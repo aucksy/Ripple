@@ -581,6 +581,7 @@ class Statement:
     _names: dict = field(default_factory=dict, repr=False, compare=False)
     _projected: list | None = field(default=None, repr=False, compare=False)
     _sources_upper: set | None = field(default=None, repr=False, compare=False)
+    _scopes: dict | None = field(default=None, repr=False, compare=False)
 
     def reads_from(self, table: str) -> bool:
         if self._sources_upper is None:
@@ -1918,6 +1919,92 @@ def _sources_of(stmt: Statement) -> dict[str, list[str]]:
     return out
 
 
+def _binds_here(sel: exp.Expression) -> dict[str, list[str]]:
+    """The names THIS one SELECT binds in its own FROM and JOINs.
+
+    Its own, not its subqueries'. A subquery given an alias binds that alias to
+    whatever tables the subquery reads, because ``t.cm13`` written outside
+    ``(SELECT * FROM customer_demographics) t`` really is that table's column.
+    """
+    out: dict[str, list[str]] = {}
+
+    def add(key: str, value: str) -> None:
+        bucket = out.setdefault(key.upper(), [])
+        if value not in bucket:
+            bucket.append(value)
+
+    if not isinstance(sel, exp.Select):
+        return out
+    for part in [from_of(sel)] + list(sel.args.get("joins") or []):
+        node = getattr(part, "this", None) if part is not None else None
+        if isinstance(node, exp.Table):
+            for handed in _tables_handed_to_a_call(node):
+                add(short_name(handed), handed)
+                if node.alias:
+                    add(node.alias, handed)
+            qualified = _qualify(node)
+            if qualified:
+                add(node.name or short_name(qualified), qualified)
+                if node.alias:
+                    add(node.alias, qualified)
+        elif isinstance(node, exp.Subquery) and node.alias:
+            # The alias stands for every table the subquery reads. Where it
+            # reads more than one, the SQL has not said which -- and a list is
+            # how _belongs_to is told to mark it rather than pick one.
+            for inner in node.find_all(exp.Table):
+                qualified = _qualify(inner)
+                if qualified:
+                    add(node.alias, qualified)
+    return out
+
+
+def _scopes_of(stmt: Statement) -> dict[int, dict[str, list[str]]]:
+    """One binding map per SELECT in the statement, worked out once and kept."""
+    if stmt._scopes is not None:
+        return stmt._scopes
+    out: dict[int, dict[str, list[str]]] = {}
+    if stmt.expr is not None:
+        for sel in stmt.expr.find_all(exp.Select):
+            out[id(sel)] = _binds_here(sel)
+    stmt._scopes = out
+    return out
+
+
+def _resolve_qualifier(col: exp.Column, stmt: Statement,
+                       sources: dict[str, list[str]]) -> list[str]:
+    """What ``t`` means where THIS ``t.cm13`` is written.
+
+    The same alias means two different things in two scopes more often than it
+    looks, and a flat map across the whole statement gets the wrong one::
+
+        SELECT t.k, o.amount
+        FROM (SELECT * FROM customer_demographics) t
+        JOIN orders o ON o.k = t.k
+        WHERE t.cm13 = 'A'
+          AND EXISTS (SELECT 1 FROM legacy_dim t WHERE t.k = o.k)
+
+    The inner EXISTS re-binds ``t`` to ``legacy_dim``. Flat, that was the only
+    binding of ``t`` the map held -- the outer ``t`` is a subquery alias, which
+    is not a table at all -- so the breaking ``WHERE t.cm13`` was ruled out as
+    some other table's column and the scan said risk low over a change that
+    stops this statement compiling.
+
+    This walks OUT from the column to the nearest SELECT that binds the name,
+    which is what SQL itself does. The flat map stays as the fallback: it is
+    what answers for a qualifier bound somewhere this cannot see.
+    """
+    scopes = _scopes_of(stmt)
+    node = col.parent
+    while node is not None:
+        binding = scopes.get(id(node))
+        if binding:
+            options = binding.get(col.table.upper())
+            if options:
+                return options
+        node = node.parent
+    return sources.get(col.table.upper()) or []
+
+
 def _belongs_to(col: exp.Column, stmt: Statement, table: str,
                 sources: dict[str, list[str]], ctes: set[str]) -> str:
     """'yes', 'no' or 'unknown' -- is this column reference `table`'s?"""
@@ -1926,7 +2013,7 @@ def _belongs_to(col: exp.Column, stmt: Statement, table: str,
         # Unqualified. If the statement only reads one table it can only have
         # come from there. If it reads several, the SQL has not said.
         return "yes" if len(stmt.sources) <= 1 else "unknown"
-    options = sources.get(qualifier.upper())
+    options = _resolve_qualifier(col, stmt, sources)
     if not options:
         return "unknown"                 # an alias from somewhere we cannot see
     if any(short_name(o).upper() in ctes for o in options):
@@ -2218,8 +2305,21 @@ def star_excludes(stmt: Statement, column: str, table: str,
 
 # ── working out how a column is used ───────────────────────────────────────
 def _cols_named(node: exp.Expression | None, name: str) -> list[exp.Column]:
+    """Every reference to this column. A dotted name must match dotted.
+
+    A STRUCT field is carried as ``payload.code``, and that name has to be
+    matched against the QUALIFIER too. Matching it on the leaf alone would make
+    a plain column called ``code`` on an unrelated table look like the struct's
+    field -- which is the invented-column mistake the ordinary-struct guard
+    exists to stop.
+    """
     if node is None:
         return []
+    if "." in name:
+        qualifier, _, leaf = name.rpartition(".")
+        return [c for c in node.find_all(exp.Column)
+                if c.name.upper() == leaf.upper()
+                and c.table.upper() == qualifier.upper()]
     return [c for c in node.find_all(exp.Column) if c.name.upper() == name.upper()]
 
 
@@ -2242,6 +2342,61 @@ def _literal_beside(node: exp.Expression, col: exp.Column) -> str:
 # statement with hundreds of derived columns cannot turn one scan into a search
 # of the whole warehouse; it is set far above anything hand-written.
 MAX_OUTPUT_NAMES = 6
+
+
+# How many times a rename may be fed straight into another rename inside ONE
+# level before this stops looking. Sibling CTEs in a single WITH are all at the
+# same SELECT depth, so a chain of them is resolved here rather than by the
+# level loop. Set well above anything hand-written; it only has to terminate.
+MAX_CHAINED_RENAMES = 12
+
+
+def _resolve_level(names: list[str], direct_map: dict, derived_map: dict) -> list[str]:
+    """Every name these names become at one level, following renames fed by renames.
+
+    The levels handed to ``output_names`` are grouped by how deeply nested each
+    SELECT is, and the CTEs of a single WITH are all at the SAME depth even
+    though they feed each other::
+
+        WITH src     AS (SELECT k, cm13 FROM customer_demographics),
+             renamed AS (SELECT k, cm13 AS customer_code FROM src),
+             final   AS (SELECT k, customer_code AS cust_code FROM renamed)
+        SELECT * FROM final
+
+    Applying that level in one pass followed ``cm13`` to ``customer_code`` and
+    stopped, because ``customer_code -> cust_code`` was in the very same map and
+    the map was only ever read once. The table really does publish ``cust_code``,
+    so a change to ``cm13`` reached a published table under a name Ripple never
+    said, and the scan came back clean.
+
+    Which CTE feeds which is not knowable from depth, so this does not try to
+    put them in order: it runs to a fixpoint instead, which gets the same answer
+    whatever order they are written in. The set only grows and every name comes
+    from the statement, so it terminates; the counter is a backstop.
+
+    Following a rename that happens to share a name with an unrelated sibling
+    can add a name the column never really takes. That is the safe direction:
+    a spare row is visible on screen and dismissed by opening the file, while a
+    lost chain is invisible and reads as "no impact".
+    """
+    found: list[str] = []
+    frontier = list(names)
+    seen = {n.upper() for n in names}
+    for _ in range(MAX_CHAINED_RENAMES):
+        step: list[str] = []
+        for name in frontier:
+            step.extend(direct_map.get(name.upper(), ()))
+        for name in frontier:
+            step.extend(derived_map.get(name.upper(), ()))
+        step = _dedupe(step)
+        if not step:
+            break
+        found.extend(step)
+        frontier = [s for s in step if s.upper() not in seen]
+        if not frontier:
+            break
+        seen.update(s.upper() for s in frontier)
+    return _dedupe(found)
 
 
 def output_names(stmt: Statement, column: str, limit: int = MAX_OUTPUT_NAMES) -> list[str]:
@@ -2281,13 +2436,7 @@ def output_names(stmt: Statement, column: str, limit: int = MAX_OUTPUT_NAMES) ->
         return cached
     names = [column]
     for direct_map, derived_map, passthrough, dropped in _projections(stmt):
-        direct: list[str] = []
-        derived: list[str] = []
-        for name in names:
-            direct.extend(direct_map.get(name.upper(), ()))
-        for name in names:
-            derived.extend(derived_map.get(name.upper(), ()))
-        found = _dedupe(direct + derived)
+        found = _resolve_level(names, direct_map, derived_map)
         # A star carries the name through untouched -- unless the star names it
         # in an EXCEPT, which is the one shape where a star drops a column.
         # Written beside explicit columns -- SELECT *, CAST(cm13 AS STRING) AS
@@ -2559,6 +2708,55 @@ def _select_list(sel: exp.Select) -> list[exp.Expression]:
     return out or items
 
 
+# How deep a STRUCT inside a STRUCT is followed. One level covers everything
+# hand-written; the cap is only here so a generated nest cannot run away.
+MAX_STRUCT_DEPTH = 3
+
+
+def _struct_fields(node: exp.Expression, under: str,
+                   depth: int = 0) -> list[tuple[str, str]]:
+    """(column it came from, dotted name it becomes) for a STRUCT built here.
+
+    ``SELECT k, STRUCT(cm13 AS code, seg AS segment) AS payload`` builds ONE
+    column called payload, and the table really does have only that column --
+    ``SELECT code FROM ...`` downstream is an error, and saying otherwise would
+    invent columns that are not there. But ``payload.code`` IS how that field is
+    read, and following the struct only under "payload" ended the trail at the
+    wrapper. Measured before this: the chain stopped at the struct while
+    ``payload.code`` was both selected AND filtered on one hop later, and the
+    scan came back with no production table at all.
+
+    So the field is published under its DOTTED name, never its bare one. That is
+    the name the next statement actually writes, and it cannot collide with a
+    real column called ``code`` on some other table.
+
+    ``SELECT AS VALUE STRUCT`` is the other spelling and is unwrapped earlier,
+    in _select_list, because AS VALUE dissolves the wrapper outright. This one
+    keeps it, so the field name is carried ALONGSIDE the wrapper's own name
+    rather than instead of it -- a statement downstream that reads ``payload``
+    whole is still followed.
+    """
+    out: list[tuple[str, str]] = []
+    if not isinstance(node, exp.Struct) or depth >= MAX_STRUCT_DEPTH:
+        return out
+    for item in node.expressions:
+        if isinstance(item, exp.PropertyEQ):        # STRUCT(x AS name)
+            made, value = item.this.name, item.expression
+        elif isinstance(item, exp.Alias):
+            made, value = item.alias, item.this
+        elif isinstance(item, exp.Column):          # STRUCT(cm13) -- named after itself
+            made, value = item.name, item
+        else:
+            continue
+        if not made:
+            continue
+        path = f"{under}.{made}"
+        for c in value.find_all(exp.Column):
+            out.append((c.name.upper(), path))
+        out.extend(_struct_fields(value, path, depth + 1))
+    return out
+
+
 def _feeds_its_parent(sel: exp.Select) -> bool:
     """Does this SELECT hand its columns to the query around it?"""
     node = sel
@@ -2629,6 +2827,10 @@ def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
         derived: dict[str, list[str]] = {}
         dropped: set[str] = set()
         passthrough = False
+        # One vote per star, so that a column is only treated as dropped when
+        # EVERY star at this level drops it. See the note below the loop.
+        stars = 0
+        star_drops: dict[str, int] = {}
         for sel in by_depth[depth]:
             # PIVOT and UNPIVOT happen to what this SELECT reads, before its own
             # select list is applied, and they rename by rule rather than with an
@@ -2645,14 +2847,16 @@ def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
                 if _is_star(e):
                     passthrough = True
                     star = _star_of(e)
+                    stars += 1
+                    mine: set[str] = set()
                     for c in star_except(star):
-                        dropped.add(getattr(c, "name", "").upper())
+                        mine.add(getattr(c, "name", "").upper())
                     # RENAME(cm13 AS cm13_new) and REPLACE(UPPER(cm13) AS cm13)
                     # both change what leaves under which name, so a star is not
                     # always a plain pass-through.
                     for a in star.args.get("rename") or []:
                         if isinstance(a, exp.Alias) and isinstance(a.this, exp.Column):
-                            dropped.add(a.this.name.upper())
+                            mine.add(a.this.name.upper())
                             direct.setdefault(a.this.name.upper(), []).append(a.alias)
                     for a in star_replace(star):
                         if isinstance(a, exp.Alias):
@@ -2661,18 +2865,50 @@ def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
                             # that name reaches nothing past here. Exactly what
                             # EXCEPT does, plus a value put in its place -- and
                             # without this the star went on carrying it.
-                            dropped.add(a.alias.upper())
+                            mine.add(a.alias.upper())
                             for c in a.find_all(exp.Column):
                                 derived.setdefault(c.name.upper(), []).append(a.alias)
+                    for name in mine:
+                        star_drops[name] = star_drops.get(name, 0) + 1
                 elif isinstance(e, exp.Alias):
                     inner = e.this
                     if isinstance(inner, exp.Column):
                         direct.setdefault(inner.name.upper(), []).append(e.alias)
+                        # ``payload.code AS customer_code`` also has to answer
+                        # to the dotted name, because that is what a STRUCT
+                        # field is carried under. See _struct_fields.
+                        if inner.table:
+                            direct.setdefault(
+                                f"{inner.table}.{inner.name}".upper(), []
+                            ).append(e.alias)
                     else:
+                        # STRUCT(cm13 AS code) AS payload publishes payload.code,
+                        # and the next table reads it as payload.code -- whose
+                        # column name is "code". Following only "payload" ended
+                        # the trail at the struct. See _struct_fields.
+                        for came_from, made in _struct_fields(inner, e.alias):
+                            derived.setdefault(came_from, []).append(made)
                         for c in e.find_all(exp.Column):
                             derived.setdefault(c.name.upper(), []).append(e.alias)
                 elif isinstance(e, exp.Column):
                     direct.setdefault(e.name.upper(), []).append(e.name)
+        # A star only drops a column when EVERY star at this level drops it.
+        # The CTEs of one WITH are all at the same depth and usually read
+        # DIFFERENT tables::
+        #
+        #     WITH cust AS (SELECT * FROM customer_demographics),
+        #          hits AS (SELECT * EXCEPT (cm13) FROM web_events)
+        #     SELECT cust.*, hits.url FROM cust JOIN hits USING (k)
+        #
+        # That EXCEPT belongs to ``hits``, which never reads the scanned table
+        # at all. Applied to the whole level it deleted the column arriving
+        # through ``cust.*``, the trail died inside the statement, and a change
+        # that really does break the published table came back "no impact".
+        # Which star a column flows through is not knowable from the select
+        # list alone, so this keeps it whenever any star could still carry it --
+        # a spare row rather than a lost chain.
+        if stars:
+            dropped |= {n for n, votes in star_drops.items() if votes == stars}
         out.append((direct, derived, passthrough, dropped))
     stmt._projected = out
     return out

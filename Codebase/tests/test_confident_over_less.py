@@ -1735,3 +1735,235 @@ def test_dataform_pre_operations_are_read_as_the_sql_they_are(tmp_path):
     assert "d.staging_published" in targets, targets
     assert "mid" in targets, "the model itself is still named after its file"
     assert parsed.unreadable == [], parsed.unreadable
+
+
+# ── Sibling CTEs: one WITH, one SELECT depth, several different tables ─────
+# Every CTE of a single WITH sits at the same SELECT depth, and the projection
+# map was built one bucket per depth. So the CTEs of one WITH were merged into
+# a single map and applied in a single pass. Two separate clean wrong answers
+# came out of that, and both of these ran before either was fixed.
+
+
+def test_a_sibling_ctes_except_does_not_delete_an_unrelated_star(tmp_path):
+    """``hits`` drops cm13 and never reads the scanned table at all. The column
+    arrives through ``cust.*`` from a different table, so it really is in
+    stage_p and the published table really does break.
+
+    Before: risk low, groups [] -- the EXCEPT was applied to the whole level."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_p AS\n"
+                 "WITH cust AS (SELECT * FROM customer_demographics),\n"
+                 "     hits AS (SELECT * EXCEPT (cm13) FROM web_events)\n"
+                 "SELECT cust.*, hits.url FROM cust JOIN hits USING (k);",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cm13 FROM stage_p WHERE cm13 IS NOT NULL;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert out["risk"] != "none"
+
+
+def test_the_only_star_dropping_a_column_still_stops_the_trail(tmp_path):
+    """The guard on the test above. Where nothing else could be carrying the
+    column, EXCEPT still ends the chain -- that is a shipped behaviour and the
+    reason the rule is unanimity among stars rather than ignoring EXCEPT."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_q AS "
+                 "SELECT * EXCEPT (cm13) FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cm13 FROM stage_q WHERE cm13 IS NOT NULL;"})
+    assert [g["prod"] for g in out["groups"]] == []
+
+
+def test_every_star_dropping_a_column_still_stops_the_trail(tmp_path):
+    """Two stars, both dropping it. Unanimous, so it is dropped."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_u AS\n"
+                 "WITH one AS (SELECT * EXCEPT (cm13) FROM customer_demographics),\n"
+                 "     two AS (SELECT * EXCEPT (cm13) FROM customer_demographics)\n"
+                 "SELECT one.*, two.k AS k2 FROM one JOIN two USING (k);",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cm13 FROM stage_u WHERE cm13 IS NOT NULL;"})
+    assert [g["prod"] for g in out["groups"]] == []
+
+
+def test_a_rename_fed_by_a_rename_in_the_same_with_is_followed(tmp_path):
+    """Three CTEs in a row, each renaming what the last one made. The level was
+    read once, so cm13 became customer_code and stopped -- and the published
+    table reads cust_code, a name Ripple never said out loud.
+
+    Before: risk medium, groups [], recorded alias 'cm13'."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_c AS\n"
+                 "WITH src AS (SELECT k, cm13 FROM customer_demographics),\n"
+                 "     renamed AS (SELECT k, cm13 AS customer_code FROM src),\n"
+                 "     final AS (SELECT k, customer_code AS cust_code FROM renamed)\n"
+                 "SELECT * FROM final;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cust_code FROM stage_c WHERE cust_code IS NOT NULL;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_a_chain_of_renames_keeps_the_untouched_name_first(tmp_path):
+    """The name shown on screen is still the one carried through unchanged, not
+    whichever the fixpoint happened to reach last."""
+    _, _, parsed = build(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_c AS\n"
+                 "WITH src AS (SELECT k, cm13 FROM customer_demographics),\n"
+                 "     renamed AS (SELECT k, cm13 AS customer_code FROM src)\n"
+                 "SELECT * FROM renamed;"})
+    from ripple.scanner.sqlread import output_names
+    stmt = [s for s in parsed.statements if s.target == "stage_c"][0]
+    names = output_names(stmt, "cm13")
+    assert names[0].lower() == "cm13", names
+    assert "customer_code" in names, names
+
+
+# ── One alias, two scopes ──────────────────────────────────────────────────
+# The alias map was flat across a whole statement, so an alias re-bound inside
+# an EXISTS decided what the same letter meant in the outer WHERE.
+
+
+def test_an_alias_rebound_inside_exists_does_not_steal_the_outer_filter(tmp_path):
+    """``t`` is a subquery outside and legacy_dim inside. The breaking
+    ``WHERE t.cm13`` belongs to the subquery, which reads the scanned table.
+
+    Before: risk low, breaking false -- Ripple reached final_published through
+    the star but said nothing failed, over a change that stops this statement
+    compiling."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE final_published AS\n"
+                 "SELECT t.k, o.amount\n"
+                 "FROM (SELECT * FROM customer_demographics) t\n"
+                 "JOIN orders o ON o.k = t.k\n"
+                 "WHERE t.cm13 = 'A'\n"
+                 "  AND EXISTS (SELECT 1 FROM legacy_dim t WHERE t.k = o.k);"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert out["stats"]["breakingUsages"] == 1, out["stats"]
+    assert out["risk"] != "low"
+
+
+def test_a_column_that_really_is_another_tables_is_still_ruled_out(tmp_path):
+    """The guard. Scoping the alias map must not make every qualifier
+    'unknown' -- a name plainly attributed to another table is still not this
+    table's, which is what keeps join keys off every finding in the warehouse."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE final_published AS\n"
+                 "SELECT o.k FROM orders o\n"
+                 "JOIN legacy_dim d ON d.k = o.k\n"
+                 "WHERE d.cm13 = 'A';"})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+
+
+def test_a_subquery_alias_carries_the_table_it_reads(tmp_path):
+    """The half of the fix that is not about shadowing: a subquery alias was
+    bound to nothing at all, so every ``t.col`` on one was 'an alias from
+    somewhere we cannot see'."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE final_published AS\n"
+                 "SELECT t.k FROM (SELECT * FROM customer_demographics) t\n"
+                 "WHERE t.cm13 = 'A';"})
+    assert out["stats"]["breakingUsages"] == 1, out["stats"]
+
+
+# ── A STRUCT built here and unpacked by field one hop later ────────────────
+
+
+def test_a_struct_field_read_downstream_keeps_the_trail(tmp_path):
+    """The table has one column, payload. The next statement reads
+    payload.code -- both in its select list and in its WHERE -- so a change to
+    cm13 breaks the published table.
+
+    Before: risk medium, groups [], trail ended at the struct."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_r AS\n"
+                 "SELECT k, STRUCT(cm13 AS code, seg AS segment) AS payload\n"
+                 "FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS\n"
+                 "SELECT k, payload.code AS customer_code FROM stage_r\n"
+                 "WHERE payload.code IS NOT NULL;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_a_struct_field_is_not_published_under_its_bare_name(tmp_path):
+    """The guard, and the reason the field is carried dotted. stage_s has no
+    column called code, so a bare 'code' downstream is a different column on a
+    different table and inventing that link would be worse than losing it."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_s AS\n"
+                 "SELECT k, STRUCT(cm13 AS code) AS payload\n"
+                 "FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT k, code FROM stage_s;"})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+
+
+def test_a_struct_read_whole_downstream_is_still_followed(tmp_path):
+    """The wrapper's own name is carried alongside the field names, not
+    replaced by them."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_w AS\n"
+                 "SELECT k, STRUCT(cm13 AS code) AS payload\n"
+                 "FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT k, payload FROM stage_w;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+# -- Airflow's own config shape, and bq's own command line ------------------
+# Only ONE way of writing a BigQuery destination ever reached the published
+# table: quoted AND dot-separated. Every other spelling of the very same
+# destination gave "the name appears, but no lineage to a production table".
+
+
+def test_an_airflow_nested_config_dict_names_its_destination(tmp_path):
+    """BigQueryInsertJobOperator hands BigQuery its API shape: camelCase, and
+    the name split across projectId, datasetId and tableId."""
+    out = scan(tmp_path, {"dags/load.py": '''
+job = BigQueryInsertJobOperator(
+    task_id="load_final",
+    configuration={
+        "query": {
+            "query": "SELECT id, cm13 FROM customer_demographics",
+            "destinationTable": {"projectId": "prj", "datasetId": "marts",
+                                 "tableId": "final_published"},
+            "writeDisposition": "WRITE_TRUNCATE",
+        }
+    },
+)
+'''})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_a_source_table_in_the_same_config_is_not_read_as_a_write(tmp_path):
+    """The guard. tableId also appears under sourceTable, and reading that
+    would turn a READ into a write and invent a chain nobody wrote."""
+    out = scan(tmp_path, {"dags/copy.py": '''
+job = BigQueryToBigQueryOperator(
+    task_id="copy",
+    configuration={"copy": {
+        "sourceTable": {"projectId": "prj", "datasetId": "raw",
+                        "tableId": "final_published"},
+    }},
+)
+sql = "SELECT id, cm13 FROM customer_demographics"
+'''})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+
+
+def test_the_bq_command_line_colon_separator_is_read(tmp_path):
+    """bq's OWN separator between project and dataset is a colon, and a shell
+    command quotes nothing."""
+    out = scan(tmp_path, {"load.sh": """#!/bin/bash
+bq query --destination_table=prj:marts.final_published --use_legacy_sql=false \
+  'SELECT id, cm13 FROM customer_demographics'
+"""})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_an_unquoted_destination_that_is_not_a_name_invents_nothing(tmp_path):
+    """The guard on reading unquoted values at all. A qualified name is
+    required, so destination_table=None does not become a published table."""
+    out = scan(tmp_path, {"dags/none.py": '''
+run(destination_table=None, sql="SELECT id, cm13 FROM customer_demographics")
+run(destination_table=chosen_target, sql="SELECT id FROM customer_demographics")
+'''})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+    assert "None" not in str(out["groups"]) and "None" not in str(out["reached"])

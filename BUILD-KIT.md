@@ -857,11 +857,33 @@ Also in this file:
                                   saveAsTable / insertInto /
                                   createOrReplaceTempView / registerTempTable,
                                   and from destination= / destination_table= /
-                                  to_gbq(. Take the last dot-separated part.
-                                  Spark and BigQuery jobs run a bare SELECT
-                                  and name the destination in the program, not
-                                  the SQL, so without this the chain stops
-                                  exactly where the interesting renames are.
+                                  to_gbq(. Take the last part after a dot OR
+                                  a colon. Spark and BigQuery jobs run a bare
+                                  SELECT and name the destination in the
+                                  program, not the SQL, so without this the
+                                  chain stops exactly where the interesting
+                                  renames are. Three more spellings of the
+                                  SAME destination, all of which used to give
+                                  "no lineage to a production table":
+                                  * a quoted value carrying a COLON --
+                                    'prj:marts.final_published'. bq's own
+                                    separator between project and dataset is a
+                                    colon, so the character class needs one.
+                                  * Airflow's BigQueryInsertJobOperator, which
+                                    hands over BigQuery's API shape instead:
+                                    "destinationTable": {"projectId": ...,
+                                    "datasetId": ..., "tableId": "final_..."}.
+                                    Anchor on destinationTable and stop at the
+                                    closing brace -- a bare tableId also sits
+                                    under sourceTable, and reading that turns
+                                    a READ into a write and invents a chain.
+                                  * the bq command line itself, where nothing
+                                    is quoted at all:
+                                    --destination_table=prj:marts.final_pub.
+                                    Require the unquoted name to be QUALIFIED,
+                                    one dot or one colon in it, or
+                                    destination_table=None becomes a published
+                                    table called None.
   looks_like_unread_sql(f, blocks)  SQL is plainly written in this file and
                                   none could be extracted — the shape where a
                                   statement is built by adding short strings
@@ -1536,6 +1558,79 @@ none, unreadable 0, couldNotRead 0. Identical with .format().
   everywhere the screen would otherwise say the file writes SELECT *. It does
   not, and a row that claims it does sends somebody to a line where no such
   statement is written.
+
+THE CTEs OF ONE WITH ARE ALL AT THE SAME DEPTH, AND THEY FEED EACH OTHER. That
+is two separate clean wrong answers, and both come from grouping a statement's
+SELECTs by nesting depth and then reading each group ONCE.
+  A rename fed by a rename in the same WITH is lost:
+    WITH src     AS (SELECT k, cm13 FROM customer_demographics),
+         renamed AS (SELECT k, cm13 AS customer_code FROM src),
+         final   AS (SELECT k, customer_code AS cust_code FROM renamed)
+    SELECT * FROM final
+  All three are at one depth, so the map holds cm13 -> customer_code AND
+  customer_code -> cust_code, and reading it once applied only the first.
+  Measured: the trail stopped at customer_code, while the published table reads
+  cust_code — a name Ripple never said out loud — and the scan came back clean.
+  Which CTE feeds which is not knowable from depth. Do NOT try to put them in
+  order: run the level to a FIXPOINT instead, which gets the same answer
+  whatever order they are written in. The set only grows and every name comes
+  out of the statement, so it terminates; keep a counter as a backstop. Keep the
+  name carried through UNCHANGED first, so it survives the six-name cap and is
+  still what the screen shows.
+
+A SIBLING'S EXCEPT MUST NOT DELETE A COLUMN ANOTHER STAR IS CARRYING. Same
+cause, opposite harm:
+    CREATE OR REPLACE TABLE stage_p AS
+    WITH cust AS (SELECT * FROM customer_demographics),
+         hits AS (SELECT * EXCEPT (cm13) FROM web_events)
+    SELECT cust.*, hits.url FROM cust JOIN hits USING (k)
+  That EXCEPT belongs to hits, which never reads the scanned table at all.
+  Applied to the whole level it deleted the column arriving through cust.*, the
+  trail died INSIDE the statement, and a change that really does break the
+  published table came back risk none. Give every star ONE VOTE and drop a
+  column only when EVERY star at that level drops it. Which star a column flows
+  through cannot be told from the select list, so this keeps it whenever any
+  star could still be carrying it — a spare row rather than a lost chain. The
+  single-star case is unchanged, and SELECT * EXCEPT on its own still stops the
+  trail and still says so.
+
+ONE ALIAS CAN MEAN TWO THINGS IN ONE STATEMENT. Build the alias map PER SCOPE,
+never flat across the whole statement.
+    CREATE OR REPLACE TABLE final_published AS
+    SELECT t.k, o.amount
+    FROM (SELECT * FROM customer_demographics) t
+    JOIN orders o ON o.k = t.k
+    WHERE t.cm13 = 'A'
+      AND EXISTS (SELECT 1 FROM legacy_dim t WHERE t.k = o.k)
+  The inner EXISTS re-binds t to legacy_dim. Flat, that was the ONLY binding of
+  t the map held — the outer t is a subquery alias, which is not a table at all
+  and so was never recorded — so the breaking WHERE t.cm13 was ruled out as some
+  other table's column. Measured: risk low, breaking false, over a change that
+  stops this statement compiling and stops the published table loading.
+  Two halves to the fix, and both are needed. Bind a SUBQUERY's alias to every
+  table that subquery reads — a list, because where it reads more than one the
+  SQL has not said which. And resolve a qualifier by walking OUT from the column
+  to the nearest SELECT that binds that name, which is what SQL itself does.
+  Keep the flat map as the FALLBACK: it is what answers for a qualifier bound
+  somewhere you cannot see, and it must still answer "unknown" there rather than
+  ruling the usage out.
+
+A STRUCT IS ONE COLUMN, AND ITS FIELDS ARE STILL READ BY NAME.
+    SELECT k, STRUCT(cm13 AS code, seg AS segment) AS payload FROM ...
+  The table really does have one column, payload, so publishing "code" as a
+  column of it would invent a column that is not there — SELECT code FROM that
+  table is an error. But payload.code IS how the field is read, and following
+  the struct only under "payload" ended the trail at the wrapper. Measured: the
+  chain stopped at the struct while payload.code was both selected AND filtered
+  on one hop later, and the scan reported no production table at all.
+  Publish each field under its DOTTED name and never its bare one. Carry it
+  ALONGSIDE the wrapper's own name, not instead of it, so a statement that reads
+  payload whole is still followed. Match a dotted name against the QUALIFIER too
+  — matching on the leaf alone is exactly the invented-column mistake above —
+  and register an aliased qualified reference (payload.code AS customer_code)
+  under its dotted name as well as its bare one. SELECT AS VALUE STRUCT is the
+  other spelling and is different: AS VALUE dissolves the wrapper outright, so
+  there the fields ARE the columns and are published bare.
 
 A SELECT WRITTEN AS A VALUE IS NOT A SOURCE OF ROWS. When you group a
 statement's SELECTs by nesting depth to work out what each column leaves as,

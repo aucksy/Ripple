@@ -649,8 +649,39 @@ _WRITE_TARGET = re.compile(
 # this the chain stops at the job, exactly as it would for Spark. Project ids
 # may contain hyphens, hence the wider character set.
 _BQ_WRITE_TARGET = re.compile(
-    r"""(?:destination(?:_table)?\s*=\s*["']([A-Za-z0-9_.\-]+)["']"""
+    r"""(?:destination(?:_table)?\s*=\s*["']([A-Za-z0-9_.:\-]+)["']"""
     r"""|to_gbq\s*\(\s*["']([A-Za-z0-9_.\-]+)["'])""",
+    re.IGNORECASE,
+)
+
+# Airflow's BigQueryInsertJobOperator does not write the name at all. It hands
+# BigQuery its own API shape -- a NESTED dict, camelCase, the name split across
+# three keys::
+#
+#     "destinationTable": {"projectId": "prj", "datasetId": "marts",
+#                          "tableId": "final_published"}
+#
+# Measured before this: groups [], "the name appears, but no lineage to a
+# production table", over a DAG that really does load the published table.
+#
+# Anchored on destinationTable and stopped at the closing brace on purpose. A
+# bare "tableId" also appears under sourceTable and sourceUris, and reading
+# those would turn a READ into a write and invent a chain that is not there.
+_BQ_JSON_TARGET = re.compile(
+    r"""["']destinationTable["']\s*:\s*\{[^}]*?["']tableId["']\s*:\s*["']([A-Za-z0-9_\-]+)["']""",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Straight off the bq command line, where BigQuery's OWN separator between the
+# project and the dataset is a COLON and the value carries no quotes at all::
+#
+#     bq query --destination_table=prj:marts.final_published --use_legacy_sql=false ...
+#
+# The name must be QUALIFIED -- one dot or one colon in it -- because unquoted
+# means anything at all otherwise, and destination_table=None would have become
+# a published table called None.
+_BQ_CLI_TARGET = re.compile(
+    r"""destination(?:_table)?=([A-Za-z0-9_\-]+[.:][A-Za-z0-9_.:\-]+)""",
     re.IGNORECASE,
 )
 
@@ -660,11 +691,13 @@ def written_tables(f: SourceFile) -> list[str]:
     if f.abs_path.suffix.lower() not in EMBEDDED_SQL_EXTS:
         return []
     hits: list[tuple[int, str]] = []
-    for pat in (_WRITE_TARGET, _BQ_WRITE_TARGET):
+    for pat in (_WRITE_TARGET, _BQ_WRITE_TARGET, _BQ_JSON_TARGET, _BQ_CLI_TARGET):
         for m in pat.finditer(f.text):
             raw = next((g for g in m.groups() if g), "")
             if raw:
-                hits.append((m.start(), raw.split(".")[-1]))
+                # project:dataset.table and project.dataset.table both end in
+                # the table, whichever separator the writer used.
+                hits.append((m.start(), raw.split(".")[-1].split(":")[-1]))
     out: list[str] = []
     for _, name in sorted(hits):          # order they appear in the file
         if name not in out:
