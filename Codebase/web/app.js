@@ -1971,6 +1971,28 @@ function renderTrailGaps(box, sc) {
     box.append(card);
   }
 
+  // 4c. File types Ripple does not open at all. The repository screen has always
+  //     listed these; the ANSWER never did. Measured: the middle hop of a chain
+  //     sat in a .ipynb, and the scan printed "the name appears, but no lineage
+  //     to a production table" with nothing beside it saying a file had been
+  //     passed over. A caveat may never live on a different screen from the
+  //     answer it qualifies.
+  if (sc.fileTypesUnopened?.length) {
+    const total = sc.fileTypesUnopened.reduce((n, t) => n + t.count, 0);
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px;border-color:var(--amberln)' });
+    card.append(el('b', { style: 'display:block;font-size:14px', textContent:
+      `${total} file${total === 1 ? '' : 's'} ${total === 1 ? 'is' : 'are'} of a type Ripple does not open` }));
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      'Ripple opens SQL, and the file types that normally hold SQL. It did not look inside these '
+      + `at all, so if the chain passes through one of them this answer stops there and does not `
+      + 'say so anywhere else. Notebooks and Terraform files are the usual ones to check.' }));
+    const chips = el('div', { className: 'chips', style: 'margin-top:12px' });
+    sc.fileTypesUnopened.slice(0, 40).forEach(t => chips.append(
+      el('span', { className: 'chip mono', textContent: `${t.ext || 'no extension'} — ${t.count}` })));
+    card.append(chips);
+    box.append(card);
+  }
+
   // 5. The file builds a table but never writes its name. A dbt model is a bare
   //    SELECT — dbt names the table after the file when it runs it. Ripple
   //    follows the same rule, because without it a dbt repository produced no

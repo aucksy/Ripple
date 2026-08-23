@@ -25,6 +25,75 @@ EMBEDDED_SQL_EXTS = {".py", ".scala", ".java", ".sh"}
 # under config files nobody wrote SQL in is how a real miss stops being seen.
 MARKUP_SQL_EXTS = {".yaml", ".yml", ".xml"}
 
+# File types that plainly do not hold pipeline SQL. Every OTHER type Ripple does
+# not open is carried onto the scan answer as a gap, because an extension nobody
+# thought of -- .ipynb, .tf, .j2, or no extension at all -- is exactly how the
+# middle hop of a chain goes missing without a word being said about it.
+#
+# The list is written this way round on purpose. A new file type Ripple has
+# never seen counts as a gap by default; only what is KNOWN to be prose, an
+# image, packed data or a binary is passed over in silence. The opposite way
+# round, every unheard-of extension would be silently harmless, which is the
+# failure this exists to stop.
+#
+# The repository screen still lists EVERY skipped extension, this one included.
+# What this decides is only whether the ANSWER carries the warning -- and a
+# warning printed over every scan, because every repository has a README, is one
+# nobody reads.
+NOT_CODE_EXTS = frozenset({
+    # prose and documents
+    ".md", ".markdown", ".rst", ".txt", ".adoc", ".pdf", ".doc", ".docx", ".odt",
+    ".rtf", ".tex",
+    # images
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".bmp", ".tif",
+    ".tiff", ".psd",
+    # styling, fonts and browser build output
+    ".css", ".scss", ".sass", ".less", ".woff", ".woff2", ".ttf", ".eot",
+    ".otf", ".map",
+    # packed data -- rows, not the code that makes them
+    ".csv", ".tsv", ".parquet", ".avro", ".orc", ".xlsx", ".xls", ".pb",
+    # archives and binaries
+    ".zip", ".gz", ".tgz", ".tar", ".bz2", ".xz", ".7z", ".rar", ".jar", ".war",
+    ".whl", ".egg", ".so", ".dll", ".dylib", ".exe", ".bin", ".pyc", ".pyo",
+    ".class", ".o", ".a", ".lib", ".pdb",
+    # media
+    ".mp3", ".mp4", ".mov", ".avi", ".wav", ".webm", ".flac", ".ogg",
+    # locks, logs and housekeeping
+    ".lock", ".log", ".bak", ".swp", ".ds_store",
+})
+
+
+# A query kept as a template is named for what it IS and then for how it is
+# filled in: load_final.sql.j2. Python calls that file's suffix ".j2", so it was
+# never opened -- and the "runs the SQL in X, which is not in this repository"
+# warning could not fire either, because that only matches names ending ".sql".
+# A double miss, which is exactly what made it silent: no file read, no gap
+# reported, and a published table that traced back to nothing.
+#
+# Only these outer suffixes count, and only over an inner SQL one. Reading
+# anything at all past a .sql would take load_final.sql.bak with it, and a
+# backup file read as a live one turns into "this table is built in two files".
+TEMPLATE_SUFFIXES = frozenset({
+    ".j2", ".jinja", ".jinja2", ".tmpl", ".template", ".tpl",
+    ".mustache", ".hbs", ".erb",
+})
+_TEMPLATABLE = frozenset({".sql", ".sqlx", ".ddl", ".hql"})
+
+
+def effective_ext(path) -> str:
+    """The extension that decides how this file is read. See TEMPLATE_SUFFIXES."""
+    suffixes = [s.lower() for s in path.suffixes]
+    if (len(suffixes) >= 2 and suffixes[-1] in TEMPLATE_SUFFIXES
+            and suffixes[-2] in _TEMPLATABLE):
+        return suffixes[-2]
+    return path.suffix.lower()
+
+
+def unopened_code_types(unknown_ext: dict) -> dict:
+    """The unopened file types that could plausibly hold SQL. See NOT_CODE_EXTS."""
+    return {ext: n for ext, n in unknown_ext.items()
+            if ext.lower() not in NOT_CODE_EXTS}
+
 # ── files that are not really on this machine ──────────────────────────────
 # OneDrive's Files On-Demand leaves a file in the folder listing, with its real
 # name and its real size, when the contents are still in the cloud. It looks
@@ -231,7 +300,7 @@ class RepoIndex:
             # called build, dist, target or venv has every one of its files
             # skipped, and the scan comes back clean because it read nothing.
             relative = p.relative_to(walk)
-            ext = p.suffix.lower()
+            ext = effective_ext(p)
             hit = next((part for part in relative.parts if part in cfg.skip_dirs), "")
             if hit:
                 # Only worth mentioning when it is a file Ripple would otherwise
@@ -541,6 +610,50 @@ def _heredoc_blocks(text: str) -> list[tuple[str, int]]:
     return out
 
 
+# The OTHER way a shell script hands a query to a command: as one quoted
+# argument, written across several lines. A shell leaves a single-quoted string
+# completely alone, so this is every bit as ordinary as a heredoc::
+#
+#     bq query --use_legacy_sql=false 'CREATE OR REPLACE TABLE final_published AS
+#     SELECT id, cm13 FROM customer_demographics'
+#
+# The string miner every other language uses refuses a newline inside a quoted
+# value -- it has to, or one stray apostrophe in a Python comment swallows the
+# rest of the file -- so this shape was mined by nothing. Measured, beside a
+# heredoc in the same file: the heredoc was read and this was not, and the file
+# reported one gap rather than naming which of the two was missed.
+#
+# Anchored on a command that RUNS SQL rather than on the quote, for exactly the
+# apostrophe reason above. Starting from ``bq query`` and reading to the closing
+# quote cannot be set off by "don't" in a comment.
+_RUNS_SQL_CMD = re.compile(
+    r"\b(?:bq\s+query|psql|mysql|hive\s+-e|impala-shell|spark-sql|snowsql|"
+    r"sqlcmd|clickhouse-client|beeline|athena)\b[^\n'\"]*",
+    re.IGNORECASE,
+)
+
+
+def _shell_argument_blocks(text: str) -> list[tuple[str, int]]:
+    """SQL handed to a shell command as one quoted argument. See _RUNS_SQL_CMD."""
+    out: list[tuple[str, int]] = []
+    for m in _RUNS_SQL_CMD.finditer(text):
+        i = m.end()
+        # Skip the flags between the command and its query, which may run over
+        # a backslash-continued line before the quote opens.
+        while i < len(text) and text[i] in " \t\\\n":
+            i += 1
+        if i >= len(text) or text[i] not in "'\"":
+            continue
+        quote = text[i]
+        close = text.find(quote, i + 1)
+        if close == -1:
+            continue
+        body = text[i + 1:close]
+        if _LOOKS_SQL.search(body):
+            out.append((body, text[: i + 1].count("\n")))
+    return out
+
+
 # A file whose FIRST line of code is a SQL keyword really is SQL, whatever it is
 # called. Rare, but a .xml holding nothing but a CREATE would otherwise be read
 # as markup with no SQL in it and silently produce nothing.
@@ -553,7 +666,7 @@ _OPENS_WITH_SQL = re.compile(
 
 def extract_markup_sql(f: SourceFile) -> list[tuple[str, int]]:
     """SQL taken out of a YAML or XML file, with the line each block starts on."""
-    ext = f.abs_path.suffix.lower()
+    ext = effective_ext(f.abs_path)
     blocks = _xml_blocks(f.text) if ext == ".xml" else _yaml_blocks(f.text)
     if blocks:
         return blocks
@@ -564,13 +677,18 @@ def extract_markup_sql(f: SourceFile) -> list[tuple[str, int]]:
 
 def statements_for(f: SourceFile) -> list[tuple[str, int]]:
     """SQL statements in a file, with the line each one starts on."""
-    ext = f.abs_path.suffix.lower()
+    ext = effective_ext(f.abs_path)
     if ext in MARKUP_SQL_EXTS:
         return extract_markup_sql(f)
     if ext in EMBEDDED_SQL_EXTS:
         blocks = extract_sql_blocks(f)
         if ext == ".sh":
             blocks += _heredoc_blocks(f.text)
+            blocks += _shell_argument_blocks(f.text)
+            # A one-line ``bq query 'SELECT ...'`` is found by the ordinary
+            # string miner AND by the argument miner. Reading it twice would
+            # count every finding in it twice over.
+            blocks = list(dict.fromkeys(blocks))
         return blocks
     return [(f.text, 0)]
 
@@ -584,17 +702,26 @@ def statements_for(f: SourceFile) -> list[tuple[str, int]]:
 # empty file.
 #
 # Both shapes come down to the same thing: a string ending in .sql.
-_SQL_FILE_REF = re.compile(r"""["']([^"'\n]*?[A-Za-z0-9_\-]+\.sql)["']""")
+#
+# ... and a templated one is named load_final.sql.j2, so the optional template
+# suffix is part of the name. Without it, a .j2 that lives OUTSIDE the
+# repository could not be reported either: the file was not opened, and the
+# "runs the SQL in X" warning did not match the name, so nothing was said at
+# all. See TEMPLATE_SUFFIXES.
+_TEMPLATE_TAIL = r"(?:\.(?:j2|jinja2?|tmpl|template|tpl|mustache|hbs|erb))?"
+_SQL_FILE_REF = re.compile(
+    r"""["']([^"'\n]*?[A-Za-z0-9_\-]+\.sql""" + _TEMPLATE_TAIL + r""")["']""")
 # The same thing in markup, where the value carries no quotes at all:
 #     sql: queries/load_final.sql
 #     <script>hive/load_final.sql</script>
 _MARKUP_SQL_FILE_REF = re.compile(
-    r"""(?:[:>=][ \t]*|["'])([^\s"'<>]*[A-Za-z0-9_\-]+\.sql)\b""")
+    r"""(?:[:>=][ \t]*|["'])([^\s"'<>]*[A-Za-z0-9_\-]+\.sql"""
+    + _TEMPLATE_TAIL + r""")\b""")
 
 
 def sql_file_refs(f: SourceFile) -> list[dict]:
     """Every .sql file this program names, with the line it names it on."""
-    ext = f.abs_path.suffix.lower()
+    ext = effective_ext(f.abs_path)
     if ext not in EMBEDDED_SQL_EXTS and ext not in MARKUP_SQL_EXTS:
         return []
     pattern = _MARKUP_SQL_FILE_REF if ext in MARKUP_SQL_EXTS else _SQL_FILE_REF
@@ -626,7 +753,7 @@ def looks_like_unread_sql(f: SourceFile, blocks: list[tuple[str, int]]) -> bool:
     Removing the recognised block from that same file put it straight back on
     the check-by-hand list, which is the whole tell.
     """
-    ext = f.abs_path.suffix.lower()
+    ext = effective_ext(f.abs_path)
     if ext not in EMBEDDED_SQL_EXTS and ext not in MARKUP_SQL_EXTS:
         return False
     in_file = len(_LOOKS_SQL.findall(f.text))
@@ -688,7 +815,7 @@ _BQ_CLI_TARGET = re.compile(
 
 def written_tables(f: SourceFile) -> list[str]:
     """Tables a program file writes to, in the order they appear."""
-    if f.abs_path.suffix.lower() not in EMBEDDED_SQL_EXTS:
+    if effective_ext(f.abs_path) not in EMBEDDED_SQL_EXTS:
         return []
     hits: list[tuple[int, str]] = []
     for pat in (_WRITE_TARGET, _BQ_WRITE_TARGET, _BQ_JSON_TARGET, _BQ_CLI_TARGET):

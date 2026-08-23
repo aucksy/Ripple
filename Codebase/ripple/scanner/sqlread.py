@@ -574,6 +574,12 @@ class Statement:
     # production table is affected", which is true and useless: the delivery
     # that breaks belongs to another team and was named nowhere at all.
     export_uri: str = ""
+    # "" for an ordinary statement. Otherwise the script variable this one
+    # fills: a DECLARE or a SET whose value is a query, or the row variable of
+    # a FOR loop. The variable is not a table, but it behaves exactly like a
+    # temporary one -- built here, read further down, and gone at the end of the
+    # file -- so it is fenced and followed as one. See _bind_script_variables.
+    script_var: str = ""
     # Worked out once and kept. One scan asks the same statement about the same
     # column many times over, and on a 600-line statement each answer means
     # walking the whole expression tree again. Measured on a repository the size
@@ -611,6 +617,13 @@ class ParsedRepo:
     # edge and never a hop -- a dependency somebody has to go and change,
     # reported as one. See referenced_here.
     references: list[dict] = field(default_factory=list)
+    # Which file CALLs a procedure defined in which other file. A CALL runs in
+    # the SAME BigQuery session as the line above it, so the caller's temporary
+    # tables really are visible inside the procedure -- and the per-file fence
+    # renamed only the caller's side of that pair, so the chain died on the temp
+    # table and the file that actually breaks was reported as "the name appears,
+    # but no lineage to a production table". See _follow_procedure_calls.
+    procedure_calls: list[dict] = field(default_factory=list)
     # Built on demand by reading(); see the note there.
     _by_source: dict | None = field(default=None, repr=False, compare=False)
     _indexed: int = field(default=-1, repr=False, compare=False)
@@ -1489,6 +1502,107 @@ def _rescue_parenless_functions(stmt: exp.Expression, bare: set[str]) -> set[str
     return put_back
 
 
+# FOR <var> IN (...) DO -- the line the loop header was rewritten from. Read off
+# the file rather than the rewritten SQL, because the rewrite is what threw the
+# variable away and this is the one place the original wording survives.
+_LOOP_ROW = re.compile(r"^\s*FOR\s+(\w+)\s+IN\b", re.IGNORECASE)
+
+
+def _is_loop_row(f: SourceFile, stmt: Statement) -> bool:
+    """Was this temporary table a FOR loop's row variable in the file itself?
+
+    The rewrite turns the header into ``CREATE TEMP TABLE rec AS ...`` so that
+    the rows the loop walks can be followed like anything else with a name. The
+    file says ``FOR rec IN``, and the row on screen points at that line -- so
+    the name really is written where the reader is sent, which is the whole test
+    for whether Ripple is allowed to use it.
+    """
+    lines = f.text.splitlines()
+    if not 0 <= stmt.line_offset < len(lines):
+        return False
+    found = _LOOP_ROW.match(lines[stmt.line_offset])
+    return bool(found and found.group(1).upper() == short_name(stmt.target or "").upper())
+
+
+def _declared_variable(stmt: exp.Expression) -> str:
+    """The variable a DECLARE or a SET fills FROM A QUERY, or "".
+
+        DECLARE cutoff DATE DEFAULT (SELECT MAX(cm13) FROM customer_demographics);
+        CREATE OR REPLACE TABLE final_published AS
+        SELECT order_id, amount FROM orders WHERE order_date > cutoff;
+
+    Measured before this: groups [], filed as a dead end two lines above the
+    CREATE that uses it. final_published's whole row set is chosen by cutoff,
+    which IS MAX(cm13), so removing the column stops that statement compiling
+    and stops the published table loading.
+
+    Only a value that holds a query counts. ``DECLARE i INT64 DEFAULT 0`` binds
+    nothing anybody can follow, and giving every loop counter a table of its own
+    would fill the screen with names that lead nowhere.
+    """
+    # Everything here is checked for being an expression before it is walked.
+    # sqlglot puts plain booleans in some of these slots -- BEGIN TRANSACTION is
+    # an exp.Set with no assignment in it at all -- and reaching for .find on one
+    # took down the whole file with an AttributeError.
+    if isinstance(stmt, exp.Declare):
+        for item in stmt.expressions:
+            if not isinstance(item, exp.DeclareItem):
+                continue
+            value = item.args.get("default")
+            if not isinstance(value, exp.Expression) or value.find(exp.Select) is None:
+                continue
+            named = item.args.get("this")
+            first = named[0] if isinstance(named, list) and named else named
+            if isinstance(first, exp.Expression) and getattr(first, "name", ""):
+                return first.name
+    if isinstance(stmt, exp.Set):
+        for item in stmt.expressions:
+            eq = item.args.get("this") if isinstance(item, exp.SetItem) else item
+            if not isinstance(eq, exp.EQ):
+                continue
+            value = eq.expression
+            if not isinstance(value, exp.Expression) or value.find(exp.Select) is None:
+                continue
+            if isinstance(eq.this, exp.Column) and eq.this.name:
+                return eq.this.name
+    return ""
+
+
+def _bind_script_variables(f: SourceFile, out: list[Statement]) -> None:
+    """Join a statement that FILLS a script variable to the ones that READ it.
+
+    A BigQuery script does not only pass values from table to table. It passes
+    them through variables -- a watermark from a DECLARE, a row from a FOR loop
+    -- and both halves were being read as separate statements that had nothing
+    to do with each other. Measured on both shapes: groups [], no production
+    table named, over a change that really does break the published table.
+
+    The variable is already fenced to this file by _scope_session_tables, so
+    ``cutoff`` in one file cannot join up with ``cutoff`` in another. This adds
+    it to the SOURCES of every statement in the file that names it, which is
+    what makes the usage in a WHERE, or ``rec.seg`` in a VALUES list, count.
+
+    Both spellings are counted: the bare name for a scalar, and the qualifier
+    for a loop row. Neither is guessed at -- the name has to have been declared
+    in this very file for anything to happen at all.
+    """
+    variables = {short_name(s.target).upper(): s.target
+                 for s in out if s.script_var and s.target}
+    if not variables:
+        return
+    for s in out:
+        if s.expr is None or (s.target and short_name(s.target).upper() in variables):
+            continue
+        named: set[str] = set()
+        for col in s.expr.find_all(exp.Column):
+            for spelling in (col.table, col.name):
+                if spelling and spelling.upper() in variables:
+                    named.add(variables[spelling.upper()])
+        if named:
+            s.sources = set(s.sources) | named
+            s._sources_upper = None
+
+
 def _scope_session_tables(f: SourceFile, out: list[Statement]) -> None:
     """Fence this file's temporary tables off from every other file's.
 
@@ -1500,7 +1614,7 @@ def _scope_session_tables(f: SourceFile, out: list[Statement]) -> None:
     """
     names: set[str] = set()
     for s in out:
-        if s.target and (is_temporary(s.expr)
+        if s.target and (is_temporary(s.expr) or s.script_var
                          or dataset_of(s.target).upper() == _SESSION_DATASET):
             names.add(short_name(s.target).upper())
     if not names:
@@ -1679,6 +1793,11 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
                     stmt, whole_copy = rewritten
                 select = stmt.find(exp.Select)
                 target = _target_of(stmt) or implied_target
+                # A DECLARE or a SET filled from a query builds something the
+                # rest of the file reads by name. See _declared_variable.
+                script_var = _declared_variable(stmt)
+                if script_var and not target:
+                    target = script_var
                 sources: set[str] = set()
                 skip = _cte_names(stmt)
                 # A MERGE whose USING names a table directly has no SELECT anywhere
@@ -1723,6 +1842,13 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
                 # place, and a RENAME COLUMN on it is an alias hop like any other.
                 if isinstance(stmt, (exp.Delete, exp.Update, exp.Alter)) and target:
                     sources.add(target)
+                # A DECLARE has no SELECT the loop above would walk into, so the
+                # table its value is read from was recorded nowhere.
+                if script_var and not sources:
+                    for t in stmt.find_all(exp.Table):
+                        qualified = _qualify(t)
+                        if qualified and not is_metadata_read(qualified):
+                            sources.add(qualified)
                 out.append(
                     Statement(
                         file=f.path,
@@ -1739,10 +1865,19 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
                         guessed_columns=guessed,
                         built_as_text=built_as_text,
                         export_uri=export_uri,
+                        script_var=script_var,
                     )
                 )
+    # A FOR loop's row variable is filled by its header, which is rewritten into
+    # a temporary table of that name on the way into the parser. See _loop_read.
+    for s in out:
+        if not s.script_var and s.target and is_temporary(s.expr) and _is_loop_row(f, s):
+            s.script_var = short_name(s.target)
     # A temporary table belongs to the file that made it and to nothing else.
     _scope_session_tables(f, out)
+    # ... and now the statements that read those variables can be joined to the
+    # ones that fill them. After the fence, so the names match.
+    _bind_script_variables(f, out)
     # A file that is one query and builds nothing names its table after itself.
     # Done here rather than in the loop above because it is only true when the
     # whole file is that one query -- see _named_after_its_file.
@@ -1819,6 +1954,9 @@ def parse_repo(index: RepoIndex, cfg: Settings | None = None, on_progress=None) 
             )
         problems.extend(file_problems)
     problems.extend(_follow_sql_file_refs(index, pr))
+    # Done once every file is parsed, because the two ends of a CALL are in two
+    # different files and neither one alone can see the pair.
+    _follow_procedure_calls(index, pr)
     pr.unreadable = _one_entry_per_file(problems)
     return pr
 
@@ -1856,6 +1994,103 @@ def _follow_sql_file_refs(index: RepoIndex, pr: ParsedRepo) -> list[dict]:
                          "too; if it is generated at run time, it has to be checked by hand."),
             })
     return missing
+
+
+# ── a procedure CALLed from another file ───────────────────────────────────
+# CALL ds.publish_it() runs in the SAME session as the statement above it, so a
+# TEMP table the caller has just built IS visible inside the procedure. Ripple's
+# fence round temporary tables (see session_scope) renamed the CALLER's "stg" to
+# "#A_SQL.stg" and left the procedure's "stg" alone, so the two stopped matching
+# and the trail died on the temp table -- with the file that really breaks filed
+# under "the name appears, but no lineage to a production table", which is the
+# one sentence this tool exists to stop anybody printing over a live chain.
+#
+# Read off the file TEXT rather than the parse tree, because neither end
+# survives parsing: the procedure signature is dropped on the way in (that is
+# what lets the body be read at all), and the CALL comes out as a statement
+# nobody understood.
+#
+# Short name only, and every file defining that name is taken. This is
+# FOLLOWING a chain, which is the side of that rule where a loose match is
+# right -- and the dataset in front of a procedure name is usually a
+# placeholder in these files anyway.
+_PROCEDURE_DEF = re.compile(
+    r"^[ \t]*CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"([`\"\w.${}-]+)", re.IGNORECASE | re.MULTILINE)
+_PROCEDURE_CALL = re.compile(r"(?<![\w.])CALL\s+([`\"\w.${}-]+)\s*\(", re.IGNORECASE)
+
+
+def _reached_through(edges: dict[str, set[str]], start: str) -> set[str]:
+    """Every file reachable from this one by following CALL edges."""
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        for nxt in edges.get(stack.pop(), ()):
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    seen.discard(start)
+    return seen
+
+
+def _follow_procedure_calls(index: RepoIndex, pr: ParsedRepo) -> None:
+    """Let a temporary table cross a CALL, and let nothing else cross it.
+
+    The fence stays exactly as it is. A name is only unfenced along an edge
+    Ripple can point at: this file CALLs a procedure, that file defines it, so
+    the two run in one session and one file's temp table is the other's.
+    Everything else -- two files that both build a ``stg`` and never call each
+    other -- is untouched, which is the whole reason the fence exists.
+
+    Widened, never replaced: the plain ``stg`` stays in sources beside the
+    scoped one. So nothing that matched before stops matching, and where two
+    different callers hand their own ``stg`` to the SAME procedure both are
+    added and both chains are followed rather than one being guessed at.
+    """
+    defined: dict[str, list[str]] = {}
+    called: dict[str, set[str]] = {}
+    for f in index.files:
+        for m in _PROCEDURE_DEF.finditer(f.text):
+            defined.setdefault(short_name(_bare(m.group(1))).upper(), []).append(f.path)
+        for m in _PROCEDURE_CALL.finditer(f.text):
+            called.setdefault(f.path, set()).add(short_name(_bare(m.group(1))).upper())
+    if not defined or not called:
+        return
+
+    runs: dict[str, set[str]] = {}
+    run_by: dict[str, set[str]] = {}
+    for caller, procs in sorted(called.items()):
+        for proc in sorted(procs):
+            for callee in defined.get(proc, []):
+                if callee == caller:
+                    continue                    # one file, already one fence
+                pr.procedure_calls.append({"file": caller, "proc": proc, "runs": callee})
+                runs.setdefault(caller, set()).add(callee)
+                run_by.setdefault(callee, set()).add(caller)
+
+    fenced: dict[str, set[str]] = {}
+    by_file: dict[str, list[Statement]] = {}
+    for s in pr.statements:
+        by_file.setdefault(s.file, []).append(s)
+        if s.target and is_session_scoped(s.target):
+            fenced.setdefault(s.file, set()).add(short_name(s.target).upper())
+
+    # Both directions, and the whole way down a chain of calls. A procedure a
+    # procedure calls is still the first caller's session; and a temp table
+    # built INSIDE a procedure is visible to whatever called it, which is the
+    # same pair read the other way round.
+    for path, names in fenced.items():
+        scope = session_scope(path)
+        for other in _reached_through(runs, path) | _reached_through(run_by, path):
+            for s in by_file.get(other, ()):
+                # A name the SQL qualified is a real table that happens to share
+                # a short name, and a name already fenced belongs to its own
+                # file. Neither one is this session's temporary table.
+                extra = {scope + "." + short_name(x) for x in s.sources
+                         if not dataset_of(x) and short_name(x).upper() in names}
+                if extra:
+                    s.sources |= extra
+                    s._sources_upper = None
 
 
 def _one_entry_per_file(problems: list[dict]) -> list[dict]:
@@ -2457,8 +2692,25 @@ def output_names(stmt: Statement, column: str, limit: int = MAX_OUTPUT_NAMES) ->
     names = _through_insert_columns(stmt, names)
     names = _through_create_columns(stmt, names)
     names = _through_merge_columns(stmt, names)
+    names = _through_declared_variable(stmt, names)
     stmt._names[column.upper()] = names
     return names
+
+
+def _through_declared_variable(stmt: Statement, names: list[str]) -> list[str]:
+    """A DECLARE publishes ONE thing: the variable, whatever fed it.
+
+    ``DECLARE cutoff DATE DEFAULT (SELECT MAX(cm13) ...)`` has no select list
+    the projection walk could read -- MAX(cm13) is named nothing at all -- so
+    the column came out still called cm13 and the statement below, which reads
+    ``cutoff``, matched nothing.
+
+    A loop's row variable is NOT this shape: it carries a whole row, its column
+    names survive, and the walk above already gets them right.
+    """
+    if not stmt.script_var or not isinstance(stmt.expr, (exp.Declare, exp.Set)):
+        return names
+    return [stmt.script_var]
 
 
 def _through_insert_columns(stmt: Statement, names: list[str]) -> list[str]:
@@ -3064,6 +3316,24 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
                 if cols:
                     found.append(Usage(kind="select", column=column,
                                        alias=alias_for_column, certain=sure))
+
+    # INSERT ... VALUES has no SELECT anywhere in it, so every check below was
+    # skipped and the statement recorded no usage of anything. That is exactly
+    # how a FOR loop's body is written -- the values are the loop row's fields --
+    # and it is the half of the statement that names the published table::
+    #
+    #     FOR rec IN (SELECT id, cm13 AS seg FROM customer_demographics) DO
+    #       INSERT INTO final_published (id, seg) VALUES (rec.id, rec.seg);
+    #
+    # Measured before this: groups [], while the finding's own text said the
+    # column went "into the next table" and named no next table at all.
+    if isinstance(stmt.expr, exp.Insert):
+        values = stmt.expr.find(exp.Values)
+        if values is not None:
+            cols, sure = owned(values)
+            if cols:
+                found.append(Usage(kind="select", column=column,
+                                   alias=alias_for_column, certain=sure))
 
     if stmt.select is None:
         return _best_of(found)

@@ -1594,6 +1594,123 @@ none, unreadable 0, couldNotRead 0. Identical with .format().
   not, and a row that claims it does sends somebody to a line where no such
   statement is written.
 
+A VALUE PASSED THROUGH A SCRIPT VARIABLE IS STILL LINEAGE. A BigQuery script
+does not only pass values from table to table. Two shapes, both measured as
+groups [] over a change that really does break the published table.
+    DECLARE cutoff DATE DEFAULT (SELECT MAX(cm13) FROM customer_demographics);
+    CREATE OR REPLACE TABLE final_published AS
+    SELECT order_id, amount FROM orders WHERE order_date > cutoff;
+  final_published's whole row set is chosen by cutoff, and cutoff IS MAX(cm13).
+  Filed as a dead end two lines above the CREATE that uses it.
+    FOR rec IN (SELECT id, cm13 AS seg FROM customer_demographics) DO
+      INSERT INTO final_published (id, seg) VALUES (rec.id, rec.seg);
+    END FOR;
+  The loop HEADER was rewritten to a read with no target and the INSERT in the
+  BODY had no source, so the two halves of ONE statement never joined up — and
+  the finding's own text said the column went "into the next table" while naming
+  no next table at all.
+  Treat the variable as what it behaves like: a thing with a name, built here,
+  read further down, gone at the end of the file — a temporary table in all but
+  spelling. Fence it to its file exactly as you fence a temp table, then add it
+  to the SOURCES of every statement in that file that names it. Count BOTH
+  spellings: the bare name for a scalar, and the qualifier for a loop row
+  (rec.seg). Rewrite the loop header to build a temp table of the variable's
+  name so the row it walks can be followed like anything else; WHILE has no
+  variable and stays the plain read it was.
+  Two things this must NOT do. Only a variable filled FROM A QUERY counts —
+  DECLARE i INT64 DEFAULT 0 binds nothing anybody can follow, and giving every
+  loop counter a name on screen fills it with dead ends. And a DECLARE publishes
+  ONE thing, the variable, whatever fed it: MAX(cm13) is named nothing at all,
+  so without that the column came out still called cm13 and the statement below
+  it matched nothing.
+  Guard the shapes you walk. sqlglot puts plain BOOLEANS in some of these slots
+  — BEGIN TRANSACTION is an exp.Set with no assignment in it — and reaching for
+  .find on one takes down the whole file with an AttributeError.
+  INSERT ... VALUES has no SELECT anywhere in it, so every usage check keyed on
+  a SELECT was skipped and the statement recorded no usage of anything. That is
+  exactly how a loop body is written. Read the values.
+
+A TEMP TABLE CROSSES A CALL, BECAUSE THE PROCEDURE RUNS IN THE SAME SESSION.
+    -- a.sql
+    CREATE TEMP TABLE stg AS SELECT id, cm13 FROM customer_demographics;
+    CALL ds.publish_it();
+    -- b.sql
+    CREATE OR REPLACE PROCEDURE ds.publish_it()
+    BEGIN CREATE OR REPLACE TABLE final_published AS SELECT id, cm13 FROM stg; END;
+  A BigQuery TEMP table IS visible inside a procedure called in that session, so
+  this chain really runs. The per-file fence renamed the CALLER's stg to
+  "#A_SQL.stg" and left the procedure's stg alone, the two stopped matching, and
+  the trail died on the temp table — with the file that actually breaks filed
+  under "the name appears, but no lineage to a production table", the one
+  sentence this tool exists to stop anybody printing over a live chain.
+  Do NOT weaken the fence and do NOT change same_table. Record the CALL EDGE
+  instead: which file calls a procedure which other file defines. Read both ends
+  off the file TEXT, because neither survives parsing — the procedure signature
+  is dropped on the way in (that is what lets the body be read at all) and the
+  CALL comes out as a statement nobody understood. Then unfence a temp name only
+  along an edge you can point at, WIDENING sources rather than replacing them,
+  in BOTH directions and the whole way down a chain of calls: a procedure a
+  procedure calls is still the first caller's session, and a temp table built
+  inside a procedure is visible to whatever called it.
+  Match the procedure on its SHORT name and take every file that defines it.
+  This is FOLLOWING a chain, the side of that rule where a loose match is right,
+  and it can only add a chain, never cut one. Where two callers hand their own
+  stg to the SAME procedure, add both and follow both. A name the SQL QUALIFIED
+  is a real table that happens to share a short name — leave it alone. And never
+  report an unresolved CALL as a gap: every real pipeline is full of calls to
+  procedures kept somewhere else, and one line each would bury the list.
+
+BEGIN WITH THE BODY ON THE SAME LINE IS STILL A BODY. The scripting check wants
+BEGIN alone on its line, which is how a procedure is normally written. Written
+on one line — BEGIN CREATE OR REPLACE TABLE ... ; END; — the whole body went to
+the parser as part of the BEGIN and came back as a single Command nobody could
+read. Measured: a procedure whose body loads a published table produced NO
+statement at all, so the table it builds was known to Ripple nowhere. Swap the
+keyword for a statement end so the body behind it is read, and keep the line
+numbers exactly as they are in the file. Leave BEGIN TRANSACTION alone — it
+opens a transaction rather than a block and has no body to keep.
+
+A CAVEAT MAY NEVER LIVE ON A DIFFERENT SCREEN FROM THE ANSWER — INCLUDING THE
+FILE TYPES YOU DID NOT OPEN. The repository screen has always listed these. The
+ANSWER never did, so a chain whose middle hop sat in a .ipynb printed "the name
+appears, but no lineage to a production table" with nothing beside it saying a
+file had been passed over. Carry the tally onto the scan payload, count it as a
+gap so coverage stops reading complete, put it on its own card, and say it in
+the letter. With nothing found and a whole file type unread, risk is "unknown",
+never "none" — "I found nothing" and "I could not look" are not the same answer.
+  The trap: every repository has a README, and a warning printed over every scan
+  is one nobody reads — it would take "no impact" down with it. So keep a list
+  of the types that are KNOWN not to be code (prose, images, packed data,
+  archives, binaries, media, locks) and count everything else. Written that way
+  round on purpose: a file type nobody thought of is a gap by default, which is
+  how the middle hop goes missing. The repository screen still lists EVERY
+  skipped extension, this one included, so nothing is hidden from anybody.
+
+A TEMPLATED QUERY IS NAMED TWICE: load_final.sql.j2. Python calls that file's
+suffix ".j2", so it was never opened — AND the "runs the SQL in X, which is not
+in this repository" warning could not fire either, because that only matched
+names ending ".sql". A double miss, which is what made it silent. Decide how to
+read a file on the INNER extension when the outer one is a known template
+suffix (.j2 .jinja .jinja2 .tmpl .template .tpl .mustache .hbs .erb), and let
+the file-reference pattern carry an optional template tail so a .j2 kept outside
+the repository is still reported. Only a KNOWN template suffix, and only over a
+SQL one: reading anything at all past a .sql takes load_final.sql.bak with it,
+and a backup read as a live file becomes "this table is built in two files".
+
+A SHELL SCRIPT HANDS A QUERY OVER TWO WAYS, NOT ONE. The heredoc is read. The
+other way is one quoted argument written across several lines:
+    bq query --use_legacy_sql=false 'CREATE OR REPLACE TABLE final_published AS
+    SELECT id, cm13 FROM customer_demographics'
+A shell leaves a single-quoted string completely alone, so this is every bit as
+ordinary. The string miner every language shares refuses a newline inside a
+quoted value — it has to, or one stray apostrophe in a comment swallows the rest
+of the file — so this shape was mined by nothing at all. Anchor on a command
+that RUNS SQL (bq query, psql, mysql, hive -e, spark-sql, snowsql, beeline and
+the rest) and read from there to the closing quote: starting from the command
+cannot be set off by "don't" in a comment. Dedupe the blocks afterwards — a
+one-line bq query is found by the ordinary string miner as well, and reading it
+twice counts every finding in it twice.
+
 THE CTEs OF ONE WITH ARE ALL AT THE SAME DEPTH, AND THEY FEED EACH OTHER. That
 is two separate clean wrong answers, and both come from grouping a statement's
 SELECTs by nesting depth and then reading each group ONCE.

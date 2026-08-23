@@ -96,7 +96,12 @@ def summarise(scan: dict, vals: dict) -> dict:
     # this file wrote "Please proceed as planned".
     skipped = len(scan.get("skippedInFolders", []))
     folder_names = scan.get("skippedFolderNames", [])
-    blind = never_opened + len(unreadable) + len(cut_short) + skipped
+    # A whole file type Ripple does not open is exactly as unread as a folder it
+    # was told to skip. Measured: the middle hop of the chain sat in a notebook,
+    # and this letter said "Please proceed as planned" over it.
+    unopened_types = scan.get("fileTypesUnopened", [])
+    unopened = sum(t.get("count", 0) for t in unopened_types)
+    blind = never_opened + len(unreadable) + len(cut_short) + skipped + unopened
 
     def _blind_phrase() -> str:
         bits = []
@@ -109,6 +114,10 @@ def summarise(scan: dict, vals: dict) -> dict:
                         f"{'sits' if skipped == 1 else 'sit'} in a folder Ripple is told to "
                         f"skip ({_names(folder_names)}) and "
                         f"{'was' if skipped == 1 else 'were'} never read")
+        if unopened:
+            bits.append(f"{_plural(unopened, 'file')} "
+                        f"{'is' if unopened == 1 else 'are'} of a type Ripple does not open "
+                        f"({_names([t.get('ext', '') for t in unopened_types])})")
         if cut_short:
             bits.append(f"{_plural(len(cut_short), 'trail')} was stopped at "
                         f"{scan.get('maxHops', 4)} renames deep and was still going"
@@ -435,7 +444,10 @@ def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
         blind = (scan.get("stats", {}).get("neverOpened", 0)
                  + len(scan.get("unreadable", []))
                  + len(scan.get("cutShort", []))
-                 + len(scan.get("skippedInFolders", [])))
+                 + len(scan.get("skippedInFolders", []))
+                 # ... and a file type Ripple does not open at all is neither
+                 # read nor followed nor reached. See fileTypesUnopened.
+                 + sum(t.get("count", 0) for t in scan.get("fileTypesUnopened", [])))
         if blind or referenced:
             subject = f"RE: {subject_base} - no impact found so far"
             lines = [

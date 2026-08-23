@@ -15,7 +15,7 @@ from sqlglot import exp
 
 from ..config import Settings, settings as default_settings
 from .dialectcompat import merge_whens
-from .repo import RepoIndex
+from .repo import RepoIndex, unopened_code_types
 from .sqlread import (
     ParsedRepo,
     Usage,
@@ -299,6 +299,16 @@ class ScanResult:
     two_definitions: list[dict] = field(default_factory=list)
     skipped_in_folders: list[str] = field(default_factory=list)
     skipped_folder_names: list[str] = field(default_factory=list)
+    # File types Ripple does not open at all, and how many of each are in the
+    # repository: {".ipynb": 12, ".tf": 3}. The repository screen has always
+    # listed these. The ANSWER never did -- so a middle hop written in a
+    # notebook, or in Terraform, or in a file with no extension at all, produced
+    # "the name appears, but no lineage to a production table" with nothing
+    # anywhere beside it saying a file had been passed over. Measured on a
+    # notebook holding the one statement that built the published table.
+    # A caveat may never live on a different screen from the answer it
+    # qualifies, so it is carried here and counted as a gap in coverage.
+    file_types_unopened: dict = field(default_factory=dict)
     # Published tables that are not built FROM this column, but that stop being
     # refreshed because the statement feeding them stops running on the day of
     # the change. A different kind of impact from the findings above, and it
@@ -350,6 +360,9 @@ class ScanResult:
             "twoDefinitions": self.two_definitions,
             "skippedInFolders": self.skipped_in_folders,
             "skippedFolderNames": self.skipped_folder_names,
+            "fileTypesUnopened": [{"ext": k, "count": n} for k, n
+                                  in sorted(self.file_types_unopened.items(),
+                                            key=lambda kv: (-kv[1], kv[0]))],
             "stopsLoading": self.stops_loading,
             "referencedHere": self.referenced_here,
             "feeds": self.feeds,
@@ -393,6 +406,9 @@ class ScanResult:
              "findings are on a line that did not say which table the column came from"),
             (len(self.skipped_in_folders),
              "code files were walked past because of the folder they sit in"),
+            (sum(self.file_types_unopened.values()),
+             "files are of a type Ripple does not open, so anything written in "
+             "them was never read"),
         ]
         found = [{"count": n, "what": what} for n, what in gaps if n]
         return {
@@ -476,6 +492,9 @@ def trace(
     # Beside the answer, not on another screen. See ScanResult.skipped_in_folders.
     res.skipped_in_folders = list(index.in_skipped_dirs)
     res.skipped_folder_names = list(index.skipped_dir_names)
+    # Already counted while the repository was indexed. Carried onto the ANSWER
+    # rather than left on the repository screen. See file_types_unopened.
+    res.file_types_unopened = unopened_code_types(index.unknown_ext)
     breaks = BREAKS.get(change_type, BREAKS["unknown"])
 
     # Searched on the table's own name, not on the whole thing somebody typed.
@@ -1650,7 +1669,15 @@ def _risk_of(res: ScanResult, unread_on_topic: bool = False) -> str:
         # No lineage anywhere, but something in the repository names this very
         # column and stops working without it -- a row access policy filtering
         # on it, a search index built over it. See _names_a_scanned_column.
-        return "low" if _names_a_scanned_column(res) else "none"
+        if _names_a_scanned_column(res):
+            return "low"
+        # Nothing found, and a whole file type in this repository was never
+        # opened. The middle hop of a chain lives in a notebook often enough
+        # that "no impact" here is a claim Ripple has not earned. It did not
+        # look everywhere, so it says so. See file_types_unopened.
+        if res.file_types_unopened:
+            return "unknown"
+        return "none"
     if any(f.no_local_fix for f in res.findings):
         return "high"
     if any(f.breaking for f in res.findings):

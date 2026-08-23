@@ -223,12 +223,18 @@ _PROCEDURE = re.compile(
     r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?PROCEDURE\b", re.IGNORECASE
 )
 
+# BEGIN followed by the body on the SAME line, which _ALWAYS_SCRIPTING cannot
+# match because it wants BEGIN alone. TRANSACTION is left to that one -- it
+# opens a transaction rather than a block, and has no body to keep.
+_INLINE_BEGIN = re.compile(r"^\s*BEGIN[ \t]+(?!TRANSACTION\b)(?=\S)", re.IGNORECASE)
+
 # A loop header names a real table. Keeping the query inside it costs one line
 # and is the difference between seeing that table read and not. The header is
 # often written across several lines, with the DO on its own, so it is gathered
 # rather than matched.
-_LOOP_HEADER = re.compile(r"^\s*(?:FOR\s+\w+\s+IN|WHILE)\s*(\(.*\))\s*(?:DO|LOOP)\s*$",
-                          re.IGNORECASE)
+_LOOP_HEADER = re.compile(
+    r"^\s*(?:FOR\s+(?P<var>\w+)\s+IN|WHILE)\s*(?P<q>\(.*\))\s*(?:DO|LOOP)\s*$",
+    re.IGNORECASE)
 _LOOP_START = re.compile(r"^\s*(?:FOR\s+\w+\s+IN|WHILE)\b", re.IGNORECASE)
 _LOOP_PLAIN = re.compile(r"^\s*(?:FOR|WHILE)\b.*\b(?:DO|LOOP)\s*$", re.IGNORECASE)
 _LOOP_END = re.compile(r"\b(?:DO|LOOP)\s*$", re.IGNORECASE)
@@ -242,10 +248,31 @@ _LOOP_END = re.compile(r"\b(?:DO|LOOP)\s*$", re.IGNORECASE)
 # parse error, no unreadable entry, nothing on any screen: the trail simply
 # stopped one table short and reported that as where the chain ends.
 _ONE_LINE_LOOP = re.compile(
-    r"^(?P<lead>\s*)(?:FOR\s+\w+\s+IN|WHILE)\s*(?P<q>\(.*\))\s*(?:DO|LOOP)\b"
+    r"^(?P<lead>\s*)(?:FOR\s+(?P<var>\w+)\s+IN|WHILE)\s*(?P<q>\(.*\))\s*(?:DO|LOOP)\b"
     r"(?P<body>.*?)(?:\bEND\s+(?:FOR|WHILE|LOOP)\s*;?\s*)?$",
     re.IGNORECASE,
 )
+
+
+# FOR rec IN (SELECT id, cm13 AS seg FROM customer_demographics) DO
+#   INSERT INTO final_published (id, seg) VALUES (rec.id, rec.seg);
+# END FOR;
+#
+# The header was rewritten to a read with no target, and the INSERT in the body
+# has no source of its own, so the two halves of ONE statement never joined up.
+# Measured: groups [], over a loop that really does load the published table --
+# and the finding's own text said "into the next table" while naming no next
+# table at all.
+#
+# The loop variable is what joins them, so the header keeps it: the rows the
+# loop walks are a thing with a name, exactly like a temporary table, and the
+# name is written on the very line the row points at. Fenced to this file by
+# _scope_session_tables, the same as any other temporary. WHILE has no variable
+# and is left as the plain read it always was.
+def _loop_read(var: str | None, query: str) -> str:
+    if not var:
+        return f"SELECT * FROM {query};"
+    return f"CREATE TEMP TABLE {var} AS SELECT * FROM {query};"
 
 # The condition of an IF or a WHILE, when it is a query.
 #
@@ -401,7 +428,7 @@ def unwrap_blocks(text: str) -> str:
             # being looped over is normally a quoted name, and the blanked copy
             # no longer has it.
             loop = _LOOP_HEADER.match(line) or _LOOP_HEADER.match(code)
-            out.append("SELECT * FROM " + loop.group(1) + ";")
+            out.append(_loop_read(loop.group("var"), loop.group("q")))
             changed = True
             continue
         if _LOOP_START.match(code) and not _LOOP_END.search(code):
@@ -410,7 +437,8 @@ def unwrap_blocks(text: str) -> str:
             # file. See _ONE_LINE_LOOP.
             whole = _ONE_LINE_LOOP.match(line) or _ONE_LINE_LOOP.match(code)
             if whole is not None:
-                out.append(f"{whole.group('lead')}SELECT * FROM {whole.group('q')}; "
+                out.append(f"{whole.group('lead')}"
+                           f"{_loop_read(whole.group('var'), whole.group('q'))} "
                            f"{whole.group('body').strip()}")
                 changed = True
                 continue
@@ -420,6 +448,21 @@ def unwrap_blocks(text: str) -> str:
             continue
         if _ALWAYS_SCRIPTING.match(code):
             out.append(";")
+            changed = True
+            continue
+        # BEGIN with the first statement of the body on the SAME line. The
+        # check above wants BEGIN alone on its line, which is how a procedure
+        # is normally written -- but written on one line the whole body went to
+        # the parser as part of the BEGIN and came back as a single Command
+        # nobody could read. Measured: a procedure whose body loads a published
+        # table produced NO statement at all, so the table it builds was known
+        # to Ripple nowhere, and the scan reported no lineage to production.
+        # The keyword is swapped for a statement end, so the body behind it is
+        # read and the line numbers stay exactly as they are in the file.
+        inline = _INLINE_BEGIN.match(code)
+        if inline:
+            out.append(";" + line[inline.end():])
+            depth = _case_depth_after(code[inline.end():], depth)
             changed = True
             continue
         # A WHILE or an IF header. Whatever it tests is a READ, and replacing

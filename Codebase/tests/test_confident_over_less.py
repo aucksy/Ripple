@@ -1967,3 +1967,357 @@ run(destination_table=chosen_target, sql="SELECT id FROM customer_demographics")
 '''})
     assert [g["prod"] for g in out["groups"]] == [], out["groups"]
     assert "None" not in str(out["groups"]) and "None" not in str(out["reached"])
+
+
+# -- A value passed through a script variable, not through a table ----------
+# A BigQuery script passes values from statement to statement in variables as
+# well as in tables. Both halves were read as statements with nothing to do
+# with each other, and both shapes came back with no production table at all.
+
+
+def test_a_for_loop_body_that_writes_the_published_table_is_followed(tmp_path):
+    """The loop header was rewritten to a read with no target and the INSERT in
+    the body had no source, so the two halves of one statement never joined.
+
+    Before: groups [], while the finding's own text said the column went 'into
+    the next table' and named no next table."""
+    out = scan(tmp_path, {
+        "a.sql": "FOR rec IN (SELECT id, cm13 AS seg FROM customer_demographics) DO\n"
+                 "  INSERT INTO final_published (id, seg) VALUES (rec.id, rec.seg);\n"
+                 "END FOR;\n"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_a_loop_row_variable_belongs_to_its_own_file(tmp_path):
+    """The guard. Two files both looping over a variable called rec must not
+    join up -- the variable is gone at the end of its file, exactly like a
+    temporary table."""
+    out = scan(tmp_path, {
+        "a.sql": "FOR rec IN (SELECT id, cm13 AS seg FROM customer_demographics) DO\n"
+                 "  INSERT INTO staging_a (id, seg) VALUES (rec.id, rec.seg);\n"
+                 "END FOR;\n",
+        "b.sql": "FOR rec IN (SELECT id, other AS seg FROM unrelated_source) DO\n"
+                 "  INSERT INTO final_published (id, seg) VALUES (rec.id, rec.seg);\n"
+                 "END FOR;\n"})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+
+
+def test_a_while_loop_still_keeps_its_read(tmp_path):
+    """WHILE has no row variable. It was always read as a plain read of what it
+    tests, and it still is."""
+    _, _, parsed = build(tmp_path, {
+        "a.sql": "WHILE (SELECT COUNT(*) FROM customer_demographics WHERE cm13 IS NULL) > 0 DO\n"
+                 "  SELECT 1;\n"
+                 "END WHILE;\n"})
+    assert any("customer_demographics" in s.sources for s in parsed.statements), \
+        [s.sources for s in parsed.statements]
+    assert parsed.unreadable == [], parsed.unreadable
+
+
+def test_a_declared_watermark_reaches_the_table_it_chooses_the_rows_of(tmp_path):
+    """final_published's whole row set is chosen by cutoff, and cutoff IS
+    MAX(cm13). Removing the column stops this script compiling.
+
+    Before: groups [], filed as a dead end two lines above the CREATE."""
+    out = scan(tmp_path, {
+        "a.sql": "DECLARE cutoff DATE DEFAULT (SELECT MAX(cm13) FROM customer_demographics);\n"
+                 "CREATE OR REPLACE TABLE final_published AS\n"
+                 "SELECT order_id, amount FROM orders WHERE order_date > cutoff;\n"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+    assert out["risk"] != "none"
+
+
+def test_a_set_watermark_is_read_the_same_way_as_a_declare(tmp_path):
+    """The same guard written the other way. DECLARE ... DEFAULT and SET are one
+    thing, and two spellings of one thing that disagree IS the bug."""
+    out = scan(tmp_path, {
+        "a.sql": "DECLARE cutoff DATE;\n"
+                 "SET cutoff = (SELECT MAX(cm13) FROM customer_demographics);\n"
+                 "CREATE OR REPLACE TABLE final_published AS\n"
+                 "SELECT order_id, amount FROM orders WHERE order_date > cutoff;\n"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_a_declared_counter_is_not_given_a_table_of_its_own(tmp_path):
+    """The guard. Only a variable filled FROM A QUERY can be followed. Giving
+    every loop counter a name on the screen would fill it with dead ends."""
+    _, _, parsed = build(tmp_path, {
+        "a.sql": "DECLARE i INT64 DEFAULT 0;\n"
+                 "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cm13 FROM customer_demographics;\n"})
+    assert [s.target for s in parsed.statements if s.script_var] == [], \
+        [(s.target, s.script_var) for s in parsed.statements]
+
+
+def test_a_variable_belongs_to_its_own_file(tmp_path):
+    """The guard. cutoff in one file is not cutoff in another."""
+    out = scan(tmp_path, {
+        "a.sql": "DECLARE cutoff DATE DEFAULT (SELECT MAX(cm13) FROM customer_demographics);\n"
+                 "CREATE OR REPLACE TABLE staging_a AS SELECT 1 AS x WHERE TRUE;\n",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS\n"
+                 "SELECT order_id FROM orders WHERE order_date > cutoff;\n"})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+
+
+# -- A file type Ripple does not open at all --------------------------------
+# RepoIndex counted these all along. The count reached the REPOSITORY screen and
+# nothing else, so a chain whose middle hop sat in a notebook printed "the name
+# appears, but no lineage to a production table" with nothing beside the answer
+# saying a file had been passed over.
+import json as _json
+
+_NOTEBOOK = _json.dumps({"cells": [{"cell_type": "code", "source": [
+    "q = '''CREATE OR REPLACE TABLE final_published AS "
+    "SELECT id, cm13 FROM stage_n'''\n"]}]})
+
+
+def test_an_unopened_file_type_is_named_beside_the_answer(tmp_path):
+    """The caveat belongs on the same screen as the answer it qualifies."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_n AS "
+                 "SELECT id, cm13 FROM customer_demographics;",
+        "mid.ipynb": _NOTEBOOK})
+    assert out["fileTypesUnopened"] == [{"ext": ".ipynb", "count": 1}], \
+        out["fileTypesUnopened"]
+    assert out["coverage"]["complete"] is False
+    assert any("does not open" in g["what"] for g in out["coverage"]["gaps"]), \
+        out["coverage"]["gaps"]
+
+
+def test_nothing_found_over_an_unopened_file_type_is_not_no_impact(tmp_path):
+    """"I found nothing" and "I could not look" are not the same answer. With a
+    whole file type unread, Ripple has not earned a confident none."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE t AS SELECT other FROM somewhere;",
+        "mid.ipynb": _NOTEBOOK})
+    assert out["risk"] == "unknown", out["risk"]
+
+
+def test_a_readme_does_not_cry_wolf_on_every_scan(tmp_path):
+    """The guard, and the whole reason the list is of types that are KNOWN not
+    to be code. Every repository has a README. A warning printed over every
+    scan is one nobody reads, and it would take "no impact" with it."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE t AS SELECT other FROM somewhere;",
+        "README.md": "# The pipeline\n\nNotes.\n",
+        "LICENSE.txt": "MIT\n",
+        "logo.png": "not really a png\n"})
+    assert out["fileTypesUnopened"] == [], out["fileTypesUnopened"]
+    assert out["risk"] == "none", out["risk"]
+    assert out["coverage"]["complete"] is True
+
+
+def test_an_extension_ripple_has_never_heard_of_counts(tmp_path):
+    """Written as a list of what is NOT code on purpose: a type nobody thought
+    of is a gap by default, because that is how a middle hop goes missing."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE t AS SELECT other FROM somewhere;",
+        "job.wibble": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM x;"})
+    assert [t["ext"] for t in out["fileTypesUnopened"]] == [".wibble"], \
+        out["fileTypesUnopened"]
+    assert out["risk"] == "unknown"
+
+
+def test_the_letter_does_not_say_proceed_over_an_unopened_file_type(tmp_path):
+    """"Please proceed as planned" is the most consequential sentence this tool
+    writes, and it is only ever sent over a genuinely complete clean scan."""
+    from ripple import narrative
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE t AS SELECT other FROM somewhere;",
+        "mid.ipynb": _NOTEBOOK})
+    vals = {"pocName": "Priya Raman",
+            "upstream": [{"table": "customer_demographics", "attrs": ["cm13"]}]}
+    summary = narrative.summarise(out, vals)
+    body = narrative.draft_reply(out, vals, summary)["body"]
+    assert "proceed as planned" not in body.lower(), body
+    assert "not confirming no impact yet" in body.lower(), body
+    # ... and the summary beside it names the file type by its own extension,
+    # so nobody has to go to another screen to find out what was missed.
+    assert "does not open" in summary["narrative"].lower(), summary["narrative"]
+    assert ".ipynb" in summary["narrative"], summary["narrative"]
+
+
+# -- A query kept as a template, and a query kept as a shell argument --------
+
+
+def test_a_templated_query_file_is_read_as_the_sql_it_is(tmp_path):
+    """load_final.sql.j2. Python calls that suffix '.j2', so the file was never
+    opened -- and the 'runs the SQL in X' warning could not fire either, because
+    that only matched names ending '.sql'. A double miss, which is what made it
+    silent."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_j AS "
+                 "SELECT id, cm13 FROM customer_demographics;",
+        "load_final.sql.j2": "CREATE OR REPLACE TABLE {{ target }}.final_published AS "
+                             "SELECT id, cm13 FROM stage_j;",
+        "run.py": 'render("load_final.sql.j2")\n'})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_a_backup_of_a_query_is_not_read_as_a_live_one(tmp_path):
+    """The guard. Only a known template suffix counts. Reading anything at all
+    past a .sql would take load_final.sql.bak with it, and a backup read as a
+    live file turns into 'this table is built in two files'."""
+    out = scan(tmp_path, {
+        "load_final.sql": "CREATE OR REPLACE TABLE final_published AS "
+                          "SELECT cm13 FROM customer_demographics;",
+        "load_final.sql.bak": "CREATE OR REPLACE TABLE final_published AS "
+                              "SELECT cm13 FROM customer_demographics;"})
+    assert out["twoDefinitions"] == [], out["twoDefinitions"]
+
+
+def test_a_multi_line_quoted_query_beside_a_heredoc_is_read(tmp_path):
+    """A shell leaves a single-quoted string alone, so a query written across
+    several lines as one argument is every bit as ordinary as a heredoc. The
+    string miner refuses newlines, so nothing mined this at all."""
+    out = scan(tmp_path, {"two.sh": """#!/bin/bash
+bq query --use_legacy_sql=false 'CREATE OR REPLACE TABLE final_published AS
+SELECT id, cm13 FROM customer_demographics'
+
+bq query --use_legacy_sql=false <<EOF
+CREATE OR REPLACE TABLE other_published AS SELECT id, zz9 FROM some_other_table
+EOF
+"""})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+    assert out["stats"]["couldNotRead"] == 0, out["unreadable"]
+
+
+def test_an_apostrophe_in_a_shell_comment_does_not_mine_anything(tmp_path):
+    """The guard, and the reason this is anchored on a command that RUNS SQL
+    rather than on the quote character. One 'don't' in a comment must not
+    swallow the rest of the file."""
+    _, _, parsed = build(tmp_path, {"job.sh": """#!/bin/bash
+# don't run this by hand, the scheduler owns it
+echo "starting"
+bq query --use_legacy_sql=false 'CREATE OR REPLACE TABLE final_published AS
+SELECT id, cm13 FROM customer_demographics'
+"""})
+    targets = {s.target for s in parsed.statements}
+    assert "final_published" in targets, targets
+    assert parsed.unreadable == [], parsed.unreadable
+
+
+def test_a_one_line_shell_query_is_not_counted_twice(tmp_path):
+    """The guard on adding a second miner over the same text."""
+    _, _, parsed = build(tmp_path, {
+        "one.sh": "#!/bin/bash\nbq query --use_legacy_sql=false "
+                  "'CREATE OR REPLACE TABLE final_published AS SELECT cm13 "
+                  "FROM customer_demographics'\n"})
+    built = [s for s in parsed.statements if s.target == "final_published"]
+    assert len(built) == 1, [s.target for s in parsed.statements]
+
+
+# -- a temp table handed to a procedure CALLed in the same script -----------
+# A CALL runs in the SAME BigQuery session as the line above it, so a TEMP table
+# the caller has just built IS visible inside the procedure. The per-file fence
+# renamed the caller's side only, the two names stopped matching, and the trail
+# died on the temp table -- with the file that really breaks filed under "the
+# name appears, but no lineage to a production table".
+PROC_CALL = {
+    "a.sql": "CREATE TEMP TABLE stg AS SELECT id, cm13 FROM customer_demographics;\n"
+             "CALL ds.publish_it();",
+    "b.sql": "CREATE OR REPLACE PROCEDURE ds.publish_it()\n"
+             "BEGIN\n"
+             "  CREATE OR REPLACE TABLE final_published AS SELECT id, cm13 FROM stg;\n"
+             "END;",
+}
+
+
+def test_a_temp_table_crosses_a_call_into_the_procedure_that_reads_it(tmp_path):
+    out = scan(tmp_path, PROC_CALL)
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["reached"]
+    assert out["mentionsOnly"] == [], out["mentionsOnly"]
+
+
+def test_the_fence_marker_never_goes_on_screen(tmp_path):
+    """The scope name is Ripple's own bookkeeping. Anybody sent to look for a
+    table called #A_SQL.stg would find no such thing written anywhere."""
+    out = scan(tmp_path, PROC_CALL)
+    assert "#" not in repr(out), "the fence name reached the payload"
+
+
+def test_a_one_line_procedure_body_is_read(tmp_path):
+    """Found underneath the defect above. BEGIN with the body on the SAME line
+    was not scripting the reader recognised, so the whole procedure fell out as
+    one unreadable Command -- and the table it builds was known nowhere."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE TEMP TABLE stg AS SELECT id, cm13 FROM customer_demographics;\n"
+                 "CALL ds.publish_it();",
+        "b.sql": "CREATE OR REPLACE PROCEDURE ds.publish_it()\n"
+                 "BEGIN CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT id, cm13 FROM stg; END;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_the_fence_still_holds_where_nothing_calls_anything(tmp_path):
+    """The guard. Take the CALL away and the two files are two sessions again."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE TEMP TABLE stg AS SELECT id, cm13 FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE PROCEDURE ds.publish_it()\nBEGIN\n"
+                 "  CREATE OR REPLACE TABLE final_published AS SELECT id, cm13 FROM stg;\n"
+                 "END;"})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+
+
+def test_two_scripts_calling_two_procedures_do_not_share_their_temp_tables(tmp_path):
+    """The reason the fence exists, one CALL further along. Both scripts build a
+    ``stg``; only the one fed by customer_demographics may appear."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE TEMP TABLE stg AS SELECT id, cm13 FROM customer_demographics;\n"
+                 "CALL ds.pub_a();",
+        "z.sql": "CREATE TEMP TABLE stg AS SELECT id, other FROM unrelated_table;\n"
+                 "CALL ds.pub_z();",
+        "pa.sql": "CREATE OR REPLACE PROCEDURE ds.pub_a()\nBEGIN\n"
+                  "  CREATE OR REPLACE TABLE a_published AS SELECT id, cm13 FROM stg;\nEND;",
+        "pz.sql": "CREATE OR REPLACE PROCEDURE ds.pub_z()\nBEGIN\n"
+                  "  CREATE OR REPLACE TABLE z_published AS SELECT id, other FROM stg;\nEND;"})
+    assert [g["prod"] for g in out["groups"]] == ["a_published"], out["groups"]
+    assert "z_published" not in repr(out)
+
+
+def test_two_scripts_calling_the_same_procedure_are_both_followed(tmp_path):
+    """Ripple cannot tell which caller's rows the procedure is running over, so
+    it follows BOTH rather than picking one. A spare row is dismissed by opening
+    the file; a lost chain is invisible."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE TEMP TABLE stg AS SELECT id, cm13 FROM customer_demographics;\n"
+                 "CALL ds.pub();",
+        "z.sql": "CREATE TEMP TABLE stg AS SELECT id, other FROM unrelated_table;\n"
+                 "CALL ds.pub();",
+        "p.sql": "CREATE OR REPLACE PROCEDURE ds.pub()\nBEGIN\n"
+                 "  CREATE OR REPLACE TABLE both_published AS SELECT id, cm13 FROM stg;\nEND;"})
+    assert [g["prod"] for g in out["groups"]] == ["both_published"], out["groups"]
+
+
+def test_a_real_table_inside_a_procedure_is_not_taken_for_a_temp_one(tmp_path):
+    """The guard on the widening. A name the SQL qualified is a real table that
+    happens to share a short name with somebody's temporary one."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE TEMP TABLE stg AS SELECT id, cm13 FROM customer_demographics;\n"
+                 "CALL ds.pub();",
+        "p.sql": "CREATE OR REPLACE PROCEDURE ds.pub()\nBEGIN\n"
+                 "  CREATE OR REPLACE TABLE final_published AS SELECT id, cm13 FROM warehouse.stg;\n"
+                 "END;"})
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+
+
+def test_a_temp_table_built_inside_a_procedure_reaches_its_caller(tmp_path):
+    """The same pair read the other way round: the procedure builds the temp
+    table and the script that called it reads it."""
+    out = scan(tmp_path, {
+        "a.sql": "CALL ds.pub();\n"
+                 "CREATE OR REPLACE TABLE tail_published AS SELECT id, cm13 FROM stg;",
+        "p.sql": "CREATE OR REPLACE PROCEDURE ds.pub()\nBEGIN\n"
+                 "  CREATE TEMP TABLE stg AS SELECT id, cm13 FROM customer_demographics;\nEND;"})
+    assert [g["prod"] for g in out["groups"]] == ["tail_published"], out["groups"]
+
+
+def test_a_call_to_a_procedure_that_is_not_in_the_repository_reports_nothing(tmp_path):
+    """The guard on noise. Every real pipeline is full of CALLs to procedures
+    that live somewhere else, and a gap reported for each of them would bury the
+    one list Ripple has for admitting what it missed."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cm13 FROM customer_demographics;\n"
+                 "CALL ds.something_defined_elsewhere();"})
+    assert out["stats"]["couldNotRead"] == 0, out["unreadable"]
