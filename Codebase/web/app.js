@@ -1273,6 +1273,16 @@ function step4(root) {
     uncovered.push(['In folders Ripple skips', S.health.repo.inSkippedDirs, 'var(--amber)',
       (S.health.repo.skippedDirNames || []).join(', ')]);
   }
+  // A file type Ripple does not open is exactly as unread as a folder it was
+  // told to skip. Seen on the rendered screen and nowhere else: the green
+  // "Every file was opened and read" note sat DIRECTLY ABOVE the card saying a
+  // notebook had never been looked inside. Counting it here puts it in the row
+  // and takes that note away, which is the same fix twice.
+  const unopenedTypes = (sc.fileTypesUnopened || []).reduce((n, t) => n + t.count, 0);
+  if (unopenedTypes) {
+    uncovered.push(['Types Ripple does not open', unopenedTypes, 'var(--amber)',
+      (sc.fileTypesUnopened || []).map(t => t.ext || 'no extension').join(', ')]);
+  }
   box.append(el('span', { className: 'lbl', style: 'display:block;margin:22px 0 10px',
     textContent: 'What this result does not cover' }));
   const gaps3 = el('div', { className: 'stats ' + (uncovered.length > 3 ? 'five' : 'three') });
@@ -1281,7 +1291,7 @@ function step4(root) {
   // Only a reassurance when there was something to be reassured about. "Every
   // file was opened and read" is true of no files at all, and reads as a clean
   // bill of health for a repository that was never there.
-  if (!st.couldNotRead && uncovered.length === 1 && !nothingRead) {
+  if (!st.couldNotRead && !unopenedTypes && uncovered.length === 1 && !nothingRead) {
     gaps3.append(el('div', { className: 'note good', style: 'grid-column:span 2;align-self:stretch;display:flex;align-items:center' },
       el('div', {}, el('b', { style: 'display:block', textContent: 'Every file was opened and read.' }),
         'Nothing was skipped, and nothing was left for a person to follow by hand.')));

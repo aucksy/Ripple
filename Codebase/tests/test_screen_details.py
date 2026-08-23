@@ -107,3 +107,27 @@ def test_the_reply_screen_uses_all_of_them():
     js = (WEB / "app.js").read_text(encoding="utf-8")
     assert "S.vals.pocEmails?.length ? S.vals.pocEmails" in js, \
         "the drafted reply must be addressed to everyone, not to the first one"
+
+
+def test_the_clean_bill_of_health_cannot_print_over_a_file_type_never_opened():
+    """Seen on the rendered screen and nowhere else: the green "Every file was
+    opened and read. Nothing was skipped" note sat DIRECTLY ABOVE the card
+    saying a notebook had never been looked inside.
+
+    That note is the tool's clean bill of health for coverage, and it may not be
+    printed while a whole file type went unread. Two things had to be true for
+    the contradiction to survive: the unopened types were not counted into the
+    "what this result does not cover" row, and the note's own condition did not
+    mention them. Both are pinned here, because a JS change cannot be caught by
+    a Python test any other way and this one only shows up in a picture.
+    """
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    # Counted into the row, so a reader sees the number beside the other gaps.
+    assert "'Types Ripple does not open'" in js, \
+        "unopened file types are not counted into the coverage row"
+    # ... and named in the note's own guard, so it cannot fire regardless.
+    note = js.index("Every file was opened and read.")
+    guard = js.rindex("if (", 0, note)
+    condition = js[guard:note]
+    assert "unopenedTypes" in condition, condition
+    assert "couldNotRead" in condition, condition
