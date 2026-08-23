@@ -180,3 +180,34 @@ def test_something_new_that_reaches_out_stops_the_build(tmp_path):
 def test_the_build_refuses_a_front_end_that_is_not_there(tmp_path):
     with pytest.raises(webbuild.BuildError, match="missing"):
         webbuild.build(out_dir=tmp_path / "out", shared_web=tmp_path / "nothing-here")
+
+
+# ── a new provider must not be able to slip through ────────────────────────
+# The online copy grew from one AI provider to three. Each one is a different
+# company, a different address and a different key box, and every one of them
+# has to be barred from a build whose whole promise is that it cannot reach
+# anywhere. Adding a provider online and forgetting this list is exactly how a
+# key box arrives on a locked-down laptop.
+@pytest.mark.parametrize("leak", [
+    "  fetch('https://api.openai.com/v1/models');",
+    "  fetch('https://generativelanguage.googleapis.com/v1beta/openai/models');",
+    "  fetch('https://api.groq.com/ping');",
+    "  const label = 'Google Gemini';",
+    "  const hint = 'Paste your API key';",
+])
+def test_no_provider_can_reach_the_offline_build(tmp_path, leak):
+    fake = _copy_shared(tmp_path)
+    lines = (fake / "app.js").read_text(encoding="utf-8").splitlines()
+    at = next(i for i, l in enumerate(lines) if l.startswith("function runScan("))
+    lines.insert(at + 1, leak)
+    (fake / "app.js").write_text("\n".join(lines), encoding="utf-8")
+    with pytest.raises(webbuild.BuildError):
+        webbuild.build(out_dir=tmp_path / "out", shared_web=fake)
+
+
+def test_the_real_build_carries_no_provider_at_all(built):
+    """Not disabled, not behind a flag — absent. Checked on what is actually
+    produced, not on what the ban list says it would catch."""
+    js = (built / "app.js").read_text(encoding="utf-8").lower()
+    for word in ("openai", "gemini", "groq", "googleapis", "aicard", "api key"):
+        assert word not in js, word

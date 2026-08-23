@@ -716,3 +716,70 @@ def test_a_copy_of_an_unrelated_table_is_not_dragged_in(tmp_path):
         "a.sql": PROMOTE,
         "b.sql": "CREATE OR REPLACE TABLE final_published COPY some_other_table;"})
     assert out["groups"] == [], "final_published is a copy of a table with no cm13 in it"
+
+
+# ── 12. table-valued functions ─────────────────────────────────────────────
+# A BigQuery TABLE FUNCTION is a table as far as lineage is concerned: it is
+# named, it is read in a FROM clause, and every column of its body travels
+# through it. Both halves used to be invisible. The definition parses as a
+# function rather than a table, so it published nothing; and the call parses as
+# a function call whose table node carries no name at all, so it read nothing.
+# The chain broke in the middle and the published table was never mentioned.
+def tvf(tmp_path, define: str, call: str) -> dict:
+    return scan(tmp_path, {"a.sql": define, "b.sql": call})
+
+
+@pytest.mark.parametrize("define,call", [
+    ("CREATE OR REPLACE TABLE FUNCTION mid_tvf(d STRING) AS"
+     " (SELECT cm13 FROM customer_demographics WHERE dt = d);",
+     "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM mid_tvf('x');"),
+    ("CREATE OR REPLACE TABLE FUNCTION ds.mid_tvf(d STRING) AS"
+     " (SELECT cm13 FROM customer_demographics);",
+     "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM ds.mid_tvf('x');"),
+    ("CREATE OR REPLACE TABLE FUNCTION `prj.ds.mid_tvf`(d STRING) AS"
+     " (SELECT cm13 FROM customer_demographics);",
+     "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM `prj.ds.mid_tvf`('x');"),
+])
+def test_a_table_function_carries_the_chain(tmp_path, define, call):
+    out = tvf(tmp_path, define, call)
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], define
+
+
+def test_a_scalar_udf_is_not_treated_as_a_table(tmp_path):
+    """A scalar UDF parses as the same node, with the same kind. Only its body
+    tells them apart: a table function returns a SELECT, a scalar one returns an
+    expression. Get that wrong and every helper in the repository becomes a
+    table nobody has."""
+    out = scan(tmp_path, {"a.sql":
+        "CREATE TEMP FUNCTION scrub(x STRING) AS (UPPER(x));\n"
+        "CREATE OR REPLACE TABLE final_published AS"
+        " SELECT scrub(cm13) AS cm13 FROM customer_demographics;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    rows = [r for g in out["groups"] for r in g["rows"]]
+    assert not any("scrub" in (r["inter"] or "").lower() for r in rows), \
+        "scrub is a function, not a table on the trail"
+
+
+def test_a_builtin_wrapper_is_not_invented_as_a_table(tmp_path):
+    """BigQuery's own table functions wrap a table rather than being one, and
+    the table they wrap is parsed separately and found anyway. Taking the
+    wrapper's name too would put a table nobody has on the result."""
+    out = scan(tmp_path, {"a.sql":
+        "CREATE OR REPLACE TABLE final_published AS "
+        "SELECT cm13 FROM customer_demographics UNION ALL "
+        "SELECT cm13 FROM EXTERNAL_QUERY('conn', 'SELECT cm13 FROM x');"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    names = [r["inter"] for g in out["groups"] for r in g["rows"]]
+    assert not any("external_query" in (n or "").lower() for n in names), names
+
+
+def test_unnest_is_still_not_a_table(tmp_path):
+    """The guard on the change above: UNNEST sits in a FROM clause and looks
+    like a function call, and turning it into a table would put one on every
+    result in the repository."""
+    out = scan(tmp_path, {"a.sql":
+        "CREATE OR REPLACE TABLE final_published AS"
+        " SELECT cm13, t FROM customer_demographics, UNNEST(tags) AS t;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    names = [r["inter"] for g in out["groups"] for r in g["rows"]]
+    assert not any("unnest" in (n or "").lower() for n in names), names

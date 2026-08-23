@@ -1061,6 +1061,32 @@ For each parsed statement build a Statement with:
            the parser has already failed, so it costs nothing on the statements
            that read normally.
 
+           TABLE FUNCTIONS. A BigQuery TABLE FUNCTION is a table as far as
+           lineage is concerned — it is named, it is read in a FROM clause, and
+           every column of its body travels through it:
+
+             CREATE OR REPLACE TABLE FUNCTION ds.recent(d STRING) AS (
+               SELECT cm13 FROM customer_demographics WHERE dt = d)
+             CREATE OR REPLACE TABLE published.summary AS
+               SELECT cm13 FROM ds.recent('2026-01-01')
+
+           BOTH halves are invisible to a naive reader. The definition parses as
+           a function, not a table, so it publishes nothing; and the call parses
+           as a function call whose table node carries NO NAME AT ALL, so it
+           reads nothing. The chain breaks in the middle and the published table
+           is never mentioned.
+
+           Take the name off the function signature for the target, and off the
+           call for the source. Two traps: a scalar UDF parses as the very same
+           node with the very same kind, so tell them apart by their BODY — a
+           table function's is a SELECT, a scalar one's is an expression, and
+           getting this wrong turns every helper in the repository into a table.
+           And BigQuery's own built-in table functions (EXTERNAL_QUERY, APPENDS,
+           CHANGES, GAP_FILL, VECTOR_SEARCH and friends) WRAP a table rather
+           than being one; the table they wrap is parsed separately and found
+           anyway, so taking the wrapper's name too only invents a table nobody
+           has. Keep a short list of those and skip them.
+
            BIGQUERY WILDCARD TABLES. Date-sharded tables are ordinary, and the
            only way to read one is a wildcard:
 
@@ -1675,7 +1701,15 @@ POST /api/production/read       read a pasted list WITHOUT saving it, and
                                 this is what the settings box calls as it is
                                 typed into
 POST /api/production            use this list from now on
-POST /api/read-email  (file upload)   POST /api/read-text  (pasted)
+POST /api/read-email  (file upload — .msg, .eml or a plain text file)
+
+There is no route that takes typed-in email text. There was one, and it went:
+a box somebody pastes an email into produces a notification with no envelope —
+no From, no Subject, nothing but words — so the source system and the contact
+came back blank far more often than from the same email uploaded as a file. Two
+ways in that behave differently is one too many. Upload the file, or use the
+manual tab. The function that reads message text STAYS, because a plain .txt
+upload is read with it.
 POST /api/scan        {upstream[], changeKind} -> the scan result JSON
 POST /api/summary     {scan, vals} -> {summary, reply}
 POST /api/history     GET /api/history     GET /api/history/{id}
@@ -1895,7 +1929,9 @@ there is. Never animate anything that is not really happening.
 
 STEP 1 — the notification.
 Two modes on a toggle: from email, or entered by hand.
-Email mode: a drop zone that also opens a file picker, and a paste box.
+Email mode: a drop zone that also opens a file picker. No paste box — see the
+routes above for why — and beside the drop zone a short card pointing at the
+manual tab, so "I have no file" has a visible answer rather than a dead end.
 Check the file size in the browser as well as on the server, and say what the
 real ceiling is. Nothing is scanned until the person confirms — say so on
 screen.

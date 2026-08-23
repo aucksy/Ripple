@@ -204,7 +204,7 @@ def test_applying_settings_leaves_no_way_to_reach_out(clean_home):
     pull, rather than trusted to leave them alone."""
     from ripple.config import settings
     prefs.apply(prefs.load())
-    assert settings.groq_api_key == ""
+    assert settings.ai_key == ""
     assert settings.github_token == "" and settings.github_repo == ""
     assert settings.ai_available() is False
 

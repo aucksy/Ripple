@@ -36,8 +36,13 @@ OFFLINE_JS = OFFLINE_DIR / "web" / "offline.js"
 # Words that must not survive into the offline build. Each one is either a way
 # out of the machine or a box asking for a secret.
 BANNED = (
-    "github", "groq", "/api/ai/", "api key", "apikey", "access token",
-    "console.groq", "api.groq",
+    "github", "/api/ai/", "api key", "apikey", "access token",
+    # Every provider the online copy can talk to. Adding a provider online and
+    # forgetting this line is exactly how a key box reaches a machine that is
+    # meant to have no way out -- so each name, and each address, is listed.
+    "groq", "console.groq", "api.groq",
+    "openai", "api.openai", "platform.openai",
+    "gemini", "aistudio.google", "generativelanguage", "googleapis",
 )
 
 # Functions the offline build takes over completely. They must be gone from the
@@ -47,7 +52,7 @@ REPLACED = ("settingsView", "repoAlert", "afterBoot")
 
 # Functions that must not survive at all: these are the GitHub form and the AI
 # key form themselves.
-REMOVED = ("gitHubForm", "doConnect", "aiCard", "fileUrl")
+REMOVED = ("gitHubForm", "doConnect", "aiCard", "whoIssued", "anOrA", "fileUrl")
 
 BANNER = """/* GENERATED — do not edit.
    Built from Codebase/web/app.js with the online-only parts removed, plus

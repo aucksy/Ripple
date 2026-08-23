@@ -142,7 +142,8 @@ All optional. Set them as environment variables before starting.
 | `RIPPLE_MAX_HOPS` | `4` | How many renames deep to follow a column. |
 | `RIPPLE_PROD_TABLES` | `_PROD, _PRD, _PUBLISHED` | Which tables **your team publishes**. Paste the real list, one per line — Ripple reads it as written. A naming pattern still works alongside it: a word starting with an underscore matches the end of a table name, `*` matches anything (`PROD_*`, or `*` for every table). **This is the second setting that can turn a real finding into a calm-looking result** — see below. |
 | `RIPPLE_REPO_URL_TEMPLATE` | empty | Link findings to your Git host, when reading a folder. Use `{path}` and `{line}`. On GitHub this is worked out for you. |
-| `GROQ_API_KEY` | empty | Turns the AI on. Without it everything still works. Can also be entered on the Settings screen. |
+| `RIPPLE_AI_KEY` | empty | Turns the AI on. An OpenAI, Google Gemini or Groq key — Ripple works out which from the key itself. Without it everything still works. Can also be entered on the Settings screen. `OPENAI_API_KEY`, `GEMINI_API_KEY` and `GROQ_API_KEY` are read too. |
+| `RIPPLE_AI_MODEL` | empty | Which model to use. Left empty, Ripple asks the provider what the key can use and takes the first it would choose. |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | Which model to call. Also choosable on the Settings screen. |
 | `RIPPLE_DB` | `./ripple.db` | Where history is kept. On a serverless host this becomes `/tmp/ripple.db`, which does not survive. |
 | `RIPPLE_MAX_UPLOAD_BYTES` | `25000000` | Biggest notification file accepted. Drops to `4000000` on a serverless host, which refuses more than that itself. |
@@ -161,7 +162,7 @@ To read a repository from GitHub rather than a folder:
 Example, on Windows:
 
 ```bash
-set RIPPLE_SQL_DIALECT=teradata && set GROQ_API_KEY=your-key-here && .venv\Scripts\python run.py
+set RIPPLE_SQL_DIALECT=teradata && set RIPPLE_AI_KEY=your-key-here && .venv\Scripts\python run.py
 ```
 
 The **Settings & checks** screen inside Ripple shows what it is connected to and
@@ -353,10 +354,30 @@ whatever the branch has moved on to since.
 Ripple works with no AI at all — that is deliberate, not a limitation. With a
 key it reads messier emails more reliably and writes better English.
 
-1. Get a key from <https://console.groq.com>.
-2. Open **Settings & checks**, pick a model, paste the key, press *Turn the AI
-   on*. Or set `GROQ_API_KEY` before starting, which survives restarts.
-3. Either way, press *Test the key* whenever you want proof it still works.
+Three providers are supported, and there is **one box**, not three. Which
+company issued a key is worked out from the key itself, because asking is one
+more thing to get wrong — and a key sent to the wrong company comes back
+rejected, which reads as "your key is bad" when it is not.
+
+| Provider | Key looks like | Get one at |
+|---|---|---|
+| OpenAI | `sk-…`, `sk-proj-…` | <https://platform.openai.com/api-keys> |
+| Google Gemini | `AIza…` | <https://aistudio.google.com/apikey> |
+| Groq | `gsk_…` | <https://console.groq.com> |
+
+1. Get a key from any of them.
+2. Open **Settings & checks** and paste it into *API key*. The screen names the
+   provider as you type, before anything is sent anywhere. Press *Turn the AI
+   on*. Or set `RIPPLE_AI_KEY` before starting, which survives restarts.
+3. A model list appears once the key is accepted. It is **asked of the
+   provider**, not written down here — a list in the code is wrong within
+   months and then offers a model that no longer exists. Ripple picks the one
+   it would choose; change it if you want another.
+4. Press *Test the key* whenever you want proof it still works.
+
+A key from a provider Ripple cannot use is named rather than guessed at: an
+Anthropic key begins `sk-` exactly as an OpenAI one does, and read as OpenAI it
+would be sent to the wrong company and rejected.
 
 The key is treated exactly like the GitHub token: it is held in the running
 process, never written to disk, never logged, and never sent back to the page.
@@ -411,7 +432,8 @@ and redeploys every time you push to `main`.
    request to it and lets Ripple's own routing decide — so no redirect or rewrite
    rules are needed, and none are configured.
 3. Under *Environment Variables*, add whichever of these you want:
-   * `GROQ_API_KEY` — turns the AI on. Leave it out and Ripple still works;
+   * `RIPPLE_AI_KEY` — turns the AI on. An OpenAI, Google Gemini or Groq key;
+     Ripple works out which from the key. Leave it out and Ripple still works;
      every screen simply says the rules wrote it rather than a model.
    * `GITHUB_TOKEN` — lets Ripple read a **private** repository. Public ones
      need no token. Set it here rather than typing it into the screen: each

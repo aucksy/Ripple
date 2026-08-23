@@ -173,9 +173,10 @@ def test_the_dialect_really_changes_what_is_read(clean_home, tmp_path):
 
 
 # ── the whole flow ─────────────────────────────────────────────────────────
-def test_the_whole_flow_from_pasted_text(client):
-    pasted = (SAMPLES / "01-market-code-value-change.eml").read_text(encoding="utf-8")
-    read = client.post("/api/read-text", json={"text": pasted}).json()
+def test_the_whole_flow_from_an_uploaded_email(client):
+    raw = (SAMPLES / "01-market-code-value-change.eml").read_bytes()
+    read = client.post("/api/read-email",
+                       files={"file": ("01.eml", raw, "message/rfc822")}).json()
     assert read["extractedBy"] == "rules"
     assert read["source"] == "C360"
     assert read["pocName"] == "Priya Raman"

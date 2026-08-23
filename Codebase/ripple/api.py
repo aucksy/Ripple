@@ -21,8 +21,9 @@ from dataclasses import replace
 from . import ai, narrative, production, progress, store
 from .build_info import build_info
 from .catalog import Catalog, build_catalog
-from .config import AI_MODELS, Settings, model_label, settings
-from .notification import Notification, extract_by_rules, read_pasted, read_upload
+from . import providers
+from .config import Settings, settings
+from .notification import Notification, extract_by_rules, read_upload
 from .scanner import github as ghub
 from .scanner.lineage import trace
 from .scanner.repo import RepoIndex
@@ -41,7 +42,7 @@ _state: dict[str, Any] = {
     "source": "folder", "conn": None, "token": "", "error": "",
     # The AI key is a secret on exactly the same terms as the GitHub token:
     # held here while the process runs, and nowhere else, ever.
-    "aiKey": "", "aiModel": "",
+    "aiKey": "", "aiModel": "", "aiModels": [],
     # Whether the published-table list in play was typed into the screen rather
     # than set on the host. It changes one thing worth saying out loud: a typed
     # list is gone when this server restarts.
@@ -63,21 +64,41 @@ def _ai_cfg() -> Settings:
     """
     return replace(
         settings,
-        groq_api_key=_state["aiKey"] or settings.groq_api_key,
-        groq_model=_state["aiModel"] or settings.groq_model,
+        ai_key=_state["aiKey"] or settings.ai_key,
+        ai_model=_state["aiModel"] or settings.ai_model,
     )
 
 
 def _ai_facts() -> dict:
     """What the screen may know about the AI -- never the key itself."""
     cfg = _ai_cfg()
+    found = cfg.ai_provider()
     return {
         "available": cfg.ai_available(),
-        "model": cfg.groq_model,
-        "modelLabel": model_label(cfg.groq_model),
+        "model": cfg.ai_model,
+        # The model id IS the label now. A hand-written pretty name for every
+        # model of every provider is a list that rots, and a wrong pretty name
+        # on screen is worse than the real id, which somebody can search for.
+        "modelLabel": (f"{found['label']} - {cfg.ai_model}" if found and cfg.ai_model
+                       else cfg.ai_model or (found["label"] if found else "")),
+        "provider": found["id"] if found else "",
+        "providerLabel": found["label"] if found else "",
         # Where the key came from, so "it stopped working" has an explanation.
-        "keyFrom": "entered" if _state["aiKey"] else ("environment" if settings.groq_api_key else ""),
-        "models": list(AI_MODELS),
+        "keyFrom": "entered" if _state["aiKey"] else ("environment" if settings.ai_key else ""),
+        # The models this key can really use, fetched from the provider when the
+        # key was accepted. Empty until then -- never a guessed list.
+        "models": list(_state.get("aiModels") or []),
+        # So the screen can name the provider as the key is typed, before
+        # anything is sent anywhere. One box, not one box per company.
+        "providers": [
+            {"id": pr["id"], "label": pr["label"], "prefixes": list(pr["prefixes"]),
+             "where": pr["where"]}
+            for pr in providers.PROVIDERS
+        ],
+        "unsupported": [
+            {"label": u["label"], "prefixes": list(u["prefixes"])}
+            for u in providers.KNOWN_BUT_UNSUPPORTED
+        ],
         # A key typed in here dies with the machine, and while it lives anyone
         # else using this copy of Ripple is spending it. The screen says both.
         "keyLasts": not settings.serverless,
@@ -171,11 +192,6 @@ class SaveIn(BaseModel):
 
 class StatusIn(BaseModel):
     status: str
-
-
-class PasteIn(BaseModel):
-    text: str
-    useAI: bool = True
 
 
 class AIKeyIn(BaseModel):
@@ -338,20 +354,60 @@ def ai_connect(payload: "AIKeyIn") -> dict:
     logged, and not returned by this or any other route.
     """
     model = (payload.model or "").strip()
-    if model and model not in {m["id"] for m in AI_MODELS}:
-        raise HTTPException(status_code=400, detail="That is not a model Ripple offers.")
     key = (payload.key or "").strip()
-    if not key and not settings.groq_api_key:
-        raise HTTPException(status_code=400, detail="Enter a Groq API key to turn the AI on.")
+    # A key already typed into this screen counts. Without it, changing only
+    # the model after the AI is already on was refused as "no key".
+    if not key and not _state["aiKey"] and not settings.ai_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Paste an OpenAI, Google Gemini or Groq key to turn the AI on.")
+
+    before = (_state["aiKey"], _state["aiModel"], list(_state.get("aiModels") or []))
     if key:
+        # Which company issued it is worked out from the key, not asked for.
+        if providers.detect(key) is None:
+            maker = providers.name_of_unsupported(key)
+            _state["aiKey"], _state["aiModel"], _state["aiModels"] = before
+            raise HTTPException(status_code=400, detail=(
+                f"That looks like an {maker} key. Ripple reads OpenAI, Google Gemini "
+                "and Groq keys." if maker else
+                "Ripple does not recognise that key. It reads OpenAI keys (sk-...), "
+                "Google Gemini keys (AIza...) and Groq keys (gsk_...)."))
         _state["aiKey"] = key
+        _state["aiModel"] = ""
+        _state["aiModels"] = []
     if model:
         _state["aiModel"] = model
-    # Prove it works now rather than at the worst moment. A key the model
-    # provider refuses is reported straight back, and is not kept.
+
+    # Ask the provider which models this key can actually use. That proves the
+    # key and produces the real list in one call, so nothing on screen is a
+    # remembered model name that may no longer exist.
+    try:
+        found = ai.list_models(_ai_cfg())
+    except ai.AIUnavailable as exc:
+        _state["aiKey"], _state["aiModel"], _state["aiModels"] = before
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    ranked = providers.rank_models(providers.detect(_ai_cfg().ai_key), found)
+    _state["aiModels"] = ranked
+    if not _state["aiModel"]:
+        if not ranked:
+            _state["aiKey"], _state["aiModel"], _state["aiModels"] = before
+            raise HTTPException(
+                status_code=502,
+                detail="That key works, but the provider offers no chat model it can use.")
+        _state["aiModel"] = ranked[0]
+    elif ranked and _state["aiModel"] not in ranked:
+        chosen = _state["aiModel"]
+        _state["aiKey"], _state["aiModel"], _state["aiModels"] = before
+        raise HTTPException(
+            status_code=400,
+            detail=f"That key cannot use {chosen}. Pick one of the models listed.")
+
+    # Prove it answers, now rather than at the worst moment. A key the provider
+    # refuses is reported straight back, and is not kept.
     result = ai.check_key(_ai_cfg())
-    if not result.get("ok") and key:
-        _state["aiKey"] = ""
+    if not result.get("ok"):
+        _state["aiKey"], _state["aiModel"], _state["aiModels"] = before
         raise HTTPException(status_code=502, detail=result.get("reason", "The key did not work."))
     return health()
 
@@ -361,6 +417,7 @@ def ai_forget() -> dict:
     """Forget a key typed into the screen. One set in the environment stays."""
     _state["aiKey"] = ""
     _state["aiModel"] = ""
+    _state["aiModels"] = []
     return health()
 
 
@@ -468,7 +525,7 @@ def _extract(n: Notification, use_ai: bool) -> dict:
     if not out.get("upstream"):
         out["upstream"] = rules.get("upstream", [])
     out["warnings"] = list(out.get("warnings") or []) + _unknown_name_warnings(out, cat)
-    out["aiNote"] = f"Read by {model_label(cfg.groq_model)}. Check it before scanning."
+    out["aiNote"] = f"Read by {cfg.ai_model}. Check it before scanning."
     return out
 
 
@@ -490,8 +547,8 @@ def _too_big(size: int) -> str:
            f"accepts is {settings.max_upload_bytes / 1_000_000:.0f} MB.")
     if settings.serverless:
         msg += (" This copy runs on a serverless host, which refuses anything bigger"
-                " before Ripple sees it. Save the email as .eml and try again, or"
-                " paste the text instead.")
+                " before Ripple sees it. Save the email as .eml, which is far smaller"
+                " than a .msg, or enter the change by hand.")
     return msg
 
 
@@ -509,18 +566,6 @@ async def read_email_file(file: UploadFile = File(...), useAI: str = "true") -> 
         "fromEmail": n.from_email,
         "attachments": n.attachments,
         "kind": n.source_kind,
-    }
-    return out
-
-
-@app.post("/api/read-text")
-def read_email_text(payload: PasteIn) -> dict:
-    n = read_pasted(payload.text)
-    out = _extract(n, payload.useAI)
-    out["emailPreview"] = {
-        "subject": n.subject, "body": n.body[:4000],
-        "fromName": n.from_name, "fromEmail": n.from_email,
-        "attachments": [], "kind": "paste",
     }
     return out
 

@@ -178,7 +178,7 @@ def apply(values: dict[str, Any]) -> None:
     settings.repo_url_template = ""
     # Offline there is no AI and no GitHub, so the engine is told so directly
     # rather than being trusted to leave them alone.
-    settings.groq_api_key = ""
+    settings.ai_key = ""
     settings.github_repo = ""
     settings.github_branch = ""
     settings.github_token = ""

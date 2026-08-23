@@ -30,7 +30,7 @@ from ripple import narrative, production, progress, store          # noqa: E402
 from ripple.build_info import build_info                           # noqa: E402
 from ripple.catalog import Catalog, build_catalog                  # noqa: E402
 from ripple.config import settings                                 # noqa: E402
-from ripple.notification import extract_by_rules, read_pasted, read_upload  # noqa: E402
+from ripple.notification import extract_by_rules, read_upload  # noqa: E402
 from ripple.scanner.lineage import trace                           # noqa: E402
 from ripple.scanner.repo import RepoIndex                          # noqa: E402
 from ripple.scanner.sqlread import ParsedRepo, parse_repo          # noqa: E402
@@ -176,10 +176,6 @@ class SaveIn(BaseModel):
 
 class StatusIn(BaseModel):
     status: str
-
-
-class PasteIn(BaseModel):
-    text: str
 
 
 class PathIn(BaseModel):
@@ -368,18 +364,6 @@ async def read_email_file(file: UploadFile = File(...)) -> dict:
         "subject": n.subject, "body": n.body[:4000],
         "fromName": n.from_name, "fromEmail": n.from_email,
         "attachments": n.attachments, "kind": n.source_kind,
-    }
-    return out
-
-
-@app.post("/api/read-text")
-def read_email_text(payload: PasteIn) -> dict:
-    n = read_pasted(payload.text)
-    out = _extract(n)
-    out["emailPreview"] = {
-        "subject": n.subject, "body": n.body[:4000],
-        "fromName": n.from_name, "fromEmail": n.from_email,
-        "attachments": [], "kind": "paste",
     }
     return out
 

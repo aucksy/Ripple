@@ -20,7 +20,7 @@ def main() -> None:
     print("\n  Ripple")
     print(f"  repository : {settings.repo_path}")
     print(f"  SQL read as: {settings.sql_dialect or 'generic'}")
-    print(f"  AI         : {'on (' + settings.groq_model + ')' if settings.ai_available() else 'off - rules only'}")
+    print(f"  AI         : {'on (' + (settings.ai_model or 'model chosen on connect') + ')' if settings.ai_available() else 'off - rules only'}")
     if not settings.repo_path.exists():
         print(f"\n  WARNING: the repository folder does not exist: {settings.repo_path}")
     print(f"\n  open http://localhost:{port}\n")

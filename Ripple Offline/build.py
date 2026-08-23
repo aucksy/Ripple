@@ -34,14 +34,19 @@ from ripple_offline.engine import SHARED_DIR, SHARED_ENGINE          # noqa: E40
 
 # The one engine, again: the stamp writer lives beside the code it stamps.
 sys.path.insert(0, str(SHARED_DIR.parent))
-from ripple.build_info import write_stamp                            # noqa: E402
+from ripple.build_info import VERSION, write_stamp                   # noqa: E402
 
 APP_NAME = "Ripple Offline"
 WORK = HERE / "build"
 DIST = HERE / "dist"
-# Committed to the repository, so it has to be rebuilt every time or it starts
-# telling somebody something the code no longer does.
-ZIP = HERE / "dist.zip"
+# The download, named for the version inside it. It used to be a file called
+# dist.zip committed straight into the repository, which meant two things: no
+# download could ever be told apart from another, and git kept every 22 MB
+# version of it for ever -- forty of them, which was the whole repository.
+#
+# It is written into dist/, which is not tracked, and published to the releases
+# page instead. Only the latest one is kept.
+ZIP = DIST / f"{APP_NAME.replace(' ', '-')}-v{VERSION}.zip"
 WEB_OUT = WORK / "web"
 ICON = HERE / "assets" / "ripple.ico"
 SAMPLES = SHARED_DIR / "samples"
@@ -258,18 +263,17 @@ def main() -> int:
     say(f"for IT     : {note.name} - the page to send if the program is blocked")
 
     # ── the zip that gets handed to somebody ──────────────────────────────
-    # dist.zip is committed to the repository, and it used to be made by hand.
-    # It went four commits out of date without anything saying so, which is the
-    # worst possible state for a file whose whole job is to BE the program:
-    # somebody downloads it, gets a build from before the fixes, and every
-    # answer it gives is one this code no longer gives. Rebuilt here so the zip
-    # beside the source can never disagree with the source.
-    say("zip        : packing dist.zip")
+    # Made here, every time, so the download can never disagree with the source
+    # it was built from. It went four commits out of date once without anything
+    # saying so, which is the worst possible state for a file whose whole job is
+    # to BE the program: somebody unpacks it, gets a build from before the
+    # fixes, and every answer it gives is one this code no longer gives.
+    say(f"zip        : packing {ZIP.name}")
     # Anything a previous run of the program left in that folder goes into the
-    # zip with it, and this zip is committed to a public repository. The
-    # settings file names a real folder on a real machine and the history
-    # database holds real analyses -- neither belongs in a download, and neither
-    # belongs to whoever unpacks it either: they should start with nothing set.
+    # zip with it, and this zip is handed to other people. The settings file
+    # names a real folder on a real machine and the history database holds real
+    # analyses -- neither belongs in a download, and neither belongs to whoever
+    # unpacks it either: they should start with nothing set.
     for leftover in ("ripple-settings.json", "ripple-history.db", "ripple-log.txt"):
         stray = out / leftover
         if stray.exists():

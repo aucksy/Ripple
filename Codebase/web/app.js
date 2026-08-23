@@ -490,7 +490,7 @@ function step1(root) {
   x(root, 'title').textContent = S.mode === 'manual' ? 'Enter the change by hand' : 'New impact notification';
   x(root, 'sub').textContent = S.mode === 'manual'
     ? 'No notification email? Type the upstream table and attributes yourself.'
-    : 'Upload the notification, or paste its text. Nothing is scanned until you confirm.';
+    : 'Upload the notification file. Nothing is scanned until you confirm.';
   $$('[data-mode]', root).forEach(b => {
     b.className = 'pill' + (b.dataset.mode === S.mode ? ' on' : '');
     b.onclick = () => { S.mode = b.dataset.mode; render(); };
@@ -514,17 +514,6 @@ function step1(root) {
       if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
     };
     file.onchange = () => file.files[0] && upload(file.files[0]);
-    $('#doPaste', root).onclick = () => {
-      const text = $('#paste', root).value.trim();
-      if (!text) return;
-      run(async () => {
-        const out = await api('/api/read-text', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, useAI: true }),
-        });
-        acceptExtract(out);
-      }, 'Reading the pasted notification…');
-    };
     return;
   }
 
@@ -646,7 +635,8 @@ function upload(f) {
       + `${Math.round(cap / 1e6)} MB.`
       + (S.health?.serverless
         ? ' It is running on a serverless host, which refuses anything bigger before Ripple'
-          + ' sees it. Save the email as .eml, or paste the text into the box below instead.'
+          + ' sees it. Save the email as .eml, which is far smaller than a .msg, or enter the'
+          + ' change by hand on the Enter manually tab.'
         : ''));
     return;
   }
@@ -2182,7 +2172,7 @@ function settingsView(root) {
     el('span', { className: 'mono', textContent: 'RIPPLE_REPO' }), ', ',
     el('span', { className: 'mono', textContent: 'RIPPLE_SQL_DIALECT' }), ', ',
     el('span', { className: 'mono', textContent: 'RIPPLE_PROD_TABLES' }), ', ',
-    el('span', { className: 'mono', textContent: 'GROQ_API_KEY' }), '. See the README.'));
+    el('span', { className: 'mono', textContent: 'RIPPLE_AI_KEY' }), '. See the README.'));
 
   grid.append(left, el('div', {}, aiCard(h), buildCard(h)));
   root.append(grid);
@@ -2191,6 +2181,34 @@ function settingsView(root) {
 /* Turning the AI on from the screen. Same rules as the GitHub token: the key
    goes to the server, is held in memory only, and never comes back to this
    page — so this form can show whether one is set, never what it is. */
+/* Which company issued a key, worked out from the key itself.
+
+   One box, not one box per provider. Somebody pasting a key should not have to
+   tell Ripple who issued it — the key says so in its first few characters, and
+   asking is one more thing to get wrong. The prefixes come from the server, so
+   there is one list of them and this screen cannot drift from it.
+
+   Nothing is sent anywhere while this runs: it reads the box as it is typed. */
+function whoIssued(h, key) {
+  key = (key || '').trim();
+  if (!key) return null;
+  for (const u of (h.ai.unsupported || [])) {
+    if (u.prefixes.some(px => key.startsWith(px))) return { unsupported: u.label };
+  }
+  let best = null, longest = -1;
+  for (const pr of (h.ai.providers || [])) {
+    for (const px of pr.prefixes) {
+      if (key.startsWith(px) && px.length > longest) { best = pr; longest = px.length; }
+    }
+  }
+  return best;
+}
+
+/* "a OpenAI key" reads as a typo on the one screen that has to look careful. */
+function anOrA(word) {
+  return /^[AEIOU]/i.test(word || '') ? 'an' : 'a';
+}
+
 function aiCard(h) {
   const card = el('div', { className: 'card pad lg' });
   const on = h.ai.available;
@@ -2205,35 +2223,63 @@ function aiCard(h) {
         : 'The key was typed in here. Only the notification text and the findings are sent — never your source code.')
       : 'Ripple is running on rules alone. Everything works; the wording is just plainer.'));
 
-  // Model first: it applies whether the key is typed in or already set.
+  // ── the key ─────────────────────────────────────────────────────────────
   card.append(el('label', { className: 'lbl', style: 'display:block;margin:18px 0 7px',
-    textContent: 'Model' }));
-  const sel = el('select', { className: 'statussel', style: 'width:100%;padding:11px 12px' });
-  (h.ai.models || []).forEach(m => sel.append(el('option', {
-    value: m.id, textContent: m.label, selected: m.id === h.ai.model })));
-  // The description goes underneath rather than inside the dropdown, which
-  // would cut it off at whatever width the box happens to be.
-  const why = el('div', { className: 'small faint', style: 'margin-top:6px' });
-  const showWhy = () => {
-    const m = (h.ai.models || []).find(x => x.id === sel.value);
-    why.textContent = m ? m.note : '';
-  };
-  sel.onchange = showWhy;
-  showWhy();
-  card.append(sel, why);
-
-  card.append(el('label', { className: 'lbl', style: 'display:block;margin:18px 0 7px',
-    textContent: fromEnv ? 'Use a different key instead' : 'Groq API key' }));
-  const key = el('input', { type: 'password', autocomplete: 'off', placeholder: 'gsk_…',
-    style: 'padding:12px 14px' });
+    textContent: fromEnv ? 'Use a different key instead' : 'API key' }));
+  const key = el('input', { type: 'password', autocomplete: 'off',
+    placeholder: 'sk-…   AIza…   gsk_…', style: 'padding:12px 14px' });
   card.append(key);
-  card.append(el('div', { className: 'small faint', style: 'margin-top:6px' },
-    'Create one free at console.groq.com. Ripple only ever reads with it.'));
 
-  // The answer is kept in state, not written straight into the page. Every
-  // action here ends in a redraw, which would throw away anything appended to
-  // this card -- which is why pressing a button used to look like it did
-  // nothing at all.
+  const who = el('div', { className: 'small', style: 'margin-top:7px;line-height:1.5' });
+  const names = (h.ai.providers || []).map(pr => pr.label);
+  const blank = names.length
+    ? `Paste a key from ${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}. `
+      + 'Ripple works out which from the key itself.'
+    : '';
+  const sayWho = () => {
+    const found = whoIssued(h, key.value);
+    who.className = 'small' + (found && found.unsupported ? ' warn' : ' faint');
+    if (!found) {
+      who.textContent = key.value.trim()
+        ? 'Ripple does not recognise that key. It reads OpenAI, Google Gemini and Groq keys.'
+        : blank;
+      return;
+    }
+    if (found.unsupported) {
+      who.textContent = `That is ${anOrA(found.unsupported)} ${found.unsupported} key. `
+        + 'Ripple cannot use one — it reads OpenAI, Google Gemini and Groq keys.';
+      return;
+    }
+    who.textContent = `That is ${anOrA(found.label)} ${found.label} key. `
+      + `Get one at ${found.where}.`;
+  };
+  key.oninput = sayWho;
+  sayWho();
+  card.append(who);
+
+  // ── the model ───────────────────────────────────────────────────────────
+  // Only after a key has been accepted, because the list is the provider's own
+  // answer to "what can this key use" rather than a list written down here. A
+  // written-down list is wrong within months, and then it offers a model that
+  // no longer exists to somebody in the middle of reading an email.
+  let sel = null;
+  if ((h.ai.models || []).length) {
+    card.append(el('label', { className: 'lbl', style: 'display:block;margin:18px 0 7px',
+      textContent: 'Model' }));
+    sel = el('select', { className: 'statussel', style: 'width:100%;padding:11px 12px' });
+    h.ai.models.forEach(m => sel.append(el('option', {
+      value: m, textContent: m, selected: m === h.ai.model })));
+    card.append(sel);
+    card.append(el('div', { className: 'small faint', style: 'margin-top:6px;line-height:1.5' },
+      `${h.ai.models.length} model${h.ai.models.length === 1 ? '' : 's'} this key can use, `
+      + `asked of ${h.ai.providerLabel} rather than remembered. The one at the top is the `
+      + 'one Ripple would pick.'));
+  } else if (!on) {
+    card.append(el('div', { className: 'small faint', style: 'margin-top:14px;line-height:1.5',
+      textContent: 'The model list appears once a key is accepted — Ripple asks the provider '
+        + 'which models that key can actually use.' }));
+  }
+
   const out = el('div', { style: 'margin-top:14px' });
   if (S.aiMsg) {
     out.append(el('div', { className: 'note ' + (S.aiMsg.ok ? 'good' : 'warn'), textContent: S.aiMsg.text }));
@@ -2246,7 +2292,9 @@ function aiCard(h) {
     try {
       S.health = await api('/api/ai/connect', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: key.value, model: sel.value }),
+        // No model on a brand-new key: the provider has not been asked yet, so
+        // Ripple takes whichever it recommends and shows the list afterwards.
+        body: JSON.stringify({ key: key.value, model: sel ? sel.value : '' }),
       });
       key.value = '';                    // the server has it; keep no copy here
       say(true, `AI is on. The model answered, using ${S.health.ai.modelLabel}.`);

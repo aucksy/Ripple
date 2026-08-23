@@ -12,3 +12,7 @@ ripple-log.txt
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# The download is named for its version and published to the releases page.
+# Never committed: git keeps every version for ever, and this one is 22 MB.
+*.zip

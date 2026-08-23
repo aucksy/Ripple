@@ -1000,6 +1000,32 @@ For each parsed statement build a Statement with:
            the parser has already failed, so it costs nothing on the statements
            that read normally.
 
+           TABLE FUNCTIONS. A BigQuery TABLE FUNCTION is a table as far as
+           lineage is concerned — it is named, it is read in a FROM clause, and
+           every column of its body travels through it:
+
+             CREATE OR REPLACE TABLE FUNCTION ds.recent(d STRING) AS (
+               SELECT cm13 FROM customer_demographics WHERE dt = d)
+             CREATE OR REPLACE TABLE published.summary AS
+               SELECT cm13 FROM ds.recent('2026-01-01')
+
+           BOTH halves are invisible to a naive reader. The definition parses as
+           a function, not a table, so it publishes nothing; and the call parses
+           as a function call whose table node carries NO NAME AT ALL, so it
+           reads nothing. The chain breaks in the middle and the published table
+           is never mentioned.
+
+           Take the name off the function signature for the target, and off the
+           call for the source. Two traps: a scalar UDF parses as the very same
+           node with the very same kind, so tell them apart by their BODY — a
+           table function's is a SELECT, a scalar one's is an expression, and
+           getting this wrong turns every helper in the repository into a table.
+           And BigQuery's own built-in table functions (EXTERNAL_QUERY, APPENDS,
+           CHANGES, GAP_FILL, VECTOR_SEARCH and friends) WRAP a table rather
+           than being one; the table they wrap is parsed separately and found
+           anyway, so taking the wrapper's name too only invents a table nobody
+           has. Keep a short list of those and skip them.
+
            BIGQUERY WILDCARD TABLES. Date-sharded tables are ordinary, and the
            only way to read one is a wildcard:
 
@@ -1531,7 +1557,15 @@ POST /api/production/read       read a pasted list WITHOUT saving it, and
                                 this is what the settings box calls as it is
                                 typed into
 POST /api/production            use this list from now on
-POST /api/read-email  (file upload)   POST /api/read-text  (pasted)
+POST /api/read-email  (file upload — .msg, .eml or a plain text file)
+
+There is no route that takes typed-in email text. There was one, and it went:
+a box somebody pastes an email into produces a notification with no envelope —
+no From, no Subject, nothing but words — so the source system and the contact
+came back blank far more often than from the same email uploaded as a file. Two
+ways in that behave differently is one too many. Upload the file, or use the
+manual tab. The function that reads message text STAYS, because a plain .txt
+upload is read with it.
 POST /api/scan        {upstream[], changeKind} -> the scan result JSON
 POST /api/summary     {scan, vals} -> {summary, reply}
 POST /api/history     GET /api/history     GET /api/history/{id}
@@ -1710,7 +1744,9 @@ there is. Never animate anything that is not really happening.
 
 STEP 1 — the notification.
 Two modes on a toggle: from email, or entered by hand.
-Email mode: a drop zone that also opens a file picker, and a paste box.
+Email mode: a drop zone that also opens a file picker. No paste box — see the
+routes above for why — and beside the drop zone a short card pointing at the
+manual tab, so "I have no file" has a visible answer rather than a dead end.
 Check the file size in the browser as well as on the server, and say what the
 real ceiling is. Nothing is scanned until the person confirms — say so on
 screen.
@@ -1866,6 +1902,41 @@ Build it as one function used by the whole app:
 The rest of the settings screen: what is connected, and a note explaining that
 this one setting decides whether "no production table is impacted" is a result
 or an accident.
+
+THE AI KEY BOX. Three providers — OpenAI, Google Gemini and Groq — and ONE
+box, not three. Which company issued a key is worked out from the key itself,
+from its first few characters. Asking is one more thing to get wrong, and a key
+sent to the wrong company comes back rejected, which reads as "your key is bad"
+when it is not.
+
+All three speak the same OpenAI-shaped POST /chat/completions, so there is one
+code path and only the address, the key and the model change. Google's own
+OpenAI-compatible endpoint is at
+https://generativelanguage.googleapis.com/v1beta/openai — confirmed live with a
+deliberately wrong key rather than taken from documentation.
+
+Four things this must get right:
+
+* An Anthropic key begins "sk-" exactly as an OpenAI one does. Match the
+  LONGEST prefix, and keep a list of keys you recognise but cannot use so the
+  screen can say "that is an Anthropic key" instead of "rejected".
+* Google answers a bad key with 400 and "Please pass a valid API key", not 401.
+  Read as a bad request that sends somebody to check their prompt rather than
+  their key.
+* DO NOT WRITE A LIST OF MODEL NAMES INTO THE CODE. It is wrong within months
+  and then offers a model that no longer exists, discovered at the moment
+  somebody is trying to read an email. Ask the provider — GET /models with the
+  key — which proves the key and produces the real list in the same call. Keep
+  a preference ORDER for choosing a default, filter out the models that cannot
+  hold a conversation (embeddings, audio, images), and keep every other one:
+  hiding a model somebody is paying for because you have not heard of it is the
+  worse mistake.
+* Not every provider accepts every optional field of an OpenAI-shaped request.
+  If one refuses response_format, send the request again without it rather than
+  losing the whole call — the prompt asks for JSON in words as well.
+
+The screen reads the prefixes from the server so there is ONE list of them, and
+names the provider as the key is typed, before anything is sent anywhere.
 
 Also on the settings screen: a card saying WHICH BUILD IS RUNNING, from the
 `build` block of /api/health — the version, the commit if there is one, and the
@@ -2091,6 +2162,19 @@ produces a program that builds cleanly and then misbehaves:
     run time, which PyInstaller cannot see by reading the code. Without this
     they are silently left out and the program fails the first time it reads
     any SQL -- long after the build said it succeeded.
+
+NAME WHAT YOU PRODUCE FOR ITS VERSION. One version number, written down in
+exactly one place in the code, that the build script reads. The zip is called
+Ripple-Offline-v1.1.0.zip, the release is tagged v1.1.0, and the settings screen
+says Version 1.1.0 — three things that can never disagree because they are one
+thing. A file called dist.zip is the same name for ever, so nobody can tell
+which build they downloaded.
+
+And do not commit it. Git keeps every version of every file for ever, which is
+the exact opposite of "keep only the latest": forty builds of a 22 MB zip WERE
+the whole repository, and a fresh clone paid for all forty. Write it into the
+ignored dist/ folder and publish it to the releases page, keeping only the
+newest one there.
 
 Have build.py WRITE THE BUILD STAMP into the packaged folder — a small JSON
 file holding the version, the commit if git can be asked, and the moment it was

@@ -91,8 +91,10 @@ def test_the_whole_flow_runs_with_nothing_reaching_out(blocked, clean_home):
 
     assert client.get("/api/health").json()["repo"]["files"] > 15
 
-    pasted = (SAMPLES / "01-market-code-value-change.eml").read_text(encoding="utf-8")
-    read = client.post("/api/read-text", json={"text": pasted}).json()
+    # Uploading the file is the only way in now -- the paste box is gone.
+    first = (SAMPLES / "01-market-code-value-change.eml").read_bytes()
+    read = client.post("/api/read-email",
+                       files={"file": ("01.eml", first, "message/rfc822")}).json()
     assert read["upstream"]
 
     raw = (SAMPLES / "02-timestamp-decommission.eml").read_bytes()

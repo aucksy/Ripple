@@ -9,6 +9,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import providers
 from .production import (           # noqa: F401  (re-exported for older callers)
     DEFAULT_PRODUCTION,
     DEFAULT_TEXT as DEFAULT_PRODUCTION_TEXT,
@@ -33,47 +34,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # is matched in full, so PROD_* works too and * on its own means every table.
 # See ripple/production.py for how a paste is read.
 
-# The models Ripple offers on the Settings screen. Only Groq's production
-# models are listed -- preview ones get withdrawn without notice, and a model
-# that disappears mid-demo is worse than one that is merely adequate.
+# Which model Ripple asks, when a key has been given.
+#
+# There is no list of model names in this file any more. A hand-typed list is
+# wrong within months, and then it tells somebody a model exists that does not
+# -- which they discover at the moment they are trying to read an email. The
+# list is fetched from whichever provider issued the key, which produces the
+# real names and proves the key in the same call. See ripple/providers.py.
 #
 # The job is narrow: pull table and attribute names out of a forwarded, badly
 # quoted email and return strict JSON, then write a few careful sentences from
-# findings that are already worked out. That rewards instruction-following, not
-# breadth -- which is why the largest model is the default and the fastest one
-# carries a warning rather than being hidden.
-AI_MODELS: tuple[dict[str, str], ...] = (
-    {
-        "id": "openai/gpt-oss-120b",
-        "label": "GPT-OSS 120B",
-        "note": "Best at reading a messy forwarded email. Recommended.",
-    },
-    {
-        "id": "llama-3.3-70b-versatile",
-        "label": "Llama 3.3 70B",
-        "note": "A solid all-rounder, and a little quicker.",
-    },
-    {
-        "id": "openai/gpt-oss-20b",
-        "label": "GPT-OSS 20B",
-        "note": "Lighter and faster. Fine for tidy notifications.",
-    },
-    {
-        "id": "llama-3.1-8b-instant",
-        "label": "Llama 3.1 8B",
-        "note": "Fastest. Misses fields in awkward emails -- check its answers.",
-    },
-)
-
-DEFAULT_AI_MODEL = AI_MODELS[0]["id"]
-
-
-def model_label(model_id: str) -> str:
-    """The friendly name for a model id, or the id itself if it is not ours."""
-    for m in AI_MODELS:
-        if m["id"] == model_id:
-            return m["label"]
-    return model_id
+# findings that are already worked out. That rewards instruction-following
+# rather than breadth, so the preference order in providers.py leans towards
+# the larger models, and any model the provider offers can still be chosen.
 
 
 def _env(name: str, default: str) -> str:
@@ -206,11 +179,21 @@ class Settings:
     )
 
     # ── AI (entirely optional) ─────────────────────────────────────────────
-    groq_api_key: str = field(default_factory=lambda: _env("GROQ_API_KEY", ""))
-    groq_model: str = field(default_factory=lambda: _env("GROQ_MODEL", DEFAULT_AI_MODEL))
-    groq_base_url: str = field(
-        default_factory=lambda: _env("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
-    )
+    # One key, whoever issued it. Which provider it belongs to is worked out
+    # from the key itself rather than asked for -- see ripple/providers.py.
+    #
+    # The old GROQ_* names are still read, because they are set on a running
+    # host and silently ignoring them would turn the AI off without a word.
+    ai_key: str = field(default_factory=lambda: _env_any(
+        ("RIPPLE_AI_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+         "GOOGLE_API_KEY", "GROQ_API_KEY")))
+    # Empty means "whichever the provider recommends", worked out on connect
+    # from the list it actually returns.
+    ai_model: str = field(default_factory=lambda: _env_any(("RIPPLE_AI_MODEL", "GROQ_MODEL")))
+    # Only for a proxy or a provider Ripple does not know. Left empty, the
+    # address comes from whichever provider issued the key.
+    ai_base_url: str = field(default_factory=lambda: _env_any(
+        ("RIPPLE_AI_BASE_URL", "GROQ_BASE_URL")))
     # How long to wait for the model. Writing the summary makes two calls one
     # after the other, so on a serverless host both have to finish inside the
     # 60-second cap -- otherwise the page dies with no explanation instead of
@@ -225,7 +208,18 @@ class Settings:
     db_path: Path = field(default_factory=lambda: Path(_default_db()))
 
     def ai_available(self) -> bool:
-        return bool(self.groq_api_key)
+        return bool(self.ai_key)
+
+    def ai_provider(self) -> dict | None:
+        """The company that issued this key, worked out from the key itself."""
+        return providers.detect(self.ai_key)
+
+    def ai_endpoint(self) -> str:
+        """Where to send the request. An explicit setting always wins."""
+        if self.ai_base_url:
+            return self.ai_base_url.rstrip("/")
+        found = self.ai_provider()
+        return found["base_url"] if found else ""
 
     # ── the published-table rule ───────────────────────────────────────────
     def production(self) -> ProductionRule:

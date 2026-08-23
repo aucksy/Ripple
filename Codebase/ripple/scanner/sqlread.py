@@ -187,13 +187,86 @@ def same_table(a: str, b: str) -> bool:
     return not (left and right and left != right)
 
 
+# ── table-valued functions ─────────────────────────────────────────────────
+# A BigQuery TABLE FUNCTION is a table as far as lineage is concerned. It is
+# named, it is read in a FROM clause, and every column of its body travels
+# through it::
+#
+#     CREATE OR REPLACE TABLE FUNCTION ds.recent_customers(d STRING) AS (
+#       SELECT cm13, market_code FROM customer_demographics WHERE dt = d)
+#
+#     CREATE OR REPLACE TABLE published.summary AS
+#     SELECT cm13 FROM ds.recent_customers('2026-01-01')
+#
+# Both halves were invisible. The definition parses as a function rather than a
+# table, so it published nothing; and the call parses as a function call in the
+# FROM clause, whose table node carries no name at all, so it read nothing. The
+# chain broke in the middle and the published table was never mentioned.
+#
+# Some things written in a FROM clause that look the same really are not tables.
+# BigQuery's own built-in table functions wrap a table rather than being one,
+# and the table they wrap is parsed as its own node and found anyway -- so
+# taking the wrapper's name as well would only invent a table nobody has.
+_NOT_A_TABLE = {
+    "EXTERNAL_QUERY", "APPENDS", "CHANGES", "GAP_FILL", "RANGE_SESSIONIZE",
+    "TABLE_DATE_RANGE", "TABLE_QUERY", "OBJECT_METADATA", "VECTOR_SEARCH",
+    "GENERATE_ARRAY", "GENERATE_DATE_ARRAY", "GENERATE_TIMESTAMP_ARRAY",
+    "SEARCH_INDEX_STATUS", "SESSIONIZE",
+}
+
+
+def _called_function_name(t: exp.Table) -> str:
+    """The table function this FROM clause is calling, or '' if it is not one."""
+    inner = t.this
+    if not isinstance(inner, exp.Anonymous):
+        return ""
+    name = inner.name or ""
+    if not name or name.upper() in _NOT_A_TABLE:
+        return ""
+    return name
+
+
 def _qualify(t: exp.Table) -> str:
     """One table node as ``dataset.name``, or just ``name`` when unqualified."""
     name = t.name
     if not name:
-        return ""
+        # A table function call. Backticked in full, the whole path arrives as
+        # one string -- `prj.ds.recent_customers` -- so it is cut down the same
+        # way any other name written in full is.
+        called = _called_function_name(t)
+        if not called:
+            return ""
+        if "." in called:
+            return canonical(called)
+        name = called
     db = t.text("db")
     return f"{db}.{name}" if db else name
+
+
+def _bare(sql: str) -> str:
+    """A name as written, with whatever quoting the dialect put round it taken off."""
+    return sql.replace("`", "").replace('"', "").strip()
+
+
+def _table_function_target(stmt: exp.Expression) -> str:
+    """The name a ``CREATE TABLE FUNCTION`` publishes, or ''.
+
+    A scalar UDF parses identically -- same node, same kind -- and must NOT be
+    treated as a table, or every helper function in the repository becomes one.
+    The difference is what it returns: a table function's body is a SELECT, and
+    a scalar function's is an expression.
+    """
+    if not isinstance(stmt, exp.Create):
+        return ""
+    if str(stmt.args.get("kind") or "").upper() != "FUNCTION":
+        return ""
+    body = stmt.args.get("expression")
+    if body is None or body.find(exp.Select) is None:
+        return ""
+    named = getattr(stmt.this, "this", None)
+    if named is None:
+        return ""
+    return canonical(_bare(named.sql()))
 
 
 def _forget_templated_datasets(stmt: exp.Expression, holes: set[str]) -> None:
@@ -456,6 +529,12 @@ def _target_of(stmt: exp.Expression) -> str | None:
     # attribute that is being decommissioned stops working on the day it goes,
     # and the table it prunes quietly fills up instead. Naming the table they
     # act on is what lets that be reported at all.
+    # A CREATE TABLE FUNCTION publishes a name that other statements read in a
+    # FROM clause. Checked first because it is also an exp.Create, and its
+    # ``this`` is a function signature that _table_name finds no table in.
+    tvf = _table_function_target(stmt)
+    if tvf:
+        return tvf
     if isinstance(stmt, (exp.Create, exp.Insert, exp.Merge, exp.Delete, exp.Update)):
         return _table_name(stmt.this)
     return None

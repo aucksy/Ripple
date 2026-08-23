@@ -31,10 +31,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# The name of the release. Changed by hand, when there is something worth
-# calling it. On its own it says almost nothing -- two builds a month apart
-# carry the same one -- which is why it is never shown without the rest.
-VERSION = "1.0"
+# The one version number, and the only place it is written down. The build
+# script reads it from here to name what it produces, so the filename, the
+# release tag and the line on the settings screen can never disagree.
+#
+# Bump it whenever behaviour changes. Three parts: break.feature.fix.
+VERSION = "1.1.0"
 
 # Written into the packaged folder by the offline build script. Kept as a
 # constant because two files have to agree on the name.
