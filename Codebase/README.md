@@ -527,7 +527,9 @@ installing tooling is difficult.
 
 There is a second edition, in `../Ripple Offline`, for a locked-down machine
 with no network at all: one folder to copy across, double-click, no Python and
-no install. The repository folder and the SQL dialect are asked for on screen
+no install. Download it from
+**<https://github.com/aucksy/Ripple/releases/latest>** — the version is in the
+filename, and only the newest release is kept. The repository folder and the SQL dialect are asked for on screen
 instead of being environment variables, and the GitHub source and the AI key
 form are not merely switched off — they are deleted from the build, along with
 the HTTP client they would need.

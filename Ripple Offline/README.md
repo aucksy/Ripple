@@ -6,6 +6,21 @@ repository that is already on that machine.
 A colleague copies one folder across, double-clicks it, and uses it. No Python,
 no `pip install`, no network, no terminal.
 
+## Get it
+
+**<https://github.com/aucksy/Ripple/releases/latest>** — download
+`Ripple-Offline-vX.Y.Z.zip`, unpack it anywhere, double-click
+`Ripple Offline.exe`.
+
+The version is in the filename on purpose, and it is the same version the
+settings screen shows once it is running, so a copy can always be told from
+another one. Only the newest release is kept.
+
+The zip is **not** in this repository. Git keeps every version of every file
+for ever, and forty builds of a 22 MB download were the whole repository — a
+fresh clone paid for all forty. It is built by `python build.py` into `dist/`,
+which is not tracked, and published to the releases page from there.
+
 ---
 
 ## What it is
