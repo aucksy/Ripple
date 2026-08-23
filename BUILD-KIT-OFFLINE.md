@@ -845,7 +845,28 @@ Rules that matter, each for a reason:
    swallow the statement it sits in and say nothing — measured at
    couldNotRead 0, no warning of any kind, risk none.
 
-6. FILE TYPES YOU DO NOT OPEN. Count them. When a file is passed over because
+6. SQL THAT IS NOT IN A .sql FILE, AND CONFIG THAT IS NOT SQL AT ALL.
+   .yaml, .yml and .xml are on the read list, and handing one of them to a SQL
+   parser whole can only ever fail. Two things went wrong at once:
+     * An Airflow YAML holding "sql: |", an Oozie workflow.xml holding
+       "<script>", and a shell script running "bq query <<EOF" each held the
+       whole CREATE that builds a published table, and every one of them gave
+       risk unknown and no lineage at all.
+     * Every ordinary Kubernetes YAML in the repository landed on the "check by
+       hand" list. Measured: twelve config files and one genuinely broken query
+       gave couldNotRead 13, sorted alphabetically, with the real failure last.
+       That list is the one place Ripple admits what it missed, and flooding it
+       is how a real miss stops being seen.
+   So: mine the SQL out (see statements_for below), and when nothing comes out
+   of a markup file, say NOTHING about it — no statements, and no entry on the
+   check-by-hand list. The guard on that silence is looks_like_unread_sql: a
+   file with SELECT or CREATE written in it that yielded no block IS reported,
+   because that is a query Ripple failed to mine rather than a config file.
+   sql_file_refs also has to read markup, where the filename carries no quotes:
+   "sql: queries/load_final.sql" is an ordinary Airflow shape and the
+   quoted-string rule that covers .py files found nothing in it at all.
+
+7. FILE TYPES YOU DO NOT OPEN. Count them. When a file is passed over because
    its extension is not on the read list, add one to unknown_ext[ext]. The walk
    used to have a bare "continue" with no counter, so a repository whose
    pipeline is written in .ipynb, .tf or .json files reported "indexed False,
@@ -863,8 +884,28 @@ Also in this file:
                                   strings in .py .scala .java .sh files,
                                   returning (text, 0-based line offset) so a
                                   finding still points at a real line
-  statements_for(f)               the above for program files, the whole text
-                                  for .sql files
+  extract_markup_sql(f)           SQL taken out of a .yaml, .yml or .xml
+                                  file, with the line each block starts on.
+                                  YAML: a key whose name contains sql, query,
+                                  script or statement, holding a block scalar
+                                  (| or >) or a one-line value that really is a
+                                  query. Take the block's own indent off, and
+                                  measure from the KEY's column rather than the
+                                  line's, so "- sql: |" works. XML: the text of
+                                  an element whose tag contains script, query,
+                                  sql, statement or command, plus any CDATA
+                                  section, with the five XML escapes undone
+                                  (&amp; last, or &amp;lt; decodes twice). If
+                                  nothing comes out and the file's first line of
+                                  code is a SQL keyword, treat the whole file as
+                                  SQL.
+  _heredoc_blocks(text)           SQL fed to a command through a shell heredoc:
+                                  <<EOF, <<-EOF, <<'EOF', <<"EOF", ending at a
+                                  line whose only content is the tag.
+  statements_for(f)               extract_markup_sql for .yaml .yml .xml;
+                                  extract_sql_blocks — plus heredocs, for .sh —
+                                  for .py .scala .java .sh; the whole text for
+                                  .sql, .sqlx, .ddl and .hql.
   sql_file_refs(f)                every "something.sql" string a program
                                   names, with its line. A DAG that runs the
                                   most important query in the pipeline used to
@@ -882,6 +923,24 @@ Also in this file:
                                   none could be extracted — the shape where a
                                   statement is built by adding short strings
                                   together and never exists as one thing.
+
+TWO MORE THINGS ABOUT MINING SQL OUT OF A FILE
+
+  A quoted YAML value may run over several lines. Taking only the key's own line
+  gave back "CREATE OR REPLACE TABLE final_published AS" with no SELECT -- half
+  a statement, which parses, and was therefore counted as READ. When the value
+  starts with a quote that does not close on that line, gather following lines
+  until it does, and fold them into one. If the quote never closes, give back
+  the first line only rather than swallowing the file.
+
+  looks_like_unread_sql COUNTS, it does not ask "were there any blocks". An
+  Airflow YAML, an Oozie workflow and a shell job normally hold several tasks of
+  DIFFERENT kinds, and Ripple knows how to mine some of them. One recognised
+  `sql:` block used to buy silence for the `bash_command:` beside it -- measured
+  at couldNotRead 0 with the coverage card reporting no gaps, and deleting the
+  recognised block from that same file put it straight back on the check-by-hand
+  list. So: count the SQL-statement starts in the whole file, count them in what
+  was mined, and report the file when the second number is smaller.
 
 Write tests/test_repo.py with unittest, not pytest. There is no tmp_path
 fixture available: build the temporary repository yourself, either with
@@ -1015,6 +1074,37 @@ unwrap_blocks(text) returns the text UNCHANGED when there is no scripting in
 it, so callers can hand everything to it without asking first. Asking first
 means walking every line of every file twice, which on a few thousand files
 is minutes rather than seconds.
+
+TWO WAYS THIS FILE USED TO DELETE THE ANSWER
+
+Both measured, both silent, both producing a clean "no impact":
+
+  IF (SELECT MAX(cm13) FROM customer_demographics) IS NOT NULL THEN
+      The whole header line was replaced with an empty statement, and the query
+      in the condition went with it -- so the file came back with risk none and
+      every count zero. The identical guard written as ASSERT was read
+      correctly, which is how this was found: where two spellings of one guard
+      give opposite answers, the difference is the bug.
+      Before dropping an IF, an ELSEIF or a WHILE header, look in it for the
+      first balanced bracket group holding a SELECT. If there is one, replace
+      the line with `SELECT * FROM <that group>;` instead of with `;`. It is a
+      real read of a real table, building nothing -- which is exactly what an
+      ASSERT already produces. Where there is no query in the condition, drop
+      the line as before; keeping every IF would hand the parser scripting it
+      cannot read.
+
+  FOR rec IN (SELECT tbl FROM cfg_tables) DO SELECT 1; END FOR;
+      A whole loop on ONE line. It matches "a loop header" and does not END with
+      DO, so it was treated as a header written across several lines -- and the
+      gather then looked for a line ending in DO, never found one, and returned
+      "everything to the end of the file". Every line after it became an empty
+      statement. No parse error, no unreadable entry, nothing on any screen: the
+      trail stopped one table short and that was reported as where the chain
+      ends. The same loop written across two lines gave the right answer.
+      Match the one-line form first and rewrite it in place -- the bracket group
+      becomes `SELECT * FROM (...)`, the body is kept, and the trailing
+      `END FOR` goes. And when a gathered header never finishes, give up on THAT
+      LINE, never on the rest of the file.
 
 Tests with unittest, not pytest: line numbers preserved through every
 substitution; a CASE written down the page survives intact; a scripting END is
@@ -1556,6 +1646,71 @@ as one more statement — those hold real SQL that really runs. Match braces
 yourself rather than with a regular expression, because a brace inside a quoted
 string closes nothing.
 
+FOUR SHAPES THAT NAME A TABLE AND WERE INVISIBLE
+
+Each measured as a clean answer over less than the whole picture.
+
+  EXECUTE IMMEDIATE '<one quoted string>'
+      The parser gives up and hands back a generic command, so the CREATE inside
+      the string was read, understood as nothing, and produced no lineage — with
+      the whole statement sitting in the file in plain sight. Parse the contents
+      of the literal when the WHOLE thing after IMMEDIATE is one quoted string
+      and nothing else (an INTO or a USING after it is allowed). Mark every
+      statement that comes out built_as_text = "EXECUTE IMMEDIATE", carry that
+      onto the finding, and say so on screen: the line it points at holds a
+      string, not the CREATE the row describes, and somebody who opens it
+      expecting the statement doubts the finding rather than the label.
+      REFUSE, and stay unreadable, when the name is built rather than quoted:
+      FORMAT(...), 'CREATE TABLE ' || env || '_mid', or a literal containing a
+      "?" placeholder. In each of those the statement never exists as text
+      anywhere, so there is nothing to read, and inventing the missing piece is
+      the exact failure this reader exists to avoid.
+
+  ALTER TABLE t RENAME COLUMN a TO b
+      _target_of covered Create, Insert, Merge, Delete and Update and NOT Alter,
+      so a repository holding its own rename migration gave target None,
+      sources [] and reported no impact at all for the column the migration
+      renames. That is the plainest statement of a rename the language has. Add
+      Alter to _target_of, add it beside Delete and Update where the target is
+      also added to sources, and read its actions:
+        RenameColumn   -> usage kind "renamed", and output_names returns the
+                          NEW name, so it is followed as the alias hop it is
+        Drop(Column)   -> usage kind "dropped", and output_names returns []
+                          — the column stops here, in this file, by name
+        AlterColumn    -> usage kind "retyped", the name is written down so the
+                          migration itself fails without it
+      "renamed" and "retyped" break on removal and rename. "dropped" breaks
+      nothing: it is not broken BY the change, it IS the change — and it is
+      worth reporting for exactly that reason.
+
+  CREATE SEARCH INDEX / VECTOR INDEX / ROW ACCESS POLICY / UNDROP TABLE
+      All name a table, most name columns of it, and none carries a column
+      anywhere. The parser gives up on every one, so the whole statement was
+      invisible: the file landed on the check-by-hand list with nothing saying
+      which table or which column it was about. Read the table and the column
+      list out of them with a REGULAR EXPRESSION rather than a parser, and
+      record them as "referenced here" — never as lineage, never as an edge,
+      never as a hop. Reading it loosely can add a row to a list; it must never
+      move a chain. A row access policy filtering on the scanned column stops
+      working the day the column goes, so risk may not read "none" while one of
+      these names it. UNDROP TABLE is a HARD parse error, which in sqlglot loses
+      the statements either side of it — rewrite it in the rescue pass so it
+      lands as a generic command, and read the table name out of that. Report a
+      statement read this way ONCE: on the "named here, but nothing is carried"
+      card, and NOT also as a file nobody could understand.
+
+  EXPORT DATA OPTIONS(uri='gs://feed/partner/*.csv') AS SELECT ...
+      An export builds no table, so the trail had nothing to carry the column on
+      to, and the answer read "no production table is affected" — true, and
+      useless. The delivery is what breaks, and whoever reads that file every
+      morning is outside this repository, so no scan of it will ever find them.
+      Read the uri BEFORE the rescue pass strips the OPTIONS clause, drop the
+      last path segment when it holds a "*" or a "." (that is a filename
+      pattern, not a place), and hang the result on the statement as export_uri.
+      Match exports to statements in FILE ORDER, not by line number: the rewrite
+      removes the whole "EXPORT DATA OPTIONS(...) AS", so what is left starts on
+      the line after the export's own.
+
 Tests with unittest, not pytest: a statement split rescues the readable
 statements around a bad one; MERGE, DELETE and UPDATE are seen; CTE names are
 not treated as tables; a column renamed inside a subquery is followed out; a
@@ -1783,6 +1938,93 @@ it qualifies and never on another screen:
                      the job fills in when it runs. No screen may tell somebody
                      the file says SELECT * when it does not.
 
+SIX MORE THINGS ON THE RESULT. Every one exists because two DIFFERENT facts
+were printing as the same sentence, which costs exactly as much as a missed hop.
+
+  feeds[]            {uri, file, line, from, attrs[], breaking} — deliveries out
+                     of the warehouse. Counted as feedsBroken and kept OUT of
+                     productionTables: a file in a bucket is not a published
+                     table, and one number covering both means neither.
+
+  referencedHere[]   Index, policy and UNDROP DDL naming a table the chain stood
+                     on or a column being followed, with the columns it names.
+                     Narrow on purpose — every warehouse is full of indexes on
+                     tables this scan never heard of, and listing those buries
+                     the ones that matter.
+
+  builtAsText[]      Statements the file runs as text — EXECUTE IMMEDIATE. The
+                     hop is real; the line is a quoted string.
+
+  lookupFailed       True when EVERY attribute asked about is a name Ripple
+                     never met as a column on ANY table, and nothing was found.
+                     "I never saw that column" and "that column goes nowhere"
+                     were byte-for-byte the same answer — found 0, no findings,
+                     a green tick — and they are OPPOSITE answers: the first is
+                     the question never having been asked, so a typo in an
+                     attribute name shipped as "no impact". Per attribute also
+                     carry tableColumns: the columns Ripple DID see on that
+                     table, taken from the statements that build it AND from the
+                     statements that read only it (nothing in a repository ever
+                     builds a source table, so its columns are only written down
+                     by the queries that read it). That turns a silent wrong
+                     answer into a spelling mistake somebody spots in two
+                     seconds. Work it out ONLY when a lookup actually fails, and
+                     only once per table: it walks every statement.
+
+  coverage           How much of this trail Ripple could see, as COUNTS of what
+                     it already worked out and used to throw away: unreadable
+                     files, files never opened, tables built with SELECT *,
+                     trails cut short at the hop limit, findings sitting past
+                     one of those, merged names, and findings on a line that did
+                     not say which table. "No impact, and I could follow every
+                     step of it" and "no impact, and three tables on the way
+                     were invisible to me" printed as the same three words.
+                     NOT a percentage: there is no honest denominator for "how
+                     much of a trail exists", and a made-up one puts a precise
+                     number on a guess.
+
+  wildcardNames[]    Only the wildcards that actually PRODUCED a finding. The
+                     card says "the usages below are real", and it was being
+                     printed over an empty list: a wildcard in one dataset
+                     covering a shard in another matches by short name and is
+                     then ruled out by same_table, so it produced nothing.
+                     Each entry also carries shorthand[]: the patterns that
+                     matched only because the family name was typed without the
+                     separator BigQuery requires. So wildcard_match returns
+                     "shard", "family", "both" or "" rather than a yes/no — a
+                     shard match is a fact about the SQL and stays certain; a
+                     family match is a guess about what somebody meant and sets
+                     certain=False on every usage from it. Matching it at all is
+                     right, because typing the name you say out loud must not
+                     produce a clean "no impact"; shipping it as certain was not.
+
+THE INFORMATION_SCHEMA HINT. A statement that looks a table up in BigQuery's own
+catalogue by name — WHERE table_name = 'customer_demographics' — was reported
+with the hint "which is how in-house helpers take a column or table name". That
+is correct code doing exactly what it should, and the one line on screen pointing
+at the problem named a cause nobody could find. Ask the parse TREE whether the
+statement reads a metadata view, not the Statement's sources: a metadata view is
+deliberately never recorded as a source.
+
+"I NEVER SAW THAT COLUMN" IS A CONFIDENT CLAIM
+
+lookupFailed says Ripple read everywhere it could and this name is not a column
+anywhere. It may only be set when that is true. Measured, all three printing a
+green "check your spelling" over a real gap:
+
+* a file naming the column that could not be read;
+* the whole chain sitting in a build/ folder Ripple is told to skip;
+* a row access policy naming that very column, on the same screen.
+
+So set it only when every attribute failed AND coverage is complete AND nothing
+on the subject went unread AND no index or policy names the column.
+
+Coverage counts the skipped folders too -- a folder Ripple was told to skip is
+exactly as unread as a file it could not open. And risk reads "unknown" rather
+than "none" when NOTHING was found and code files were skipped by folder. Only
+when nothing was found: skipping build, dist and target is ordinary, and a badge
+reading "not sure" on every scan of every dbt project is one nobody reads.
+
 Also produce graphs[] for the dependency picture: per attribute, the branches
 that reach a published table and the branches that end elsewhere, each a list
 of {name, kind, alias, prod}. Drop any branch that is only the start of a
@@ -1967,6 +2209,28 @@ Tests with unittest, not pytest, and these are the ones that matter:
   no impact is never claimed over files that could not be read — check the
     headline AND the reply body, and that "proceed as planned" is absent
   nothing scanned is never reported as no impact
+WHAT THE LETTER MUST NEVER SAY
+
+"No impact. Please proceed as planned" is the most consequential sentence this
+tool writes, and it was being written over every one of these. The summary and
+the reply have to read the SAME facts the findings screen does:
+
+  lookupFailed        Its own branch, before anything else. The question was not
+                      answered, so the letter asks the upstream team to confirm
+                      the column name. It does not report an impact either way.
+  feeds[]             Name the destination. The letter used to say the data
+                      feeds "tables in our own pipeline" about an EXPORT DATA
+                      going to a partner's bucket.
+  stopsLoading[]      When a published table stops being refreshed, the headline
+                      must say so -- and must NOT say "none of them reaching a
+                      table on your published list", nor send the reader off to
+                      fix a production rule that matched perfectly.
+  referencedHere[]    A row access policy naming the column is not "no impact".
+                      It carries the column nowhere and stops working all the
+                      same, so it gets its own paragraph.
+  skippedInFolders[]  Counted with the files that could not be opened. A folder
+                      Ripple was told to skip is exactly as unread.
+
   a genuinely clean result still says no impact, in both
 ````
 
@@ -2548,6 +2812,31 @@ looking at is how the half-shipped fix happens.
 **Check it worked:** run a scan against a real folder and click through all seven
 steps. Then paste a deliberately messy list into the settings box — with a typo in
 it — and confirm the typo comes back named.
+
+---
+
+## The cards that qualify the answer
+
+These sit BESIDE the findings, never on another screen. A caveat one click away
+from the answer it qualifies is a caveat nobody reads.
+
+* **How much of this Ripple could see** — the coverage counts, at the top of
+  "how to check this result", plus a second badge next to the risk word reading
+  either "whole trail seen" or "N gaps in what Ripple could see".
+* **Column not found** — when lookupFailed, the headline badge reads "Column not
+  found — nothing was checked" instead of a risk word, and the attribute panel
+  prints back the columns Ripple DID read on that table.
+* **Deliveries out of the warehouse** — the feeds, with their own stat card.
+  Never folded into "production tables at risk".
+* **N places name this, and carry it nowhere** — the referencedHere list, with
+  the table, the columns named, and the file and line.
+* **N statements are written as text and run** — the builtAsText list, and a
+  "run as text" badge on every row that came out of one, because the code shown
+  underneath such a row is a quoted string and looks nothing like the statement
+  the row describes.
+* **The wildcard card** gains a warning when any pattern matched only the family
+  name without its separator: BigQuery would match nothing there, so every row
+  from it is marked "table not stated".
 
 ---
 

@@ -15,6 +15,16 @@ from ..config import Settings, settings as default_settings
 # Which files carry SQL inside string literals rather than being SQL themselves.
 EMBEDDED_SQL_EXTS = {".py", ".scala", ".java", ".sh"}
 
+# Which files carry SQL inside markup rather than being SQL themselves. An
+# Airflow YAML holds it under ``sql: |``; an Oozie workflow.xml holds it in a
+# ``<script>`` element. Both were being handed to the SQL parser whole, which is
+# never going to work -- so every one of them landed on the "check by hand" list
+# instead. Measured: twelve ordinary Kubernetes YAML files and one genuinely
+# broken .sql gave couldNotRead 13, sorted alphabetically, with the real failure
+# last. That list is the one place Ripple admits what it missed, and burying it
+# under config files nobody wrote SQL in is how a real miss stops being seen.
+MARKUP_SQL_EXTS = {".yaml", ".yml", ".xml"}
+
 # ── files that are not really on this machine ──────────────────────────────
 # OneDrive's Files On-Demand leaves a file in the folder listing, with its real
 # name and its real size, when the contents are still in the cloud. It looks
@@ -357,11 +367,211 @@ def extract_sql_blocks(f: SourceFile) -> list[tuple[str, int]]:
     return blocks
 
 
+# ── SQL kept inside markup and inside a shell script ───────────────────────
+# Three shapes, all of them ordinary, none of them readable as SQL as they
+# stand. Every one of these measured `risk unknown, prod []` before this: the
+# statement that builds the published table was sitting in the file in plain
+# sight and no scan could reach it.
+#
+#     Airflow YAML     sql: |            <- a block scalar
+#     Oozie XML        <script>...       <- element text, often in CDATA
+#     a shell job      bq query <<EOF    <- a heredoc
+#
+# The line each block starts on is carried out with it, so a finding still
+# points at the real line of the real file.
+
+# ``sql:``, ``query:``, ``script:`` and the handful of names that mean the same
+# thing. Matched loosely at both ends because real files write ``sql_query:``,
+# ``hive_script:`` and ``bql:`` -- but anchored on the whole key so that
+# ``sql_conn_id:`` (a connection name, not a query) does not match.
+_YAML_SQL_KEY = re.compile(
+    r"^(?P<lead>[ \t]*(?:-[ \t]+)*)"
+    r"(?P<key>[\"']?[A-Za-z0-9_.\-]*(?:sql|query|script|statement)[A-Za-z0-9_.\-]*[\"']?)"
+    r"[ \t]*:[ \t]*(?P<rest>.*)$",
+    re.IGNORECASE,
+)
+# ``|``, ``>``, ``|-``, ``>+``, ``|2`` -- YAML's ways of saying "the value is
+# the indented block below".
+_YAML_BLOCK_MARK = re.compile(r"^[|>][-+]?\d*[ \t]*$")
+
+
+def _yaml_quoted_value(lines: list[str], at: int, rest: str) -> tuple[str, int]:
+    """A value written on the key's line, and the last line it occupies.
+
+    A quoted YAML scalar may run over several lines and is folded back into one
+    when it is read. Stopping at the first line handed the parser half a
+    statement -- and a half-statement that still parses is counted as read,
+    which is worse than not reading it at all.
+    """
+    quote = rest[:1]
+    if quote not in ("'", '"'):
+        return rest.strip("\"'"), at
+    if rest.count(quote) >= 2:
+        return rest[1:rest.rfind(quote)], at
+    parts = [rest[1:]]
+    for j in range(at + 1, len(lines)):
+        line = lines[j]
+        end = line.find(quote)
+        if end >= 0:
+            parts.append(line[:end])
+            return " ".join(p.strip() for p in parts), j
+        parts.append(line)
+    # The quote never closes. Give back the first line only, exactly as before,
+    # rather than swallowing the rest of the file.
+    return rest.strip("\"'"), at
+
+
+def _yaml_blocks(text: str) -> list[tuple[str, int]]:
+    """SQL held under a ``sql:``-ish key in a YAML file."""
+    out: list[tuple[str, int]] = []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        m = _YAML_SQL_KEY.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        # The key's own column, not the line's indent -- a list item writes
+        # "  - sql: |" and the block under it is indented past the "sql", not
+        # past the dash.
+        col = len(m.group("lead"))
+        rest = m.group("rest").strip()
+        if not _YAML_BLOCK_MARK.match(rest):
+            # A value on the key's own line. YAML lets a quoted one run over
+            # several lines, and taking only the first gave back
+            # "CREATE OR REPLACE TABLE final_published AS" with no SELECT --
+            # half a statement, handed to the parser, and counted as read.
+            body, i = _yaml_quoted_value(lines, i, rest)
+            if _LOOKS_SQL.search(body):
+                out.append((body, i))
+            i += 1
+            continue
+        body_lines: list[str] = []
+        j = i + 1
+        while j < len(lines):
+            line = lines[j]
+            if line.strip() and len(line) - len(line.lstrip()) <= col:
+                break                       # dedented back out of the block
+            body_lines.append(line)
+            j += 1
+        # Strip the block's own indent, and no more. Taking the first line's
+        # indent off every line is what YAML itself does.
+        pad = min((len(b) - len(b.lstrip()) for b in body_lines if b.strip()), default=0)
+        body = "\n".join(b[pad:] if len(b) >= pad else b for b in body_lines)
+        if _LOOKS_SQL.search(body):
+            out.append((body, i + 1))
+        i = j
+    return out
+
+
+# An element whose contents are a query. Oozie writes <script>, Hadoop tooling
+# writes <query> and <command>, and several write it inside a CDATA section so
+# that the SQL's own < and > do not have to be escaped.
+_XML_SQL_ELEMENT = re.compile(
+    r"<\s*(?P<tag>[A-Za-z0-9_.:\-]*(?:script|query|sql|statement|command)[A-Za-z0-9_.:\-]*)"
+    r"(?:\s[^>]*)?>(?P<body>.*?)</\s*(?P=tag)\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_CDATA = re.compile(r"<!\[CDATA\[(?P<body>.*?)\]\]>", re.DOTALL)
+_XML_ENTITIES = (("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'),
+                 ("&apos;", "'"), ("&#10;", "\n"), ("&amp;", "&"))
+
+
+def _unescape_xml(text: str) -> str:
+    """XML's five escapes, undone. ``&amp;`` last, or ``&amp;lt;`` decodes twice."""
+    for mark, ch in _XML_ENTITIES:
+        text = text.replace(mark, ch)
+    return text
+
+
+def _xml_blocks(text: str) -> list[tuple[str, int]]:
+    """SQL held in the text of an XML element, or in a CDATA section."""
+    out: list[tuple[str, int]] = []
+    seen: set[int] = set()
+    for m in _XML_SQL_ELEMENT.finditer(text):
+        start = m.start("body")
+        body = m.group("body")
+        inner = _CDATA.search(body)
+        if inner is not None:
+            start += inner.start("body")
+            body = inner.group("body")
+        body = _unescape_xml(body)
+        if _LOOKS_SQL.search(body):
+            seen.add(start)
+            out.append((body, text[:start].count("\n")))
+    # A CDATA section under a tag this does not know the name of. Only worth
+    # taking when it is plainly SQL, which _LOOKS_SQL already decides.
+    for m in _CDATA.finditer(text):
+        if m.start("body") in seen:
+            continue
+        body = _unescape_xml(m.group("body"))
+        if _LOOKS_SQL.search(body):
+            out.append((body, text[: m.start("body")].count("\n")))
+    return out
+
+
+# bq query <<EOF ... EOF, and every variation of it: quoted so the shell leaves
+# the body alone, and <<- so the terminator may be indented.
+_HEREDOC = re.compile(r"<<-?[ \t]*(?P<q>['\"]?)(?P<tag>[A-Za-z_][A-Za-z0-9_]*)(?P=q)")
+
+
+def _heredoc_blocks(text: str) -> list[tuple[str, int]]:
+    """SQL fed to a command through a shell heredoc."""
+    out: list[tuple[str, int]] = []
+    lines = text.splitlines()
+    starts = {}
+    for m in _HEREDOC.finditer(text):
+        starts.setdefault(text[: m.start()].count("\n"), []).append(m.group("tag"))
+    i = 0
+    while i < len(lines):
+        tags = starts.get(i)
+        if not tags:
+            i += 1
+            continue
+        tag = tags[0]
+        body_lines: list[str] = []
+        j = i + 1
+        while j < len(lines) and lines[j].strip() != tag:
+            body_lines.append(lines[j])
+            j += 1
+        body = "\n".join(body_lines)
+        if _LOOKS_SQL.search(body):
+            out.append((body, i + 1))
+        i = j + 1
+    return out
+
+
+# A file whose FIRST line of code is a SQL keyword really is SQL, whatever it is
+# called. Rare, but a .xml holding nothing but a CREATE would otherwise be read
+# as markup with no SQL in it and silently produce nothing.
+_OPENS_WITH_SQL = re.compile(
+    r"^\s*(?:--[^\n]*\n|#[^\n]*\n|/\*.*?\*/|\s)*"
+    r"(SELECT|WITH|CREATE|INSERT|MERGE|UPDATE|DELETE|ALTER|TRUNCATE|EXPORT|LOAD)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def extract_markup_sql(f: SourceFile) -> list[tuple[str, int]]:
+    """SQL taken out of a YAML or XML file, with the line each block starts on."""
+    ext = f.abs_path.suffix.lower()
+    blocks = _xml_blocks(f.text) if ext == ".xml" else _yaml_blocks(f.text)
+    if blocks:
+        return blocks
+    if _OPENS_WITH_SQL.match(f.text):
+        return [(f.text, 0)]
+    return []
+
+
 def statements_for(f: SourceFile) -> list[tuple[str, int]]:
     """SQL statements in a file, with the line each one starts on."""
     ext = f.abs_path.suffix.lower()
+    if ext in MARKUP_SQL_EXTS:
+        return extract_markup_sql(f)
     if ext in EMBEDDED_SQL_EXTS:
-        return extract_sql_blocks(f)
+        blocks = extract_sql_blocks(f)
+        if ext == ".sh":
+            blocks += _heredoc_blocks(f.text)
+        return blocks
     return [(f.text, 0)]
 
 
@@ -375,15 +585,22 @@ def statements_for(f: SourceFile) -> list[tuple[str, int]]:
 #
 # Both shapes come down to the same thing: a string ending in .sql.
 _SQL_FILE_REF = re.compile(r"""["']([^"'\n]*?[A-Za-z0-9_\-]+\.sql)["']""")
+# The same thing in markup, where the value carries no quotes at all:
+#     sql: queries/load_final.sql
+#     <script>hive/load_final.sql</script>
+_MARKUP_SQL_FILE_REF = re.compile(
+    r"""(?:[:>=][ \t]*|["'])([^\s"'<>]*[A-Za-z0-9_\-]+\.sql)\b""")
 
 
 def sql_file_refs(f: SourceFile) -> list[dict]:
     """Every .sql file this program names, with the line it names it on."""
-    if f.abs_path.suffix.lower() not in EMBEDDED_SQL_EXTS:
+    ext = f.abs_path.suffix.lower()
+    if ext not in EMBEDDED_SQL_EXTS and ext not in MARKUP_SQL_EXTS:
         return []
+    pattern = _MARKUP_SQL_FILE_REF if ext in MARKUP_SQL_EXTS else _SQL_FILE_REF
     out: list[dict] = []
     seen: set[str] = set()
-    for m in _SQL_FILE_REF.finditer(f.text):
+    for m in pattern.finditer(f.text):
         ref = m.group(1).strip()
         if not ref or ref.lower() in seen:
             continue
@@ -393,16 +610,30 @@ def sql_file_refs(f: SourceFile) -> list[dict]:
 
 
 def looks_like_unread_sql(f: SourceFile, blocks: list[tuple[str, int]]) -> bool:
-    """SQL is plainly written in this file, and none of it could be taken out.
+    """More SQL is written in this file than could be taken out of it.
 
-    The shape that does this is SQL built by adding short strings together --
-    no single piece long enough to be recognised, and the statement never
-    existing as text anywhere. Worth reporting, because the alternative is a
-    file with a CREATE TABLE in it that Ripple treats as empty.
+    Two shapes. The first is SQL built by adding short strings together -- no
+    single piece long enough to be recognised, and the statement never existing
+    as text anywhere. Worth reporting, because the alternative is a file with a
+    CREATE TABLE in it that Ripple treats as empty.
+
+    The second is why this counts rather than asking "were there any blocks".
+    An Airflow YAML, an Oozie workflow and a shell job all normally hold SEVERAL
+    tasks of DIFFERENT kinds, and Ripple knows how to mine some of them. One
+    recognised ``sql:`` block used to buy silence for the ``bash_command:``
+    beside it -- measured: two blocks in one file, one mined and one lost, and
+    couldNotRead came back 0 with the coverage card reporting no gaps at all.
+    Removing the recognised block from that same file put it straight back on
+    the check-by-hand list, which is the whole tell.
     """
-    if f.abs_path.suffix.lower() not in EMBEDDED_SQL_EXTS or blocks:
+    ext = f.abs_path.suffix.lower()
+    if ext not in EMBEDDED_SQL_EXTS and ext not in MARKUP_SQL_EXTS:
         return False
-    return bool(_LOOKS_SQL.search(f.text))
+    in_file = len(_LOOKS_SQL.findall(f.text))
+    if not in_file:
+        return False
+    mined = sum(len(_LOOKS_SQL.findall(body)) for body, _ in blocks)
+    return mined < in_file
 
 
 # A Spark or Scala job usually runs a bare SELECT and then writes the result

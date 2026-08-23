@@ -1421,14 +1421,19 @@ def test_a_file_full_of_nul_bytes_is_said_out_loud(tmp_path):
 
 # ── "No impact" is the one word that must never cover a gap ────────────────
 def test_risk_is_never_none_while_a_file_on_the_subject_could_not_be_read(tmp_path):
-    """EXECUTE IMMEDIATE holds a whole CREATE ... SELECT of the scanned column
-    as text. Ripple can SEE it and cannot parse it -- and printed a green
-    "No impact" over it. "I found nothing" and "I could not look" are not the
-    same answer, however similar they look on screen."""
+    """An EXECUTE IMMEDIATE whose target name is glued together at run time. The
+    statement never exists as text anywhere, so nothing can read it -- and Ripple
+    printed a green "No impact" over it. "I found nothing" and "I could not look"
+    are not the same answer, however similar they look on screen.
+
+    This used to be an EXECUTE IMMEDIATE holding the whole CREATE in ONE quoted
+    string. That shape is now READ rather than reported -- see the tests below --
+    so the guarantee is pinned here on the shape that genuinely cannot be read.
+    """
     out = scan(tmp_path, {
-        "a.sql": "EXECUTE IMMEDIATE '''CREATE OR REPLACE TABLE final_published AS "
-                 "SELECT cm13 FROM customer_demographics''';"})
-    assert out["stats"]["couldNotRead"] == 1
+        "a.sql": "EXECUTE IMMEDIATE 'CREATE OR REPLACE TABLE stage_' || env || "
+                 "'_mid AS SELECT cm13 FROM customer_demographics';"})
+    assert out["stats"]["couldNotRead"] == 1, out["unreadable"]
     assert out["risk"] == "unknown", out["risk"]
 
 

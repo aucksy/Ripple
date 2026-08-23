@@ -1132,12 +1132,38 @@ function step4(root) {
   // an empty folder is a statement about the folder wearing the clothes of a
   // statement about the pipeline.
   const nothingRead = !sc.filesScanned;
+  // "I never saw that column" was worded exactly like "that column goes
+  // nowhere" — the same green tick, the same empty list, byte for byte. They
+  // are opposite answers: one is an answer to the question, the other is the
+  // question never having been asked. A typo in an attribute name shipped as
+  // "no impact", which is the most convincing wrong answer this tool can give.
   const [cls, label] = nothingRead ? ['amber', 'Nothing was scanned']
+    : sc.lookupFailed ? ['amber', 'Column not found — nothing was checked']
     : (RISK[sc.risk] || RISK.none);
   x(root, 'risk').append(el('span', { className: 'badge ' + cls, textContent: label }));
+  // Beside the risk word, never on another screen. "No impact, and I could
+  // follow every step of it" and "no impact, and three tables on the way were
+  // invisible to me" printed as the same three words — everything below was
+  // already counted and then thrown away. Counts, not a percentage: there is no
+  // honest denominator for "how much of a trail exists", and a made-up one
+  // would put a precise number on a guess.
+  // Not shown beside a failed lookup. "Whole trail seen" is true and reads as a
+  // reassurance, over a scan that followed no trail at all because the column
+  // it was given is not in this repository.
+  const cov = sc.coverage;
+  if (cov && !nothingRead && !sc.lookupFailed) {
+    x(root, 'risk').append(el('span', {
+      className: 'badge ' + (cov.complete ? 'green' : 'grey'),
+      style: 'margin-left:8px',
+      textContent: cov.complete
+        ? 'whole trail seen'
+        : `${cov.gaps.length} gap${cov.gaps.length === 1 ? '' : 's'} in what Ripple could see` }));
+  }
   // The line under the title has to be true of the screen underneath it, and
   // "grouped under the production table" is not true when there is not one.
-  x(root, 'sub').textContent = sc.groups.length
+  x(root, 'sub').textContent = sc.lookupFailed
+    ? 'Ripple never met these column names. Check the spelling before reading anything below.'
+    : sc.groups.length
     ? 'Every finding grouped under the production table it puts at risk.'
     : (sc.reached || []).length || (sc.other || []).length
       ? 'Nothing matched your published-table rule. Every table the change does reach is below.'
@@ -1198,10 +1224,20 @@ function step4(root) {
   // tables' columns changes — the job that fills them stops running — and one
   // number covering two different kinds of impact is a number that means
   // neither. Shown only when there are some.
-  if (st.productionStopsLoading) {
+  if (st.productionStopsLoading || st.feedsBroken) {
     const also = el('div', { className: 'stats five', style: 'margin-top:14px' });
-    also.append(statCard(['Published tables that stop refreshing', st.productionStopsLoading,
-      'var(--red)', 'Their columns do not change — their data stops']));
+    if (st.productionStopsLoading) {
+      also.append(statCard(['Published tables that stop refreshing', st.productionStopsLoading,
+        'var(--red)', 'Their columns do not change — their data stops']));
+    }
+    // A file delivered to a bucket is not a published table, and folding the
+    // two counts together would make both of them mean nothing. Whoever reads
+    // that file is outside this repository, which is exactly why it needs
+    // saying: no scan of this repository will ever find them.
+    if (st.feedsBroken) {
+      also.append(statCard(['Deliveries out of the warehouse', st.feedsBroken,
+        'var(--red)', 'Files another team reads — tell them']));
+    }
     box.append(also);
   }
 
@@ -1269,6 +1305,16 @@ function step4(root) {
         'This is not a result about your pipeline — it is a result about an empty folder. '
         + 'Point Ripple at the folder holding the code on the settings screen, then run the '
         + 'scan again.' })));
+  } else if (sc.lookupFailed) {
+    // Not the same answer as the green tick below, and it used to print as if
+    // it were. "No table is built from them, and no code reads them" is a
+    // finished answer about a real column. Ripple never met this name as a
+    // column at all, so it has not answered the question — it has failed to
+    // ask it, and a typo shipped as "no impact".
+    groups.append(el('div', { className: 'note warn', style: 'display:flex;align-items:center;gap:14px;padding:18px 22px' },
+      el('span', { textContent: '?', style: 'width:30px;height:30px;border-radius:50%;background:var(--amber);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0' }),
+      el('div', {}, el('b', { textContent: 'Ripple never met these column names, so nothing was checked', style: 'display:block' }),
+        el('div', { style: 'margin-top:3px', textContent: 'This is not "the change is safe" — it is "the question was not answered". The columns Ripple did read on that table are listed below; if one of them is what you meant, scan again for that name.' }))));
   } else if (!sc.groups.length && !reached.length && !other.length) {
     groups.append(el('div', { className: 'note good', style: 'display:flex;align-items:center;gap:14px;padding:18px 22px' },
       el('span', { textContent: '✓', style: 'width:30px;height:30px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0' }),
@@ -1303,13 +1349,25 @@ function step4(root) {
         ? '1 more usage that builds no table'
         : `${other.length} more usages that build no table` })));
     const p = el('div', { className: 'pad lg' });
+    // "Builds no table" is true of all of these and only tells the whole story
+    // about some of them. An EXPORT DATA writes no table either — and Ripple
+    // knows exactly where it delivers to, and says so on its own card lower
+    // down. Telling somebody here that the destination is "somewhere it cannot
+    // see" contradicts that card by two paragraphs.
+    const exports = other.filter(r => r.feed).length;
     p.append(el('div', { className: 'prose', textContent:
-      'The attribute is read here, but this code does not write a table Ripple can name — a bare query, or a job whose destination is set somewhere it cannot see. Real usages all the same.' }));
+      'The attribute is read here, but this code writes no table Ripple can name — a bare query, or a job whose destination is set somewhere it cannot see. Real usages all the same.'
+      + (exports
+        ? ` ${exports === 1 ? 'One of these delivers' : `${exports} of these deliver`} a file out of the warehouse instead; the destination is named on the row and again below.`
+        : '') }));
     other.forEach((r, ri) => {
       const key = `o${ri}`, ro = S.openRow === key;
       const line = el('div', { style: 'display:flex;gap:10px;align-items:baseline;margin-top:10px;flex-wrap:wrap;cursor:pointer' },
         el('span', { className: 'chip mono', textContent: r.file }),
         el('span', { className: 'badge sm ' + (r.breaking ? 'red' : 'grey'), textContent: r.logic }),
+        r.feed
+          ? el('span', { className: 'badge sm red', textContent: '→ ' + r.feed })
+          : null,
         el('span', { className: 'small muted', textContent: `on ${r.attr}` }));
       line.onclick = () => { S.openRow = ro ? null : key; render(); };
       p.append(line);
@@ -1320,11 +1378,13 @@ function step4(root) {
   }
 
   renderStopsLoading(groups, sc);
+  renderFeeds(groups, sc);
 
   const gapBox = x(root, 'gaps');
   gapBox.innerHTML = '';
   gapBox.append(el('span', { className: 'lbl', style: 'display:block;margin:26px 0 2px',
     textContent: 'How to check this result' }));
+  renderCoverage(gapBox, sc);
   renderChecks(gapBox, sc);
   renderGaps(gapBox, sc);
   x(root, 'next').onclick = () => goto(5);
@@ -1408,6 +1468,11 @@ function groupCard(g, key, tag, tagStyle) {
         r.inferredHops
           ? el('span', { className: 'badge sm amber', style: 'margin-left:6px',
               textContent: r.viaStar ? 'column list not visible' : 'inferred' })
+          : null,
+        // The line holds a quoted string, not the statement this row describes.
+        r.builtAsText
+          ? el('span', { className: 'badge sm amber', style: 'margin-left:6px',
+              textContent: 'run as text' })
           : null),
       el('span', {}, el('span', { className: 'badge sm ' + (r.mode === 'Direct pull' ? 'blue' : 'violet'), textContent: r.mode })),
       el('span', { className: 'caret', textContent: '›' }));
@@ -1423,6 +1488,44 @@ function groupCard(g, key, tag, tagStyle) {
    by asking anyone to trust the headline. An attribute that is not written
    down anywhere in the repository looks nothing like one that is used in nine
    files, and both used to end up behind the same green tick. */
+/* How much of this trail Ripple could see, in the counts it already had.
+
+   Every number here was being worked out and then thrown away. "No impact" was
+   computed from one thing only — whether any finding was breaking — so a scan
+   that followed every step of the chain and a scan with three invisible tables
+   on it printed the same three words. This is not a score and not a percentage:
+   there is no honest denominator for "how much of a trail exists", and putting
+   a precise-looking number on a guess is the one thing this tool may not do. */
+function renderCoverage(box, sc) {
+  const cov = sc.coverage;
+  // Nothing was followed, so there is no coverage to report — and "every step
+  // of every trail was read" over a trail that does not exist is the same
+  // reassuring nonsense in longer words.
+  if (!cov || sc.lookupFailed) return;
+  const card = el('div', { className: 'card pad lg', style: 'margin-top:12px' });
+  card.append(el('span', { className: 'lbl', textContent: 'How much of this Ripple could see' }));
+  if (cov.complete) {
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      `Every step of every trail above was read out of the SQL. No file that mentions these `
+      + 'names went unread, no table on the way was built with a SELECT *, no trail was '
+      + 'still going when Ripple stopped, and nothing below is worked out rather than read. '
+      + `That is true of these ${sc.filesScanned} files and of nothing outside them.` }));
+    box.append(card);
+    return;
+  }
+  card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+    'The answer above rests on these, and each one is a place Ripple could not see through. '
+    + 'They are listed as counts rather than as a score, because there is no honest way to '
+    + 'say what share of the whole trail they are.' }));
+  const list = el('div', { style: 'margin-top:10px' });
+  cov.gaps.forEach(g => list.append(el('div', {
+    className: 'small', style: 'margin-top:6px;line-height:1.55' },
+    el('b', { textContent: String(g.count) + ' ' }),
+    g.what)));
+  card.append(list);
+  box.append(card);
+}
+
 function renderChecks(box, sc) {
   const rows = sc.attributes || [];
   if (!rows.length) return;
@@ -1435,11 +1538,16 @@ function renderChecks(box, sc) {
     + 'an attribute nobody writes down anywhere is the usual reason a scan comes back clean.' }));
   rows.forEach(a => {
     const used = a.found > 0;
+    // A name Ripple never met as a column on ANY table is not a column with no
+    // impact — it is a question that never got asked. Said first, and in amber,
+    // because the two used to be the same grey line.
     const badge = a.reachesProduction
       ? ['red', 'reaches a published table']
       : used
         ? ['amber', `used in ${a.files} file${a.files === 1 ? '' : 's'}`]
-        : a.mentionedIn
+        : a.lookupFailed
+          ? ['amber', 'Ripple never saw a column of this name']
+          : a.mentionedIn
           ? ['grey', `named in ${a.mentionedIn} file${a.mentionedIn === 1 ? '' : 's'}, never read from`]
           : ['grey', 'this name is not in the repository at all'];
     p.append(el('div', { style: 'display:flex;gap:10px;align-items:baseline;margin-top:10px;flex-wrap:wrap' },
@@ -1455,6 +1563,25 @@ function renderChecks(box, sc) {
         ? el('span', { className: 'badge sm red',
             textContent: 'still going at ' + a.cutShortAt.join(', ') })
         : null));
+    // The instant self-correction. Printing back the columns Ripple DID read on
+    // the table turns a silent wrong answer into a spelling mistake somebody
+    // spots in two seconds. An empty list is a different answer again and says
+    // so: it means Ripple has no column list for this table at all, so "I never
+    // saw it" is not the same as "it is not there".
+    if (a.lookupFailed) {
+      const cols = a.tableColumns || [];
+      p.append(el('div', { className: 'note warn', style: 'margin:8px 0 0 4px' },
+        el('b', { textContent: `Nothing was checked for ${a.attr}. ` }),
+        cols.length
+          ? `Ripple read ${a.table} and never met a column called ${a.attr} on it, or on `
+            + 'anything else here. What it did read on that table: ' + cols.join(', ')
+            + '. If one of those is the column you meant, scan again for that name — '
+            + 'everything below is about a name that is not in this repository.'
+          : `Ripple never met a column called ${a.attr} anywhere here — and it has no column `
+            + `list for ${a.table} either, because nothing in this repository writes one down. `
+            + 'So this is not "the column has no impact"; it is "Ripple could not check". '
+            + 'Check the spelling, and check that the table is built in this repository at all.'));
+    }
     if ((a.cutShortAt || []).length) {
       p.append(el('div', { className: 'small muted', style: 'margin:4px 0 0 4px;line-height:1.55',
         textContent: `Ripple follows ${sc.maxHops} renames and then stops. This trail had not `
@@ -1540,6 +1667,18 @@ function detailFor(r) {
         : `A table earlier in this chain takes every column at once, so its column list is not `
           + `in the code. This row is a real usage on a real line; what Ripple cannot promise is `
           + `that ${r.attr} is still the name the column carries by the time it gets here.`));
+  }
+  // The statement is inside quotes on the line below. Said here as well as on
+  // the card, because the code shown underneath is a string and looks nothing
+  // like the CREATE this row describes — and a row somebody cannot verify on
+  // the line it points at is a row they dismiss.
+  if (r.builtAsText) {
+    d.append(el('div', { className: 'note warn', style: 'margin-top:10px' },
+      el('b', { textContent: `Written as text and run — ${r.builtAsText}. ` }),
+      'The line below holds this statement as a quoted string, so the code shown is the '
+      + 'string rather than the statement. Ripple read what is inside the quotes and it is '
+      + 'complete SQL, which is why this row exists. If anything is added to that text when '
+      + 'the job runs, this scan has not seen it.'));
   }
   const code = el('div', { className: 'code' });
   const head = el('div', { className: 'f' },
@@ -1766,6 +1905,22 @@ function renderTrailGaps(box, sc) {
     sc.wildcardNames.forEach(w => chips.append(el('span', { className: 'chip mono',
       textContent: `${w.table} — matched by ${w.patterns.join(', ')}` })));
     card.append(chips);
+    // The family name as a person says it, without the separator BigQuery
+    // requires. BigQuery matches nothing here; Ripple matches it anyway so
+    // that typing the name you say out loud cannot produce a clean "no
+    // impact" — and then says out loud that it is a guess about what you
+    // meant, because it used to ship as certain.
+    const loose = (sc.wildcardNames || []).filter(w => (w.shorthand || []).length);
+    if (loose.length) {
+      card.append(el('div', { className: 'note warn', style: 'margin-top:12px' },
+        el('b', { textContent: 'Some of these are the family name, not a shard. ' }),
+        loose.map(w => `${w.table} vs ${w.shorthand.join(', ')}`).join('; ')
+        + '. BigQuery would not match those — the separator before the asterisk is '
+        + 'required, so no real query reads a table by that exact name. Ripple matched it '
+        + 'because you most likely meant the family, and the alternative is a clean "no '
+        + 'impact" on a name that is genuinely used. Every row from it is marked '
+        + '"table not stated". If you meant one shard, scan for its full name.'));
+    }
     box.append(card);
   }
 
@@ -1844,6 +1999,58 @@ function renderTrailGaps(box, sc) {
     card.append(chips);
     box.append(card);
   }
+
+  // 6. SQL the file holds as a quoted string and runs as text. Ripple reads the
+  //    string, so the hop is followed instead of lost — measured before this, a
+  //    whole CREATE OR REPLACE TABLE of the scanned column inside an EXECUTE
+  //    IMMEDIATE gave no production tables at all. But the line the rows point
+  //    at holds a string, not the CREATE they describe, and somebody who opens
+  //    it expecting the statement will doubt the finding rather than the label.
+  if (sc.builtAsText?.length) {
+    const n = sc.builtAsText.length;
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px' });
+    card.append(el('span', { className: 'lbl', textContent:
+      `${n} statement${n === 1 ? '' : 's'} here ${n === 1 ? 'is' : 'are'} written as text and run, not written as SQL` }));
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      'The file puts the whole statement in quotes and hands it to the warehouse to run. '
+      + 'Ripple read what is inside the quotes, so the trail carries on through it — but the '
+      + 'line below is a quoted string. Open it and you will see the text, not the statement '
+      + 'the row describes. Anything added to that text when the job runs is not covered here.' }));
+    const chips = el('div', { className: 'chips', style: 'margin-top:10px' });
+    sc.builtAsText.forEach(t => chips.append(el('span', { className: 'chip mono',
+      textContent: `${t.file}:${t.line} — ${t.how} → ${t.table}` })));
+    card.append(chips);
+    box.append(card);
+  }
+
+  // 7. Statements that NAME the table or the column and carry it nowhere: a
+  //    search index, a vector index, a row access policy, an UNDROP. These are
+  //    not lineage and are never drawn as a hop — but a policy filtering on the
+  //    column stops working on the day it goes, and no lineage anywhere would
+  //    ever have said so. Measured before this: the parser gave up on the whole
+  //    statement, the file landed on the "check by hand" list, and nothing said
+  //    which table or which column it was about.
+  if (sc.referencedHere?.length) {
+    const rows = sc.referencedHere;
+    const named = rows.filter(r => (r.namesColumns || []).length);
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px' });
+    card.append(el('span', { className: 'lbl', textContent:
+      `${rows.length} place${rows.length === 1 ? '' : 's'} name${rows.length === 1 ? 's' : ''} this, and carr${rows.length === 1 ? 'ies' : 'y'} it nowhere` }));
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      (named.length
+        ? `${named.length} of these name the column itself, so ${named.length === 1 ? 'it' : 'they'} stop${named.length === 1 ? 's' : ''} working on the day it changes. `
+        : '')
+      + 'None of them carries the column to another table, so none of them is on a chain '
+      + 'above. They are listed here because nothing else on this screen would have '
+      + 'mentioned them at all.' }));
+    const list = el('div', { className: 'chips', style: 'margin-top:10px' });
+    rows.forEach(r => list.append(el('span', { className: 'chip mono', textContent:
+      `${r.verb} ${r.kind} on ${r.table}`
+      + ((r.namesColumns || []).length ? ` — names ${r.namesColumns.join(', ')}` : '')
+      + ` · ${r.file}:${r.line}` })));
+    card.append(list);
+    box.append(card);
+  }
 }
 
 /* Published tables that stop being REFRESHED, rather than ones whose columns
@@ -1888,6 +2095,44 @@ function renderStopsLoading(box, sc) {
       'Ripple stopped after looking at 400 tables downstream, so there may be more '
       + 'than these. It is saying so rather than letting the list read as complete.'));
   }
+  box.append(card);
+}
+
+/* A file delivered OUT of the warehouse, rather than a table inside it.
+
+   EXPORT DATA writes a file to a bucket and somebody else's job picks it up
+   every morning. It builds no table, so the trail had nothing to carry the
+   column on to, and the answer read "no production table is affected" — true,
+   and no use to anybody. The delivery is what breaks, and whoever reads it is
+   outside this repository, so no scan of this repository will ever find them.
+   That is exactly why it has to be named here. */
+function renderFeeds(box, sc) {
+  const rows = sc.feeds || [];
+  if (!rows.length) return;
+  const n = rows.length;
+  box.append(el('span', { className: 'lbl', style: 'display:block;margin:26px 0 2px',
+    textContent: `${n} deliver${n === 1 ? 'y' : 'ies'} out of the warehouse` }));
+  const card = el('div', { className: 'card pad lg', style: 'margin-top:12px;border-color:var(--redln)' });
+  card.append(el('div', { style: 'line-height:1.55' },
+    el('b', { textContent: 'These are not tables. ' }),
+    'The statement writes a file to a bucket, and whoever reads that file is '
+    + 'outside this repository — so nothing Ripple can scan will tell you who they '
+    + 'are. Tell them before the change ships.'));
+  rows.forEach(r => {
+    const line = el('div', { style: 'margin-top:14px' });
+    line.append(el('div', {},
+      el('span', { className: 'badge sm ' + (r.breaking ? 'red' : 'grey'),
+        textContent: r.breaking ? 'DELIVERY BREAKS' : 'DELIVERY CHANGES' }),
+      el('span', { className: 'mono', style: 'margin-left:10px;font-weight:600',
+        textContent: r.uri || 'destination not written down' })));
+    line.append(el('div', { className: 'small muted', style: 'margin-top:6px;line-height:1.55' },
+      'Carries ',
+      el('span', { className: 'mono', textContent: (r.attrs || []).join(', ') }),
+      ' out of ',
+      el('span', { className: 'mono', textContent: r.from }),
+      ` · ${r.file}:${r.line}`));
+    card.append(line);
+  });
   box.append(card);
 }
 

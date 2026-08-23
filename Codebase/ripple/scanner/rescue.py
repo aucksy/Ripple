@@ -44,7 +44,7 @@ import re
 # was caught, which is the sort of difference nobody would ever guess at.
 _WORTH_LOOKING = re.compile(
     r"(?:\b(?:SNAPSHOT|REPLICA\s+OF|SYSTEM_TIME|WITH\s+CONNECTION"
-    r"|PARTITION\s+COLUMNS|LOAD\s+DATA|EXPORT\s+DATA)\b|[(,]\s*TABLE\s)",
+    r"|PARTITION\s+COLUMNS|LOAD\s+DATA|EXPORT\s+DATA|UNDROP)\b|[(,]\s*TABLE\s)",
     re.IGNORECASE,
 )
 
@@ -156,6 +156,47 @@ _EXPORT = re.compile(r"\bEXPORT\s+DATA\s+(?=.*?\bOPTIONS\s*\()", re.IGNORECASE |
 _OPTIONS_AS = re.compile(r"\bOPTIONS\s*(?=\()", re.IGNORECASE)
 
 
+# Where an EXPORT DATA delivers to. The whole point of an export is that the
+# file lands somewhere outside the warehouse and somebody else's job reads it,
+# so "no production table is affected" is true and useless: the delivery that
+# breaks belongs to another team, and nothing on any screen named it.
+#
+#     OPTIONS(uri='gs://feed/partner/*.csv', format='CSV')  ->  gs://feed/partner
+#
+# The last part of the path is a filename pattern, not a place. Dropping it is
+# what turns a wildcard nobody recognises into the name of a feed somebody does.
+_URI_OPTION = re.compile(r"\buri\s*=\s*(?:\[\s*)?(['\"])(?P<uri>[^'\"]+)\1", re.IGNORECASE)
+
+
+def _feed_name(uri: str) -> str:
+    """The delivery an export URI names, without its filename pattern."""
+    head, sep, tail = uri.rstrip("/").rpartition("/")
+    if sep and ("*" in tail or "." in tail):
+        return head or uri
+    return uri.rstrip("/")
+
+
+def export_targets(text: str) -> list[tuple[int, str]]:
+    """``(0-based line of the EXPORT, feed name)`` for every EXPORT DATA here."""
+    out: list[tuple[int, str]] = []
+    at = 0
+    while True:
+        m = _EXPORT.search(text, at)
+        if not m:
+            return out
+        at = m.end()
+        opt = _OPTIONS_AS.search(text, m.end())
+        if not opt:
+            return out
+        open_at = text.find("(", opt.end() - 1)
+        close_at = _balanced(text, open_at) if open_at >= 0 else -1
+        if close_at < 0:
+            return out
+        found = _URI_OPTION.search(text[open_at:close_at])
+        out.append((text[: m.start()].count("\n"),
+                    _feed_name(found.group("uri")) if found else ""))
+
+
 def _rewrite_export(text: str) -> str:
     """Leave the SELECT of an EXPORT DATA, and nothing else."""
     while True:
@@ -199,6 +240,15 @@ def _rewrite_load_data(text: str) -> str:
         chunk = text[m.start():end]
         replacement = f"CREATE TABLE {m.group('t')} {columns}"
         text = text[:m.start()] + replacement + _keep_lines(chunk) + text[end:]
+
+
+# UNDROP TABLE t -- restoring a table somebody deleted. A HARD parse error, and
+# a hard parse error costs the neighbouring statements too, so one line of a
+# recovery script used to take the rest of its file with it. One extra word puts
+# it in the same generic-command shape every other unreadable statement lands
+# in, where sqlread.referenced_here reads the table name out of it and reports
+# it as the dependency it is. Nothing is added to any line, so no line moves.
+_UNDROP = re.compile(r"\bUNDROP\s+TABLE\b", re.IGNORECASE)
 
 
 # ── Dataform ───────────────────────────────────────────────────────────────
@@ -291,4 +341,5 @@ def rewrite(text: str) -> str:
     out = _TABLE_ARG.sub(lambda m: m.group(1), out)
     out = _rewrite_load_data(out)
     out = _rewrite_export(out)
+    out = _UNDROP.sub(lambda m: "CREATE " + m.group(0), out)
     return out

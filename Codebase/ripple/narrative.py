@@ -85,7 +85,18 @@ def summarise(scan: dict, vals: dict) -> dict:
     # about the pipeline -- and this is the paragraph that gets forwarded.
     cut_short = scan.get("cutShort", [])
     star_tables = scan.get("starTables", [])
-    blind = never_opened + len(unreadable) + len(cut_short)
+    # Facts this letter used to be written without, every one of them measured
+    # as a letter that said the opposite of the screen it was written from.
+    feeds = scan.get("feeds", [])
+    stops = scan.get("stopsLoading", [])
+    referenced = [r for r in scan.get("referencedHere", []) if r.get("namesColumns")]
+    lookup_failed = bool(scan.get("lookupFailed"))
+    # Code files walked past because of the folder they sit in. Measured: the
+    # whole chain from the source table to the published one sat in build/, and
+    # this file wrote "Please proceed as planned".
+    skipped = len(scan.get("skippedInFolders", []))
+    folder_names = scan.get("skippedFolderNames", [])
+    blind = never_opened + len(unreadable) + len(cut_short) + skipped
 
     def _blind_phrase() -> str:
         bits = []
@@ -93,6 +104,11 @@ def summarise(scan: dict, vals: dict) -> dict:
             bits.append(f"{_plural(never_opened, 'file')} could not be opened at all")
         if unreadable:
             bits.append(f"{_plural(len(unreadable), 'file')} could not be followed")
+        if skipped:
+            bits.append(f"{_plural(skipped, 'code file')} "
+                        f"{'sits' if skipped == 1 else 'sit'} in a folder Ripple is told to "
+                        f"skip ({_names(folder_names)}) and "
+                        f"{'was' if skipped == 1 else 'were'} never read")
         if cut_short:
             bits.append(f"{_plural(len(cut_short), 'trail')} was stopped at "
                         f"{scan.get('maxHops', 4)} renames deep and was still going"
@@ -120,8 +136,20 @@ def summarise(scan: dict, vals: dict) -> dict:
         # still going when the hop limit stopped the walk.
         cut_names = [c["table"] for c in cut_short]
         end_names = [g["prod"] for g in reached if not g.get("cut")]
-        headline = (f"{_plural(len(elsewhere), 'usage')} found - none of them reaching "
-                    f"a table on your published list")
+        # Two things Ripple DID name, one line earlier on the same screen, while
+        # this paragraph said "none of them reaching a table on your published
+        # list" and sent the reader off to fix a rule that had worked perfectly.
+        stop_names = [s["prod"] for s in stops]
+        feed_names = [f["uri"] for f in feeds if f.get("uri")]
+        if stop_names:
+            headline = (f"{_plural(len(stop_names), 'published table')} "
+                        f"{'stops' if len(stop_names) == 1 else 'stop'} being refreshed")
+        elif feed_names:
+            headline = (f"{_plural(len(feed_names), 'delivery')} out of the warehouse "
+                        f"{'breaks' if len(feed_names) == 1 else 'break'}")
+        else:
+            headline = (f"{_plural(len(elsewhere), 'usage')} found - none of them reaching "
+                        f"a table on your published list")
         narrative = (
             f"{attrs} is used in {_plural(len({r.get('file') for r in elsewhere}), 'file')} "
             f"of the {scan.get('filesScanned', 0)} scanned. "
@@ -130,24 +158,46 @@ def summarise(scan: dict, vals: dict) -> dict:
                f"{scan.get('maxHops', 4)} renames deep - "
                f"{'that trail was' if len(cut_names) == 1 else 'those trails were'} still going, "
                f"so nothing past that point has been looked at. " if cut_names else "")
-            + "None of those names match the rule Ripple has been given for a table this "
-              "team publishes, so this is not a clean result - it is an unfinished one. "
-              "Check the rule on the settings screen before replying."
+            + (f"{_names(stop_names)} "
+               f"{'is on your published list and stops' if len(stop_names) == 1 else 'are on your published list and stop'}"
+               f" being refreshed: no column of "
+               f"{'it' if len(stop_names) == 1 else 'them'} changes, the job that fills "
+               f"{'it' if len(stop_names) == 1 else 'them'} stops running. " if stop_names else "")
+            + (f"The data also leaves the warehouse: {_names(feed_names)} is written by one of "
+               f"these statements, and whoever reads that file is outside this repository. "
+               if feed_names else "")
+            + ("" if stop_names or feed_names else
+               "None of those names match the rule Ripple has been given for a table this "
+               "team publishes, so this is not a clean result - it is an unfinished one. "
+               "Check the rule on the settings screen before replying.")
             + _inferred_phrase()
         )
         bullets = [f"{r['inter']} - {r['logic'].lower()} on {r['alias']}" for r in elsewhere[:4]]
-        bullets.append("Nothing here matched the production naming rule, so Ripple cannot say "
-                       "whether these tables are ones anybody outside the team reads.")
+        if stop_names:
+            bullets.insert(0, f"{_names(stop_names)} stops being refreshed on the day of the "
+                              f"change. Nothing fails on screen; the numbers go stale.")
+        if feed_names:
+            bullets.insert(0, f"The delivery at {_names(feed_names)} carries this attribute out "
+                              f"of the warehouse. Whoever reads it has to be told.")
+        if not stop_names and not feed_names:
+            bullets.append("Nothing here matched the production naming rule, so Ripple cannot say "
+                           "whether these tables are ones anybody outside the team reads.")
         if cut_names:
             bullets.append(f"{_plural(len(cut_names), 'trail')} was cut short by the hop limit "
                            f"rather than by the code. Run the scan again, deeper, before "
                            f"treating this as the whole answer.")
         actions = ([f"Follow the trails Ripple stopped at - they were still going at "
-                    f"{scan.get('maxHops', 4)} renames deep."] if cut_names else []) + [
-            "Check the production table rule on the settings screen against how your tables "
-            "are really named, then run the scan again.",
-            "Until then, treat the tables listed above as impacted.",
-        ]
+                    f"{scan.get('maxHops', 4)} renames deep."] if cut_names else [])
+        if feed_names:
+            actions.append(f"Tell whoever reads {_names(feed_names)} - they are outside this "
+                           f"repository and no scan of it will find them.")
+        if stop_names:
+            actions.append(f"Fix the job that fills {_names(stop_names)} before the date, or it "
+                           f"quietly serves yesterday's data.")
+        if not stop_names and not feed_names:
+            actions.append("Check the production table rule on the settings screen against how "
+                           "your tables are really named, then run the scan again.")
+        actions.append("Until then, treat the tables listed above as impacted.")
     elif not files_scanned:
         # Nothing was read at all. "No impact" here is a statement about an
         # empty folder dressed up as a statement about a pipeline.
@@ -162,16 +212,52 @@ def summarise(scan: dict, vals: dict) -> dict:
             "Point Ripple at the folder holding the code, on the settings screen.",
             "Run the scan again once files have been read.",
         ]
+    elif lookup_failed:
+        # Not "no impact". Ripple never met this name as a column on any table
+        # it read, so it has not answered the question -- and this paragraph is
+        # the one that gets pasted into a reply. Measured: a mistyped attribute
+        # produced "No impact - nothing in this repository consumes the
+        # attribute" and a letter reading "Please proceed as planned."
+        known = [c for a in scan.get("attributes", []) for c in a.get("tableColumns", [])]
+        table = (scan.get("attributes") or [{}])[0].get("table", "that table")
+        headline = f"{attrs} was not found - nothing has been checked"
+        narrative = (
+            f"Ripple read {_plural(files_scanned, 'file')} and never met a column called "
+            f"{attrs} on {table}, or on anything else in this repository. That is not the same "
+            f"as the change being safe: the question has not been answered. Check the spelling "
+            f"before replying."
+            + (f" The columns Ripple did read on {table} are {_names(known, 12)}."
+               if known else
+               f" Ripple has no column list for {table} either, because nothing in this "
+               f"repository writes one down.")
+        )
+        bullets = [
+            f"No answer either way about {attrs} - the name was not found as a column.",
+            (f"What Ripple did read on {table}: {_names(known, 12)}." if known else
+             f"Nothing in this repository states the columns of {table}."),
+        ]
+        actions = [
+            f"Check the spelling of {attrs} against the list above, then run the scan again.",
+            "Do not reply to the upstream team on the strength of this scan.",
+        ]
     elif not groups:
-        if blind:
+        if referenced:
+            # Nothing carries the column anywhere, and something names it
+            # outright and stops working without it. That is not "no impact".
+            headline = (f"No lineage, but {_plural(len(referenced), 'statement')} "
+                        f"{'names' if len(referenced) == 1 else 'name'} {attrs} directly")
+        elif blind:
             headline = (f"No usage found in the {_plural(files_scanned, 'file')} that could be "
                         f"read - {_plural(blind, 'other file')} could not be")
         else:
             headline = "No impact - nothing in this repository consumes the attribute"
         narrative = (
-            f"The scan read {stats.get('filesWithImpact', 0) or 0} of "
-            f"{files_scanned} files looking for {attrs}, and found no path from it "
-            f"to any production table this team publishes."
+            f"The scan read {_plural(files_scanned, 'file')} looking for {attrs}, and found no "
+            f"path from it to any production table this team publishes."
+            + (f" {_plural(len(referenced), 'statement')} does name it and carries it nowhere: "
+               f"{_names([r['kind'] + ' on ' + r['table'] for r in referenced])}. "
+               f"{'That stops' if len(referenced) == 1 else 'Those stop'} working on the day "
+               f"the column changes." if referenced else "")
             + (f" It is not a clean result for the whole repository: {_blind_phrase()}, "
                f"so nothing in those is covered either way." if blind else "")
             + _inferred_phrase()
@@ -180,10 +266,18 @@ def summarise(scan: dict, vals: dict) -> dict:
             f"No production table depends on {attrs}.",
             f"{_plural(scan.get('filesMatched', 0), 'file')} mentioned the name, none of them in a way that carries it downstream.",
         ]
+        if referenced:
+            bullets.insert(0, f"{_plural(len(referenced), 'statement')} names {attrs} without "
+                              f"carrying it anywhere - "
+                              f"{_names([r['kind'] + ' on ' + r['table'] for r in referenced])}.")
         actions = (["Read the files below by hand before replying - this result does not cover them."]
-                   if blind else []) + [
-            "Reply to the upstream team confirming no impact." if not blind
-            else "Reply only once those files have been checked.",
+                   if blind else [])
+        if referenced:
+            actions.append(f"Update the "
+                           f"{_names([r['kind'] for r in referenced])} that names {attrs}.")
+        actions += [
+            "Reply to the upstream team confirming no impact." if not blind and not referenced
+            else "Reply only once those have been checked.",
             "Re-run the scan if this repository takes on the table later.",
         ]
     else:
@@ -277,16 +371,32 @@ def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
         # This draft is a letter somebody sends. It must never say "no impact"
         # while the analysis behind it is holding a list of usages.
         end_names = _names([g["prod"] for g in reached], 10) or "tables in our own pipeline"
+        # Two things Ripple named that this letter used to leave out entirely,
+        # while telling the reader the data feeds "tables in our own pipeline".
+        stops = scan.get("stopsLoading", [])
+        feeds = [f["uri"] for f in scan.get("feeds", []) if f.get("uri")]
         subject = f"RE: {subject_base} - assessment in progress"
-        body = (
-            f"Hi {first},\n\n"
-            f"We have run our impact analysis and are still confirming the result.\n\n"
+        lines = [
+            f"Hi {first},", "",
+            "We have run our impact analysis and are still confirming the result.", "",
             f"{attrs} is used in {_plural(len({r.get('file') for r in elsewhere}), 'file')} "
-            f"in our repository, feeding {end_names}. We are confirming which of those are "
-            f"published outside our team before we can tell you whether this is impacting.\n\n"
-            f"We will come back to you with a firm answer before the effective date.\n\n"
-            f"Thanks,\nData Engineering"
-        )
+            f"in our repository, feeding {end_names}.",
+        ]
+        if stops:
+            lines += ["", f"One thing is already confirmed: "
+                          f"{_names([s['prod'] for s in stops], 10)} stops being refreshed on "
+                          f"the day of the change. No column of it changes - the job that fills "
+                          f"it stops running, so it quietly serves stale data."]
+        if feeds:
+            lines += ["", f"This data also leaves the warehouse. {_names(feeds, 10)} is written "
+                          f"from one of these statements and read by somebody outside our "
+                          f"repository, so we are tracing who consumes it."]
+        if not stops:
+            lines += ["", "We are confirming which of those tables are published outside our "
+                          "team before we can tell you whether this is impacting."]
+        lines += ["", "We will come back to you with a firm answer before the effective date.",
+                  "", "Thanks,", "Data Engineering"]
+        body = "\n".join(lines)
     elif not scan.get("filesScanned", 0):
         # There was nothing to read. A letter saying "no impact" here is a
         # letter about an empty folder, sent to somebody who will act on it.
@@ -298,28 +408,59 @@ def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
             f"We will come back to you with a firm answer before the effective date.\n\n"
             f"Thanks,\nData Engineering"
         )
+    elif scan.get("lookupFailed"):
+        # The question was never answered. Ripple never met this name as a
+        # column anywhere it read, so there is nothing to report either way --
+        # and this letter used to say "No impact... Please proceed as planned."
+        subject = f"RE: {subject_base} - we need to check the attribute name"
+        body = (
+            f"Hi {first},\n\n"
+            f"We cannot answer this one yet.\n\n"
+            f"Our repository scan could not find a column called {attrs} anywhere in our code, "
+            f"so nothing has actually been checked against it. That is most likely a difference "
+            f"in how the attribute is named on our side.\n\n"
+            f"Could you confirm the exact column name? We will re-run the analysis and come back "
+            f"to you with a firm answer before the effective date.\n\n"
+            f"Thanks,\nData Engineering"
+        )
     elif not groups:
         # "No impact, proceed as planned" is the single most consequential
         # sentence this tool writes. It is only ever sent when the whole
         # repository really was read -- and a trail Ripple stopped following at
-        # its own hop limit is not the whole repository having been read.
+        # its own hop limit is not the whole repository having been read, any
+        # more than a folder Ripple was told to skip is.
+        referenced = [r for r in scan.get("referencedHere", []) if r.get("namesColumns")]
+        # A folder Ripple was told to skip is exactly as unread as a file it
+        # could not open, and this letter used to count neither.
         blind = (scan.get("stats", {}).get("neverOpened", 0)
                  + len(scan.get("unreadable", []))
-                 + len(scan.get("cutShort", [])))
-        if blind:
+                 + len(scan.get("cutShort", []))
+                 + len(scan.get("skippedInFolders", [])))
+        if blind or referenced:
             subject = f"RE: {subject_base} - no impact found so far"
-            body = (
-                f"Hi {first},\n\n"
-                f"We have run our impact analysis and are still confirming the result.\n\n"
+            lines = [
+                f"Hi {first},", "",
+                "We have run our impact analysis and are still confirming the result.", "",
                 f"No usage of {attrs} was found in the "
                 f"{_plural(scan.get('filesScanned', 0), 'file')} we were able to read, and no "
-                f"production table traces back to it.\n\n"
-                f"{_plural(blind, 'further file')} could not be read or followed automatically "
-                f"and {'is' if blind == 1 else 'are'} being checked by hand, so we are not "
-                f"confirming no impact yet.\n\n"
-                f"We will come back to you with a firm answer before the effective date.\n\n"
-                f"Thanks,\nData Engineering"
-            )
+                f"production table traces back to it.",
+            ]
+            if blind:
+                lines += ["", f"{_plural(blind, 'further file')} could not be read, followed or "
+                              f"reached automatically and "
+                              f"{'is' if blind == 1 else 'are'} being checked by hand, so we are "
+                              f"not confirming no impact yet."]
+            if referenced:
+                # Read, understood, and carrying the column nowhere -- so it is
+                # not on any chain, and it stops working all the same.
+                lines += ["", f"Separately, {_plural(len(referenced), 'statement')} in our "
+                              f"repository names {attrs} without carrying it into another table "
+                              f"- {_names([r['kind'] + ' on ' + r['table'] for r in referenced])}. "
+                              f"{'That has' if len(referenced) == 1 else 'Those have'} to be "
+                              f"updated on our side before the date."]
+            lines += ["", "We will come back to you with a firm answer before the effective "
+                          "date.", "", "Thanks,", "Data Engineering"]
+            body = "\n".join(lines)
         else:
             subject = f"RE: {subject_base} - no impact"
             body = (

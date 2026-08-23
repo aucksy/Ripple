@@ -233,6 +233,68 @@ _LOOP_START = re.compile(r"^\s*(?:FOR\s+\w+\s+IN|WHILE)\b", re.IGNORECASE)
 _LOOP_PLAIN = re.compile(r"^\s*(?:FOR|WHILE)\b.*\b(?:DO|LOOP)\s*$", re.IGNORECASE)
 _LOOP_END = re.compile(r"\b(?:DO|LOOP)\s*$", re.IGNORECASE)
 
+# A whole loop written on ONE line:
+#     FOR rec IN (SELECT tbl FROM cfg_tables) DO SELECT 1; END FOR;
+# _LOOP_START matches it and _LOOP_END does not (the line ends with END FOR, not
+# with DO), so it used to go to _gather_loop -- which then looked for a line
+# ending in DO, never found one, and gave back "everything to the end of the
+# file". Measured: every line after it became an empty statement, silently. No
+# parse error, no unreadable entry, nothing on any screen: the trail simply
+# stopped one table short and reported that as where the chain ends.
+_ONE_LINE_LOOP = re.compile(
+    r"^(?P<lead>\s*)(?:FOR\s+\w+\s+IN|WHILE)\s*(?P<q>\(.*\))\s*(?:DO|LOOP)\b"
+    r"(?P<body>.*?)(?:\bEND\s+(?:FOR|WHILE|LOOP)\s*;?\s*)?$",
+    re.IGNORECASE,
+)
+
+# The condition of an IF or a WHILE, when it is a query.
+#
+#     IF (SELECT MAX(cm13) FROM customer_demographics) IS NOT NULL THEN
+#
+# That line READS the table, and the whole header was being replaced with an
+# empty statement -- so the read went with it and the file came back with
+# nothing at all: risk none, no findings, no gap reported. Written as an ASSERT
+# instead, the identical guard is read correctly, which is how this was found.
+# The condition is a scalar expression rather than a table, but a subquery in a
+# FROM is exactly what it is: one read of one table, building nothing.
+_HAS_SELECT = re.compile(r"\bSELECT\b", re.IGNORECASE)
+
+
+def _condition_query(line: str) -> str:
+    """The first bracketed group in this line that holds a SELECT, or ""."""
+    if not _HAS_SELECT.search(line):
+        return ""
+    depth = 0
+    start = -1
+    quote = ""
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "'\"`":
+            quote = ch
+        elif ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                group = line[start:i + 1]
+                if _HAS_SELECT.search(group):
+                    return group
+                start = -1
+            depth = max(0, depth)
+    return ""
+
+
+def _kept_read(line: str) -> str:
+    """A scripting line replaced by the read it contains, or by nothing."""
+    group = _condition_query(line)
+    return f"SELECT * FROM {group};" if group else ";"
+
+
 _CASE_OR_END = re.compile(r"\b(CASE|END)\b", re.IGNORECASE)
 # Nothing to hide a keyword behind, so the line can be read as it stands.
 _NEEDS_STRIPPING = re.compile(r"""['"`]|--|/\*|\#""")
@@ -343,16 +405,31 @@ def unwrap_blocks(text: str) -> str:
             changed = True
             continue
         if _LOOP_START.match(code) and not _LOOP_END.search(code):
+            # A whole loop on one line first: it looks like a header that has
+            # not finished, and treating it as one swallowed the rest of the
+            # file. See _ONE_LINE_LOOP.
+            whole = _ONE_LINE_LOOP.match(line) or _ONE_LINE_LOOP.match(code)
+            if whole is not None:
+                out.append(f"{whole.group('lead')}SELECT * FROM {whole.group('q')}; "
+                           f"{whole.group('body').strip()}")
+                changed = True
+                continue
             body, skip_until = _gather_loop(lines, n, state.copy())
             out.append(body)
             changed = True
             continue
-        if _ALWAYS_SCRIPTING.match(code) or _LOOP_PLAIN.match(code):
+        if _ALWAYS_SCRIPTING.match(code):
             out.append(";")
             changed = True
             continue
+        # A WHILE or an IF header. Whatever it tests is a READ, and replacing
+        # the line outright threw it away -- see _condition_query.
+        if _LOOP_PLAIN.match(code):
+            out.append(_kept_read(line))
+            changed = True
+            continue
         if _SCRIPTING_UNLESS_CASE.match(code) and depth == 0:
-            out.append(";")
+            out.append(_kept_read(line))
             changed = True
             continue
 
@@ -411,7 +488,11 @@ def _gather_loop(lines: list[str], start: int, state: dict) -> tuple[str, int]:
             if open_at >= 0 and close_at > open_at:
                 return "SELECT * FROM " + joined[open_at : close_at + 1] + ";", n
             return ";", n
-    return ";", len(lines) - 1
+    # No line finished the header. Give up on THIS LINE ONLY. Returning the end
+    # of the file blanked every statement after it -- silently, with no parse
+    # error and nothing on any screen, so a trail stopped one table short and
+    # that was reported as where the chain ends.
+    return _kept_read(lines[start]), start
 
 
 def has_blocks(text: str) -> bool:
