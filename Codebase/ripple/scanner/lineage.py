@@ -323,6 +323,10 @@ def trace(
     cut_seen: dict[tuple, dict] = {}
     merged_seen: dict[str, dict] = {}
     wild_seen: dict[str, dict] = {}
+    # Every table the chain actually stood on. Used at the end to look through
+    # the statements Ripple could not understand for one that names any of
+    # them -- see _opaque_on_the_trail.
+    visited: set[str] = set()
 
     def note_if_wildcard(name: str) -> None:
         """Say when this table was only reached through a wildcard name.
@@ -439,6 +443,7 @@ def trace(
                 recorded = False
                 truncated = False
                 matched = parsed.reading(cur_table)
+                visited.add(short_name(cur_table).upper())
                 note_if_merged(cur_table, matched, hop)
                 note_if_wildcard(cur_table)
 
@@ -735,8 +740,51 @@ def trace(
                 {"file": path, "reason": "name appears, but no lineage to a production table"}
             )
 
+    # A statement Ripple could not understand that names a table the chain
+    # actually stood on. This is the quietest hole left in the reader: the file
+    # parses, the readable statements produce findings, and the one statement
+    # that carries the chain onwards -- a procedure call, SQL built as text,
+    # a shape the parser gave up on -- is simply absent. The result reads as
+    # complete because nothing on it says otherwise.
+    #
+    # Deliberately narrow. Every real pipeline is full of DECLAREs and CALLs
+    # that carry no lineage at all, and reporting those would bury the list this
+    # is trying to protect. Only a statement naming a table on THIS trail counts.
+    for entry in _opaque_on_the_trail(index, parsed, visited,
+                                      {u.get("file") for u in res.unreadable}):
+        res.unreadable.append(entry)
+
     res.risk = _risk_of(res)
     return res
+
+
+def _opaque_on_the_trail(index: RepoIndex, parsed: ParsedRepo, visited: set[str],
+                         already: set) -> list[dict]:
+    """Statements Ripple could not read that name a table the chain reached."""
+    if not visited or not parsed.opaque:
+        return []
+    out: list[dict] = []
+    pattern = index._pattern(sorted(visited))
+    for path, records in sorted(parsed.opaque.items()):
+        if path in already:
+            continue
+        for record in records:
+            text = record.get("sql") or record.get("text") or ""
+            match = pattern.search(text)
+            if not match:
+                continue
+            out.append({
+                "file": path,
+                "reason": (f"a statement here names {match.group(1)}, which is on this "
+                           "trail, and Ripple could not understand it"),
+                "line": record.get("line", 0),
+                "snippet": record.get("text", "")[:200],
+                "hint": ("The chain may carry on inside that statement. Everything above "
+                         "is what Ripple could follow; this one has to be read by a "
+                         "person."),
+            })
+            break                                  # one entry per file, not per line
+    return out
 
 
 def _named_out_of_reach(

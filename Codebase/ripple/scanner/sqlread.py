@@ -22,6 +22,7 @@ from .repo import (
     statements_for,
     written_tables,
 )
+from . import rescue
 from .templating import (
     describe as describe_templating,
     fill_placeholders,
@@ -36,6 +37,7 @@ from .templating import (
 import logging
 
 logging.getLogger("sqlglot").setLevel(logging.ERROR)
+log = logging.getLogger(__name__)
 
 # How a usage is shown to the user, in the order we prefer to report it.
 LOGIC_LABEL = {
@@ -82,9 +84,16 @@ KIND_MARKERS = {
 # ({{tgt_project_id}}, {{src_project_id}}), so including it would split one real
 # table into two on the strength of which placeholder somebody happened to type.
 # The dataset is the part that says which table this is.
+# customer_demographics$20260101 -- a partition decorator. It names ONE DAY of
+# one table, not another table, and BigQuery uses it wherever a single
+# partition is written or read. Kept as part of the name, it split every
+# decorated read off from the table it belongs to and the scan came back clean.
+_DECORATOR = re.compile(r"\$[0-9]+$")
+
+
 def short_name(table: str) -> str:
     """The table's own name, without the dataset in front of it."""
-    return (table or "").rsplit(".", 1)[-1]
+    return _DECORATOR.sub("", (table or "").rsplit(".", 1)[-1])
 
 
 def dataset_of(table: str) -> str:
@@ -102,6 +111,8 @@ def canonical(table: str) -> str:
     comparing it would split one real table into two.
     """
     parts = [p for p in (table or "").split(".") if p]
+    if parts:
+        parts[-1] = _DECORATOR.sub("", parts[-1])
     return ".".join(parts[-2:]) if parts else (table or "")
 
 
@@ -147,6 +158,13 @@ def wildcard_covers(pattern: str, name: str) -> bool:
     if not prefix.endswith(_STAR):
         return False
     prefix = prefix[:-1]
+    # A bare "*" -- the whole of a dataset. It genuinely does read every table
+    # there, but matching on it here would put every table in the repository on
+    # every chain, which is not a spare row somebody can dismiss, it is the
+    # whole warehouse. It is ruled on in same_table instead, where the dataset
+    # is known and can scope it.
+    if not prefix:
+        return False
     other = short_name(name).upper()
     if other.endswith(_STAR):
         # Two wildcards. They are the same family if either prefix contains the
@@ -175,12 +193,17 @@ def same_table(a: str, b: str) -> bool:
     word here, so they go on matching.
     """
     if short_name(a).upper() != short_name(b).upper():
-        if is_wildcard(a):
-            if not wildcard_covers(a, b):
-                return False
-        elif is_wildcard(b):
-            if not wildcard_covers(b, a):
-                return False
+        if is_wildcard(a) or is_wildcard(b):
+            wide, other = (a, b) if is_wildcard(a) else (b, a)
+            if not wildcard_covers(wide, other):
+                # A dataset-wide "ds.*" has nothing in front of the star, so it
+                # covers every table -- but only inside its own dataset, and
+                # only when the other name says which dataset it is in. Without
+                # both of those it would match the whole repository.
+                if not (short_name(wide) == _STAR and dataset_of(wide)
+                        and dataset_of(other)
+                        and dataset_of(wide).upper() == dataset_of(other).upper()):
+                    return False
         else:
             return False
     left, right = dataset_of(a).upper(), dataset_of(b).upper()
@@ -226,9 +249,40 @@ def _called_function_name(t: exp.Table) -> str:
     return name
 
 
+def _tables_handed_to_a_call(t: exp.Table) -> list[str]:
+    """Tables passed INTO a function that sits in a FROM clause.
+
+    BigQuery hands a table to a function with the word TABLE in front of it::
+
+        SELECT cm13 FROM APPENDS(TABLE `prj.ds.customer_demographics`, NULL)
+        SELECT ...  FROM `prj.ds.recent`(TABLE `prj.ds.orders`, 'apple')
+
+    The parser refuses that outright, so the pre-pass takes the word out (see
+    scanner/rescue.py) -- and what is left arrives as an ordinary column
+    reference among the function's arguments, not as a table node. Without this
+    the real table is nowhere in the statement, and an incremental load, which
+    is exactly how a published table is kept up to date, reads nothing at all.
+
+    Only column-shaped arguments count. A literal, a number or a nested call is
+    not a table, and inventing one from a string would put a table nobody has
+    on the result.
+    """
+    inner = t.this
+    if not isinstance(inner, exp.Anonymous):
+        return []
+    out: list[str] = []
+    for arg in inner.expressions:
+        if not isinstance(arg, exp.Column):
+            continue
+        name = canonical(_bare(arg.sql()))
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
 def _qualify(t: exp.Table) -> str:
     """One table node as ``dataset.name``, or just ``name`` when unqualified."""
-    name = t.name
+    name = _DECORATOR.sub("", t.name or "")
     if not name:
         # A table function call. Backticked in full, the whole path arrives as
         # one string -- `prj.ds.recent_customers` -- so it is cut down the same
@@ -538,6 +592,36 @@ def _target_of(stmt: exp.Expression) -> str | None:
     if isinstance(stmt, (exp.Create, exp.Insert, exp.Merge, exp.Delete, exp.Update)):
         return _table_name(stmt.this)
     return None
+
+
+def _target_node(stmt: exp.Expression) -> exp.Table | None:
+    """The table node a statement WRITES, as a node rather than as a name.
+
+    Sources are gathered by walking every table in the statement, which finds
+    the write target too, so it has to be left out. That used to be done by
+    comparing NAMES with same_table -- and same_table is deliberately loose,
+    because a name with no dataset has to go on matching one that has a dataset
+    or every templated chain in the repository breaks.
+
+    Loose is right for FOLLOWING a chain and catastrophic for EXCLUDING a
+    source. Two real shapes were silently losing every source they had:
+
+        CREATE OR REPLACE TABLE ds.events_rollup AS SELECT ... FROM ds.events_*
+        CREATE OR REPLACE TABLE {{target_dataset}}.orders AS SELECT ... FROM stage.orders
+
+    In the first the wildcard covers the target's own name; in the second the
+    templated dataset is dropped, leaving a bare "orders" that matches
+    "stage.orders". Either way the one source in the statement was thrown away,
+    the statement was indexed as reading nothing, and the scan came back clean.
+
+    Comparing the node itself cannot make that mistake, and it costs nothing.
+    """
+    if not isinstance(stmt, (exp.Create, exp.Insert, exp.Merge, exp.Delete, exp.Update)):
+        return None
+    node = stmt.this
+    if isinstance(node, exp.Schema):
+        node = node.this
+    return node if isinstance(node, exp.Table) else None
 
 
 # ── a table built as a whole copy of another ───────────────────────────────
@@ -858,6 +942,11 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
         # gives the text back unchanged when there is no scripting in it, and
         # asking first meant walking every line of every file twice.
         text = unwrap_blocks(text)
+        # Shapes the parser refuses outright, rewritten into ones it reads. Five
+        # of them are a hard parse error, which loses the neighbouring
+        # statements too; four fall back to a node with no tables in it, which
+        # is invisible. See scanner/rescue.py.
+        text = rescue.rewrite(text)
         parsed, bad = _parse_text(text, dialect, offset)
         failures.extend(bad)
         for stmt, line, line_end in parsed:
@@ -899,11 +988,22 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
                 # ..._BCA_UNION table invisible: the statement was never
                 # recorded as reading that table at all, so a change to it
                 # produced no findings anywhere and the scan came back clean.
+                written = _target_node(stmt)
+                written_id = id(written) if written is not None else None
                 for t in stmt.find_all(exp.Table):
+                    # The write target, left out by identity rather than by
+                    # name. See the note above _target_node for what comparing
+                    # names cost.
+                    if written_id is not None and id(t) == written_id:
+                        continue
                     qualified = _qualify(t)
-                    if (qualified and t.name.upper() not in skip
-                            and not same_table(qualified, target or "")):
+                    if qualified and t.name.upper() not in skip:
                         sources.add(qualified)
+                    # APPENDS(TABLE t, ...) and a TVF given a table: the table
+                    # handed in is a real read and is nowhere else in the tree.
+                    for handed in _tables_handed_to_a_call(t):
+                        if short_name(handed).upper() not in skip:
+                            sources.add(handed)
             # A DELETE or an UPDATE reads the table it changes. Without this the
             # statement has no source, so nothing ever looks at its WHERE clause
             # -- and a filter on a column that is about to disappear is exactly
@@ -957,7 +1057,20 @@ def parse_repo(index: RepoIndex, cfg: Settings | None = None, on_progress=None) 
     for done, f in enumerate(index.files, start=1):
         if on_progress is not None and (done % 10 == 0 or done == total):
             on_progress(done, total, "Understanding the SQL")
-        stmts, file_problems, opaque = parse_file(f, cfg)
+        try:
+            stmts, file_problems, opaque = parse_file(f, cfg)
+        except Exception as exc:
+            # Reading a repository takes minutes. Letting one unexpected shape
+            # end the whole thing with a traceback loses every file after it,
+            # and the person is left with nothing at all rather than with an
+            # answer and one file to check by hand.
+            log.warning("could not read %s: %s", f.path, exc)
+            problems.append({
+                "file": f.path,
+                "reason": (f"Ripple could not read this file at all "
+                           f"({type(exc).__name__}) - check it by hand"),
+            })
+            continue
         if stmts:
             pr.statements.extend(stmts)
             pr.parsed_files.add(f.path)
@@ -1052,10 +1165,14 @@ def _sources_of(stmt: Statement) -> dict[str, list[str]]:
     if stmt.expr is None:
         return out
     for t in stmt.expr.find_all(exp.Table):
+        for handed in _tables_handed_to_a_call(t):
+            add(short_name(handed), handed)
+            if t.alias:
+                add(t.alias, handed)
         qualified = _qualify(t)
         if not qualified:
             continue
-        add(t.name, qualified)
+        add(t.name or short_name(qualified), qualified)
         if t.alias:
             add(t.alias, qualified)
     return out
@@ -1257,6 +1374,7 @@ def output_names(stmt: Statement, column: str, limit: int = MAX_OUTPUT_NAMES) ->
         # rather than the trail being dropped.
         names = found[:limit] if found else names
     names = _through_insert_columns(stmt, names)
+    names = _through_create_columns(stmt, names)
     names = _through_merge_columns(stmt, names)
     stmt._names[column.upper()] = names
     return names
@@ -1281,6 +1399,49 @@ def _through_insert_columns(stmt: Statement, names: list[str]) -> list[str]:
     if not isinstance(schema, exp.Schema):
         return names
     targets = [c.name for c in schema.expressions if getattr(c, "name", "")]
+    if not targets:
+        return names
+    positions: list[str] = []
+    for e in stmt.select.expressions:
+        if _is_star(e):
+            return names                      # arity unknown; nothing to line up
+        positions.append(e.alias if isinstance(e, exp.Alias)
+                         else e.name if isinstance(e, exp.Column) else "")
+    if len(positions) != len(targets):
+        return names
+    wanted = {n.upper() for n in names}
+    mapped = [targets[i] for i, p in enumerate(positions) if p and p.upper() in wanted]
+    return _dedupe(mapped) if mapped else names
+
+
+def _through_create_columns(stmt: Statement, names: list[str]) -> list[str]:
+    """Rename by position, the way ``CREATE VIEW v(a, b) AS SELECT x, y`` does.
+
+    BigQuery lets a view, a materialized view or a CTAS pin its own output
+    column names in the CREATE line, and it is the ordinary way a team publishes
+    friendly names over cryptic warehouse codes. The list was thrown away, which
+    went wrong in both directions at once: the chain stopped at the view, and a
+    downstream table reading the OLD name was reported as a confident break --
+    when after the rename that name is not a column of the view at all.
+
+    Same care as the INSERT version: only when the two lists are plainly the
+    same length and no star is in the way. Where the arity cannot be checked the
+    name is left alone rather than guessed at.
+    """
+    if not isinstance(stmt.expr, exp.Create) or stmt.select is None:
+        return names
+    schema = stmt.expr.this
+    if not isinstance(schema, exp.Schema):
+        return names
+    targets: list[str] = []
+    for c in schema.expressions:
+        # A CTAS column list may carry types -- (cid STRING, mkt STRING) -- and
+        # a view's does not. Both give the name the same way.
+        name = getattr(c, "name", "") or (c.this.name if getattr(c, "this", None) is not None
+                                          and hasattr(c.this, "name") else "")
+        if not name:
+            return names
+        targets.append(name)
     if not targets:
         return names
     positions: list[str] = []

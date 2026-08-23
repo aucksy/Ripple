@@ -783,3 +783,204 @@ def test_unnest_is_still_not_a_table(tmp_path):
     assert [g["prod"] for g in out["groups"]] == ["final_published"]
     names = [r["inter"] for g in out["groups"] for r in g["rows"]]
     assert not any("unnest" in (n or "").lower() for n in names), names
+
+
+# ── 13. a source is not the target just because the names look alike ───────
+# Sources are gathered by walking every table in a statement, which finds the
+# write target too, so the target has to be left out. That was done by
+# comparing NAMES with same_table -- and same_table is deliberately loose,
+# because a name with no dataset must go on matching one that has a dataset or
+# every templated chain in this repository breaks.
+#
+# Loose is right for FOLLOWING a chain and catastrophic for EXCLUDING a source.
+# Both shapes below threw away the only source the statement had, so the
+# statement was indexed as reading nothing and the scan came back clean.
+def test_a_wildcard_covering_its_own_target_does_not_erase_the_source(tmp_path):
+    """events_* covers events_rollup, because a wildcard is a prefix match and
+    that really is what BigQuery does. It is still the source, not the target."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE `p.ds.events_rollup` AS "
+                 "SELECT cm13 FROM `p.ds.events_*`;",
+        "b.sql": "CREATE OR REPLACE TABLE `p.pub.exec_published` AS "
+                 "SELECT cm13 FROM `p.ds.events_rollup`;",
+    }, table="events_20260101")
+    assert [g["prod"] for g in out["groups"]] == ["exec_published"]
+
+
+def test_a_templated_target_dataset_does_not_erase_the_source(tmp_path):
+    """The dataset on the target is a placeholder, so it is dropped -- leaving a
+    bare "orders" that matched "stage.orders" and took the source with it."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE {{ target_dataset }}.orders AS "
+                 "SELECT id, cm13 AS promo FROM stage.orders;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT promo FROM orders;",
+    }, table="stage.orders")
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_a_table_rebuilt_from_itself_is_still_read(tmp_path):
+    """INSERT INTO t SELECT ... FROM t reads t. Excluding the target by name
+    threw that away, and the statement was filed under "the name appears, but
+    no lineage to a production table" -- the opposite of the truth."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cm13 FROM customer_demographics;\n"
+                 "INSERT INTO final_published (cm13) "
+                 "SELECT UPPER(cm13) FROM final_published;",
+    })
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert len([r for g in out["groups"] for r in g["rows"]]) >= 2, \
+        "both the build and the self-referencing insert are usages"
+
+
+def test_a_wildcard_with_nothing_in_front_of_it_does_not_match_everything(tmp_path):
+    """A bare * matches every table there is. Following that would put the whole
+    warehouse on every chain -- not a spare row somebody can dismiss."""
+    from ripple.scanner.sqlread import same_table, wildcard_covers
+    assert wildcard_covers("*", "anything_at_all") is False
+    assert same_table("*", "customer_demographics") is False
+    # Scoped by a dataset it is meaningful again, and only inside that dataset.
+    assert same_table("ds.*", "ds.customer_demographics") is True
+    assert same_table("ds.*", "other_ds.customer_demographics") is False
+    assert same_table("ds.*", "customer_demographics") is False, \
+        "an unqualified name does not say it is in that dataset"
+
+
+# ── 14. shapes the SQL parser refuses ──────────────────────────────────────
+# sqlglot fails these two ways, and both are quiet: a hard parse error, which
+# loses the statement AND its neighbours; or a fall back to a node holding raw
+# text and no tables, which is invisible unless it is the only statement in its
+# file. Either way the answer is a clean "no impact". Each shape below was
+# measured against the installed parser, and each appears in ordinary BigQuery.
+@pytest.mark.parametrize("what,files", [
+    ("APPENDS(TABLE t) - the incremental read", {
+        "a.sql": "CREATE OR REPLACE TABLE stage1 AS "
+                 "SELECT cm13 FROM APPENDS(TABLE `prj.ds.customer_demographics`, NULL);",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage1;"}),
+    ("a TVF handed a table", {
+        "a.sql": "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cm13 FROM `prj.ds.pick`(TABLE `prj.ds.customer_demographics`, 'x');"}),
+    ("ML.PREDICT(MODEL m, TABLE t)", {
+        "a.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM "
+                 "ML.PREDICT(MODEL `prj.ds.m1`, TABLE `prj.ds.customer_demographics`);"}),
+    ("EXTERNAL TABLE with a BigLake connection", {
+        "a.sql": "CREATE OR REPLACE EXTERNAL TABLE customer_demographics (cm13 STRING)\n"
+                 " WITH CONNECTION `prj.us.myconn`\n"
+                 " WITH PARTITION COLUMNS (dt DATE)\n"
+                 " OPTIONS (format='PARQUET', uris=['gs://b/*']);",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cm13 FROM customer_demographics;"}),
+    ("LOAD DATA INTO declares the columns", {
+        "a.sql": "LOAD DATA INTO customer_demographics (cm13 STRING, region STRING)\n"
+                 " FROM FILES (format='CSV', uris=['gs://b/x.csv']);",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cm13 FROM customer_demographics;"}),
+    ("CLONE ... FOR SYSTEM_TIME AS OF - the restore", {
+        "a.sql": "CREATE OR REPLACE TABLE stage1 AS SELECT cm13 FROM customer_demographics;",
+        "b.sql": "CREATE TABLE final_published CLONE stage1 "
+                 "FOR SYSTEM_TIME AS OF TIMESTAMP('2026-01-01');"}),
+    ("MATERIALIZED VIEW AS REPLICA OF", {
+        "a.sql": "CREATE OR REPLACE TABLE stage1 AS SELECT cm13 FROM customer_demographics;",
+        "b.sql": "CREATE MATERIALIZED VIEW final_published AS REPLICA OF stage1;"}),
+])
+def test_a_shape_the_parser_refuses_is_still_followed(tmp_path, what, files):
+    out = scan(tmp_path, files)
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], what
+
+
+def test_an_export_is_a_real_read_not_an_unreadable_file(tmp_path):
+    """EXPORT DATA delivers to somebody outside the warehouse. It builds no
+    table, so there is nothing to carry the column on to -- but it IS a read,
+    and it used to be filed as a file that could not be read."""
+    out = scan(tmp_path, {
+        "a.sql": "EXPORT DATA OPTIONS(uri='gs://b/out/*.csv', format='CSV') AS\n"
+                 " SELECT cm13 FROM customer_demographics;"})
+    assert out["stats"]["couldNotRead"] == 0, "it can be read now"
+    assert out["other"], "and the usage is reported, under no production table"
+
+
+def test_a_partition_decorator_is_the_same_table(tmp_path):
+    """customer_demographics$20260101 is ONE DAY of one table, not another
+    table. Kept as part of the name it split every decorated read off from the
+    table it belongs to, and the scan came back clean."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage1 AS "
+                 "SELECT cm13 FROM `prj.ds.customer_demographics$20260101`;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage1;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_the_rescue_pass_never_moves_a_line():
+    """Everything above is done to a copy on the way into the parser. A finding
+    that points at the wrong line is worse than no finding, because the person
+    goes and looks and finds nothing there."""
+    from ripple.scanner import rescue
+    for text in [
+        "CREATE MATERIALIZED VIEW m\n  AS REPLICA OF\n  src",
+        "EXPORT DATA OPTIONS(\n  uri='gs://b/*.csv',\n  format='CSV')\nAS SELECT cm13 FROM cust",
+        "CREATE EXTERNAL TABLE t (a STRING)\n WITH CONNECTION `p.us.c`\n"
+        " WITH PARTITION COLUMNS (dt DATE)\n OPTIONS (format='PARQUET');",
+        "LOAD DATA INTO t (a STRING)\n FROM FILES (format='CSV', uris=['gs://b/x.csv']);",
+        "SELECT cm13\n FROM APPENDS(TABLE `p.d.cust`,\n NULL)",
+    ]:
+        assert rescue.rewrite(text).count("\n") == text.count("\n"), text[:40]
+
+
+def test_ordinary_sql_goes_through_the_rescue_pass_untouched():
+    from ripple.scanner import rescue
+    for text in ["SELECT a, b FROM t WHERE x = 1",
+                 "CREATE OR REPLACE TABLE x AS SELECT * FROM y",
+                 "MERGE INTO t USING s ON t.k = s.k WHEN MATCHED THEN UPDATE SET a = s.a"]:
+        assert rescue.rewrite(text) == text, text
+
+
+# ── 15. a column list written on the CREATE line ───────────────────────────
+def test_a_view_with_its_own_column_list_renames_the_column(tmp_path):
+    """BigQuery lets a view pin its output names in the CREATE line, and it is
+    the ordinary way a team publishes friendly names over warehouse codes. The
+    list was thrown away, so the chain stopped at the view."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE VIEW v1(a, b) AS "
+                 "SELECT cm13, region FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT a FROM v1;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_a_ctas_with_a_column_list_renames_the_column(tmp_path):
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE s1(a STRING, b STRING) AS "
+                 "SELECT cm13, region FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT a FROM s1;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_a_column_list_of_the_wrong_length_is_not_guessed_at(tmp_path):
+    """Where the two lists cannot be lined up, the name is left alone rather
+    than mapped to whatever happens to be in that position."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE VIEW v1(a) AS "
+                 "SELECT cm13, region FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM v1;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], \
+        "the old name is kept, so the chain is followed rather than dropped"
+
+
+# ── 16. an unreadable statement that names a table on the trail ────────────
+def test_a_statement_ripple_cannot_read_that_names_a_trail_table_is_reported(tmp_path):
+    """The quietest hole left: the file parses, the readable statements produce
+    findings, and the one statement that carries the chain onwards is simply
+    absent. The result reads as complete because nothing says otherwise."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE staging AS SELECT cm13 FROM customer_demographics;\n"
+                 "CALL ds.load_published(staging);"})
+    assert out["stats"]["couldNotRead"] == 1
+    assert "staging" in out["unreadable"][0]["reason"]
+
+
+def test_an_unreadable_statement_about_something_else_is_not_reported(tmp_path):
+    """Every real pipeline is full of DECLAREs and CALLs that carry no lineage.
+    Reporting those would bury the list this is meant to protect."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE staging AS SELECT cm13 FROM customer_demographics;\n"
+                 "CALL ds.publish_from_elsewhere();"})
+    assert out["stats"]["couldNotRead"] == 0
