@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import sqlglot
 from sqlglot import exp
@@ -24,7 +25,8 @@ from .repo import (
 )
 from . import rescue
 from .dialectcompat import (
-    RENAME_NODE, from_of, merge_whens, star_except,
+    RENAME_NODE, from_of, is_temporary, is_unpivot, merge_whens,
+    pivot_columns, pivot_fields, star_except, star_replace,
 )
 from .templating import (
     describe as describe_templating,
@@ -51,14 +53,16 @@ LOGIC_LABEL = {
     "aggregation": "Aggregation",
     "transform": "Transform",
     "excluded": "Named in EXCEPT",
+    "pivoted": "Named in PIVOT",
+    "layout": "Partition or cluster key",
     "sort": "Sort order",
     "select": "Select",
     "star": "Carried by SELECT *",
 }
 # Most consequential first: if a column is used several ways in one statement,
 # this decides which one heads the finding.
-KIND_PRIORITY = ["ranking", "dedup_key", "filter", "join_key", "transform", "aggregation",
-                 "sort", "excluded", "select", "star"]
+KIND_PRIORITY = ["ranking", "dedup_key", "layout", "filter", "join_key", "transform",
+                 "aggregation", "sort", "pivoted", "excluded", "select", "star"]
 
 # Words that make a line likely to be the one a given usage lives on.
 KIND_MARKERS = {
@@ -69,6 +73,8 @@ KIND_MARKERS = {
     "dedup_key": ("MAX(", "MIN(", "GROUP BY"),
     "transform": ("SUBSTR", "CAST", "TRIM", "UPPER", "LOWER", "COALESCE", "CONCAT", "("),
     "excluded": ("EXCEPT", "SELECT"),
+    "pivoted": ("UNPIVOT", "PIVOT", " FOR ", " IN ("),
+    "layout": ("PARTITION BY", "CLUSTER BY"),
     "sort": ("ORDER BY",),
     "select": ("SELECT", " AS "),
     "star": ("SELECT *", "SELECT"),
@@ -184,6 +190,74 @@ def wildcard_covers(pattern: str, name: str) -> bool:
     return bool(prefix) and prefix.rstrip("_-") == other
 
 
+# ── the warehouse describing itself ────────────────────────────────────────
+# INFORMATION_SCHEMA is not data, it is BigQuery's catalogue of its own tables.
+# Its views are called COLUMNS, TABLES, JOBS, VIEWS, PARTITIONS -- ordinary
+# words, and a warehouse of any size has real tables called some of them.
+#
+#     CREATE TABLE `p.base.columns` (table_name STRING, column_name STRING);
+#     CREATE TABLE `p.pub.report_prod` AS
+#     SELECT column_name FROM `p.base`.INFORMATION_SCHEMA.COLUMNS;
+#
+# Measured before this: `report_prod` was reported as fed by the real table
+# `base.columns`, breaking, with a warning that blamed CAPITALISATION -- so the
+# one thing on screen pointing at the problem named the wrong cause, and
+# following it would not have found anything.
+#
+# A metadata view carries no column of anybody's table. Nothing that changes in
+# `customer_demographics` changes a column of INFORMATION_SCHEMA.COLUMNS -- a
+# ROW of it changes, and a row is not lineage. So these are not catalogued, not
+# merged with anything, and no edge is drawn from them.
+#
+# ``region-us`` and its siblings are the same thing at project level: the
+# region-wide job history, addressed as if it were a project.
+_METADATA_PART = "INFORMATION_SCHEMA"
+_REGION_PROJECT = re.compile(r"^region-", re.IGNORECASE)
+
+
+def is_metadata_read(table: str) -> bool:
+    """Is this BigQuery describing itself, rather than a table of anybody's?"""
+    parts = [p for p in (table or "").split(".") if p]
+    if any(p.upper() == _METADATA_PART for p in parts):
+        return True
+    return bool(parts) and bool(_REGION_PROJECT.match(parts[0]))
+
+
+# ── temporary tables ───────────────────────────────────────────────────────
+# A TEMP table lives inside one script and is gone when it finishes. Two files
+# that both build a ``t`` are not sharing a table; they cannot be, because a
+# static scan has no way to know two files ever ran in one session, and BigQuery
+# throws the table away at the end of each. Temp names in real repositories are
+# ``t``, ``tmp``, ``stg``, ``base``, ``deduped`` -- collisions are the norm, not
+# the exception.
+#
+# Measured before this: two unrelated files, each building its own ``t``, put
+# BOTH of their published tables on the chain, marked the second one breaking,
+# and printed no warning of any kind. A confident finding about a table nothing
+# had touched.
+#
+# The dataset fix that keeps ``stage.orders`` apart from ``archive.orders``
+# cannot help here, because a temp table has no dataset to compare. So one is
+# invented: a scope standing for "inside this file", made of the file's own path
+# and marked with a character no warehouse allows in a name. It never reaches a
+# screen -- ``display`` strips it -- and ``same_table`` treats it as absolute
+# rather than as the usual loose match, because "no dataset given" must not go
+# on matching a table that exists nowhere outside one file.
+_SESSION_DATASET = "_SESSION"
+_SCOPE_MARK = "#"
+_NOT_A_NAME = re.compile(r"[^A-Za-z0-9]+")
+
+
+def session_scope(path: str) -> str:
+    """A dataset name no warehouse can have, standing for 'inside this file'."""
+    return _SCOPE_MARK + _NOT_A_NAME.sub("_", path).strip("_").upper()
+
+
+def is_session_scoped(table: str) -> bool:
+    """Is this name confined to one file -- a TEMP or _SESSION table?"""
+    return dataset_of(table).startswith(_SCOPE_MARK)
+
+
 def same_table(a: str, b: str) -> bool:
     """Are these two names the same table?
 
@@ -210,6 +284,11 @@ def same_table(a: str, b: str) -> bool:
         else:
             return False
     left, right = dataset_of(a).upper(), dataset_of(b).upper()
+    # A temporary table only exists inside one file, so "the SQL did not say
+    # which dataset" cannot mean "it might be that one". Nothing outside that
+    # file can be it. This is the one place the loose match is switched off.
+    if left.startswith(_SCOPE_MARK) or right.startswith(_SCOPE_MARK):
+        return left == right
     return not (left and right and left != right)
 
 
@@ -347,6 +426,46 @@ def _forget_templated_datasets(stmt: exp.Expression, holes: set[str]) -> None:
             t.set("db", None)
 
 
+# ── a hole where the column list goes ──────────────────────────────────────
+# A great many Airflow DAGs build their SQL like this::
+#
+#     cols = "cm13, cm14"
+#     sql = f"CREATE OR REPLACE TABLE ds.final_published AS " \
+#           f"SELECT {cols} FROM ds.customer_demographics"
+#
+# The placeholder is filled in by Python before BigQuery ever sees it, so the
+# column list genuinely is "cm13, cm14" -- but it is not in the file, and Ripple
+# reads `SELECT cols FROM ...`. Measured before this: Ripple believed the
+# published table had exactly one column, called `cols`, and answered
+# `reachesProduction False, risk none, unreadable 0, couldNotRead 0` -- a clean,
+# confident, complete zero. Identical with ``.format()``.
+#
+# A hole in the projection list is a SELECT * that has not been filled in yet:
+# it carries columns Ripple cannot see and names none of them. That is exactly
+# what the star machinery already models -- the trail carries on, the table is
+# listed as one whose column list is not visible, and every finding past it is
+# marked worked out rather than read. So it is turned into one, and the screen
+# is told what the file actually writes.
+def _holes_in_the_select_list(stmt: exp.Expression, holes: set[str]) -> str:
+    """Turn a placeholder standing where columns go into the star it is.
+
+    Returns the placeholder's name, or "" if there was none.
+    """
+    if not holes:
+        return ""
+    found = ""
+    for sel in list(stmt.find_all(exp.Select)):
+        for e in list(sel.expressions):
+            inner = e.this if isinstance(e, exp.Alias) else e
+            if not isinstance(inner, exp.Column) or inner.table:
+                continue
+            if inner.name.upper() not in holes:
+                continue
+            found = inner.name
+            e.replace(exp.Star())
+    return found
+
+
 @dataclass
 class Usage:
     kind: str
@@ -387,6 +506,23 @@ class Statement:
     # SELECT *, because that is what it does, but the screen has to say what is
     # actually written or it is describing a statement that is not there.
     whole_copy: str = ""
+    # "" when a SELECT * in this statement really is written as SELECT *.
+    # Otherwise what the file writes instead -- a placeholder the job fills in
+    # when it runs. It carries whatever columns it is handed and names none of
+    # them, which is what a star does, so it is followed the same way; but no
+    # screen may tell somebody the file says SELECT * when it does not.
+    star_note: str = ""
+    # Column names in this statement that Ripple put back by hand because the
+    # parser read them as something else -- see _rescue_parenless_functions.
+    # Every usage of one is real and every one of them is a guess about which
+    # of two things the writer meant, so they are never asserted.
+    guessed_columns: set = field(default_factory=set)
+    # "" when the target table is written in the statement. Otherwise how the
+    # name was worked out instead -- "dbt" or "file". The table name is nowhere
+    # in this file, so anybody sent to the line to check would find no such
+    # table written there, and a finding that does not say so reads as a fact
+    # off the page. See _named_after_its_file.
+    named_by: str = ""
     # Worked out once and kept. One scan asks the same statement about the same
     # column many times over, and on a 600-line statement each answer means
     # walking the whole expression tree again. Measured on a repository the size
@@ -428,6 +564,8 @@ class ParsedRepo:
     # main index because they can never be found by an exact lookup. Almost
     # always empty, and skipped entirely when it is.
     _wildcards: dict = field(default_factory=dict, repr=False, compare=False)
+    # short table name -> the files that build it from scratch. See rebuilt_in.
+    _rebuilds: dict = field(default_factory=dict, repr=False, compare=False)
 
     def reading(self, table: str) -> list[Statement]:
         # Indexed rather than searched. A scan asks this once per table it
@@ -443,7 +581,17 @@ class ParsedRepo:
         if self._wildcards or is_wildcard(table):
             candidates = self._plus_wildcards(table, candidates)
         if not dataset_of(table):
-            return candidates
+            # A name with no dataset goes on matching anything -- except a
+            # table that exists only inside one file. Nothing outside that file
+            # can be reading it, so an unqualified name reaching one puts an
+            # unrelated file's whole chain on the answer. See session_scope.
+            kept: list[Statement] = []
+            for s in candidates:
+                matched = [src for src in s.sources if same_table(src, table)]
+                if matched and all(is_session_scoped(src) for src in matched):
+                    continue
+                kept.append(s)
+            return kept
         return [s for s in candidates if any(same_table(src, table) for src in s.sources)]
 
     def _plus_wildcards(self, table: str, candidates: list[Statement]) -> list[Statement]:
@@ -496,10 +644,18 @@ class ParsedRepo:
             return
         by_source: dict[str, list[Statement]] = {}
         wild: dict[str, list[Statement]] = {}
+        rebuilds: dict[str, list[str]] = {}
         seen: dict[str, set[str]] = {}
         spelt: dict[str, set[str]] = {}
         bare: set[str] = set()
         for s in self.statements:
+            # A CREATE that replaces the whole table. An INSERT or a MERGE adds
+            # to one, and several files loading one table that way is ordinary;
+            # two files REPLACING it is a fork. See rebuilt_in.
+            if s.target and isinstance(s.expr, exp.Create) and not is_temporary(s.expr):
+                seen_in = rebuilds.setdefault(short_name(s.target).upper(), [])
+                if s.file not in seen_in:
+                    seen_in.append(s.file)
             for src in s.sources:
                 key = short_name(src).upper()
                 by_source.setdefault(key, []).append(s)
@@ -508,6 +664,12 @@ class ParsedRepo:
             for name in list(s.sources) + ([s.target] if s.target else []):
                 short = short_name(name)
                 ds = dataset_of(name)
+                # A temp table's scope is not a dataset somebody wrote, it is a
+                # fence Ripple put round one file. Counting it here would report
+                # every ``t`` in the repository as a name standing for more than
+                # one table -- a warning on something already told apart.
+                if ds.startswith(_SCOPE_MARK):
+                    continue
                 if ds:
                     seen.setdefault(short.upper(), set()).add(ds.upper())
                 else:
@@ -520,6 +682,7 @@ class ParsedRepo:
                 spelt.setdefault(short.upper(), set()).add(short)
         self._by_source = by_source
         self._wildcards = wild
+        self._rebuilds = rebuilds
         self._datasets = seen
         self._spellings = spelt
         # Names Ripple cannot be sure it is following one table under. Two ways:
@@ -552,9 +715,36 @@ class ParsedRepo:
 
     def display(self, table: str) -> str:
         """The name to put on screen: qualified only where it has to be."""
+        if is_session_scoped(table):
+            # The scope is Ripple's own fence round one file, not part of any
+            # name anybody wrote. Putting it on screen would show a table name
+            # that is in no file.
+            return short_name(table)
         if short_name(table).upper() in self.ambiguous_names():
             return table
         return short_name(table)
+
+    def rebuilt_in(self, table: str) -> list[str]:
+        """Files that build this table from scratch, when more than one does.
+
+        A CREATE OR REPLACE replaces the whole table, so only one of them can be
+        the definition that runs. Two of them in two files is a fork -- usually a
+        live copy and a stale one under archive/ or dev/ that nothing schedules.
+
+        Measured before this: the ONLY finding reported came from the archive
+        copy, presented with `breaking true, certain true` and the same wording
+        as any live finding, while the live definition appeared under
+        "mentions only". Where the real build is generated at deploy time and
+        only the stale copy is committed, that is a confident, clean answer
+        about a pipeline that no longer exists.
+
+        Ripple cannot know which one runs -- nothing in the files says -- so it
+        keeps following both and says so. Empty when only one file builds it,
+        which is nearly always.
+        """
+        self._index()
+        files = self._rebuilds.get(short_name(table).upper(), [])
+        return files if len(files) > 1 else []
 
     def statements_in(self, path: str) -> list[Statement]:
         return [s for s in self.statements if s.file == path]
@@ -593,7 +783,11 @@ def _target_of(stmt: exp.Expression) -> str | None:
     if tvf:
         return tvf
     if isinstance(stmt, (exp.Create, exp.Insert, exp.Merge, exp.Delete, exp.Update)):
-        return _table_name(stmt.this)
+        name = _table_name(stmt.this)
+        # Nothing writes into INFORMATION_SCHEMA. A name that looks like one is
+        # the catalogue being read, not a table being built, and cataloguing it
+        # merges it with every real table sharing its short name.
+        return None if name and is_metadata_read(name) else name
     return None
 
 
@@ -889,6 +1083,181 @@ def _why_not(f: SourceFile, cfg: Settings, failures: list[dict], understood: int
     }
 
 
+# ── a query with no CREATE in front of it ──────────────────────────────────
+# A dbt model is a bare SELECT. There is no CREATE, no INSERT and no MERGE, so
+# nothing in the file names a table it builds -- dbt names it, after the file.
+# ``models/marts/customer_published.sql`` builds ``customer_published``.
+#
+# Measured before this existed: a three-hop dbt chain gave productionTables 0,
+# reachesProduction false, and the finding text "Selected straight through into
+# the next table" when there was no next table. Every dbt repository on earth,
+# and dbt is the commonest way a BigQuery pipeline is written, produced ZERO
+# lineage. That is the loudest possible version of Ripple's worst failure: a
+# calm, clean, complete no-impact answer over none of the picture.
+#
+# The name is not a guess. dbt's model name IS its file stem -- that is the rule
+# the tool itself runs on, and ``ref('customer_published')`` elsewhere in the
+# repository resolves through exactly the same rule. Dataform and every
+# hand-rolled "one query per file" runner work the same way.
+#
+# Two levels of evidence, and they are labelled differently on screen because
+# they are not equally sure:
+#
+# * "dbt" -- the file is under models/ or snapshots/, or it calls ref(),
+#   source() or config(). The tool that runs this file names the table.
+# * "file" -- a .sql file holding exactly one query and no CREATE anywhere.
+#   Something runs it and puts the rows somewhere; naming that somewhere after
+#   the file is the convention every such runner uses. Following it costs a row
+#   somebody can dismiss by opening the file. Not following it costs the chain.
+#
+# Only ever done when the file holds ONE statement and that statement builds
+# nothing. Two bare SELECTs in one file cannot both be the table the file is
+# named after, and guessing which would merge two unrelated queries into one.
+_DBT_FOLDER = re.compile(r"(?:^|/)(?:models|snapshots|definitions)/", re.IGNORECASE)
+# Dataform's own header. Its models are named after their files too.
+_DATAFORM_CONFIG = re.compile(r"^[ \t]*config\s*\{", re.IGNORECASE | re.MULTILINE)
+_DBT_CALL = re.compile(r"\{\{-?\s*(?:config|ref|source|this)\b", re.IGNORECASE)
+# A query, rather than something that builds a table. A UNION of two SELECTs and
+# a WITH ... SELECT are both queries; sqlglot wraps the second in the Select
+# itself, so only these three shapes need naming.
+_A_QUERY = (exp.Select, exp.Union, exp.Subquery)
+
+# The file has to say SELECT, in its own words, on its own first line of code.
+# Asking the parse tree is not enough: several statements that build nothing and
+# are named after nothing are rewritten into a bare SELECT on the way into the
+# parser -- EXPORT DATA is the one that caught this -- and by the time the tree
+# exists they are indistinguishable from a dbt model. EXPORT DATA delivers a file
+# to somebody outside the warehouse; calling its destination "a.sql" would be a
+# table that does not exist anywhere.
+_LINE_COMMENT = re.compile(r"(--|#)[^\n]*")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_QUERY_WORD = re.compile(r"^\s*(?:\(\s*)?(SELECT|WITH)\b", re.IGNORECASE)
+
+
+def _is_one_query(text: str) -> bool:
+    """Does this file open with SELECT or WITH once the wrapping is taken off?"""
+    body = fill_placeholders(text) if has_placeholders(text) else text
+    body = _BLOCK_COMMENT.sub(" ", body)
+    body = _LINE_COMMENT.sub("", body)
+    return bool(_QUERY_WORD.match(body.lstrip()))
+
+
+# ── a column named after a function ────────────────────────────────────────
+# BigQuery lets four of its built-ins be called with no brackets, so
+# ``SELECT current_date FROM customer_demographics`` parses as a call to
+# CURRENT_DATE and not as a column at all. A table with a column of that name
+# then produces the cleanest possible zero: `risk none, prod [], found 0,
+# nameInTables 0` -- Ripple did not miss the column, it never saw one.
+# Backticked, the very same scan is `risk medium` and reaches production.
+#
+# Which of the two the writer meant cannot be known from the file: both are
+# valid BigQuery and both are written exactly the same way. So both are
+# followed, and the row says the table is a guess -- Ripple's standing rule,
+# because a spare row is dismissed by opening the file and a lost chain is
+# never seen at all.
+#
+# Only where the file writes the name with NO brackets. ``CURRENT_DATE()`` is
+# unambiguously the function.
+_PARENLESS = {
+    "CURRENT_DATE": exp.CurrentDate,
+    "CURRENT_TIME": getattr(exp, "CurrentTime", None),
+    "CURRENT_TIMESTAMP": getattr(exp, "CurrentTimestamp", None),
+    "CURRENT_DATETIME": getattr(exp, "CurrentDatetime", None),
+}
+_PARENLESS_NODES = tuple(n for n in _PARENLESS.values() if n is not None)
+
+
+def _written_without_brackets(text: str) -> set[str]:
+    """Which parenless built-ins this text writes with no brackets after them."""
+    out: set[str] = set()
+    upper = text.upper()
+    for name in _PARENLESS:
+        if name not in upper:
+            continue
+        for m in re.finditer(r"\b" + name + r"\b\s*(\()?", upper):
+            if not m.group(1):
+                out.add(name)
+                break
+    return out
+
+
+def _rescue_parenless_functions(stmt: exp.Expression, bare: set[str]) -> set[str]:
+    """Read those names as columns as well. Returns the ones put back."""
+    put_back: set[str] = set()
+    if not bare or not _PARENLESS_NODES:
+        return put_back
+    for node in list(stmt.find_all(*_PARENLESS_NODES)):
+        name = next((k for k, v in _PARENLESS.items()
+                     if v is not None and isinstance(node, v)), "")
+        if name not in bare or node.args:
+            continue
+        replacement = exp.column(name.lower())
+        if node.parent is None:
+            continue
+        node.replace(replacement)
+        put_back.add(name)
+    return put_back
+
+
+def _scope_session_tables(f: SourceFile, out: list[Statement]) -> None:
+    """Fence this file's temporary tables off from every other file's.
+
+    Done once the whole file is parsed, so a temp table used above the line that
+    creates it is still caught. Only names with no dataset, or the ``_SESSION``
+    dataset BigQuery uses for them, are moved: ``ds.t`` is a real table that
+    happens to share a short name with a temp one, and taking it would cut a
+    genuine chain. See the note above session_scope.
+    """
+    names: set[str] = set()
+    for s in out:
+        if s.target and (is_temporary(s.expr)
+                         or dataset_of(s.target).upper() == _SESSION_DATASET):
+            names.add(short_name(s.target).upper())
+    if not names:
+        return
+    scope = session_scope(f.path)
+
+    def scoped(name: str) -> str:
+        if short_name(name).upper() not in names:
+            return name
+        ds = dataset_of(name).upper()
+        if ds and ds != _SESSION_DATASET:
+            return name
+        return scope + "." + short_name(name)
+
+    for s in out:
+        if s.target:
+            s.target = scoped(s.target)
+        s.sources = {scoped(x) for x in s.sources}
+        s._sources_upper = None
+
+
+def _named_after_its_file(f: SourceFile, stmt: Statement, alone: bool) -> str:
+    """The tool that names this file's one query, "file", or "".
+
+    "dbt" and "Dataform" are facts: both tools name a model after its file, and
+    a ``ref()`` elsewhere in the repository resolves through the same rule.
+    "file" is the weaker reading -- one query, no CREATE, and something runs it,
+    so it only applies when the whole file is that one query.
+
+    A Dataform model can have ``pre_operations`` beside it, which are real
+    statements with real targets. The model is still the one query that builds
+    nothing of its own, so ``alone`` is not required there.
+    """
+    lowered = f.path.lower()
+    if not (lowered.endswith(".sql") or lowered.endswith(".sqlx")):
+        return ""
+    if stmt.target or not isinstance(stmt.expr, _A_QUERY):
+        return ""
+    if lowered.endswith(".sqlx") or _DATAFORM_CONFIG.search(f.text):
+        return "Dataform"
+    if not alone or not _is_one_query(f.text):
+        return ""
+    if _DBT_FOLDER.search(f.path) or _DBT_CALL.search(f.text):
+        return "dbt"
+    return "file"
+
+
 def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict], list[dict]]:
     """Parse one file into statements, failures, and statements not understood.
 
@@ -952,9 +1321,21 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
         text = rescue.rewrite(text)
         parsed, bad = _parse_text(text, dialect, offset)
         failures.extend(bad)
+        # CURRENT_DATE and its three siblings can be written with no brackets,
+        # so a column of that name parses as a call and is invisible. See
+        # _rescue_parenless_functions.
+        bare = _written_without_brackets(sql_text)
         for stmt, line, line_end in parsed:
+            guessed = _rescue_parenless_functions(stmt, bare)
+            star_note = ""
             if holes:
                 _forget_templated_datasets(stmt, holes)
+                # A placeholder standing where the column list goes is a
+                # SELECT * nobody has filled in yet. See _holes_in_the_select_list.
+                filled = _holes_in_the_select_list(stmt, holes)
+                if filled:
+                    star_note = ("a placeholder - this statement's column list is "
+                                 "filled in when the job runs")
             # A scripting block, a loop, a procedure call, an EXECUTE IMMEDIATE.
             # Kept, not reported: whether it matters depends on whether the name
             # somebody is chasing turns up inside it, which is not known here.
@@ -1000,7 +1381,12 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
                     if written_id is not None and id(t) == written_id:
                         continue
                     qualified = _qualify(t)
-                    if qualified and t.name.upper() not in skip:
+                    # A metadata view is the warehouse describing itself. It
+                    # carries no column of anybody's table, and its names --
+                    # COLUMNS, TABLES, JOBS -- collide with real ones. See
+                    # is_metadata_read.
+                    if (qualified and t.name.upper() not in skip
+                            and not is_metadata_read(qualified)):
                         sources.add(qualified)
                     # APPENDS(TABLE t, ...) and a TVF given a table: the table
                     # handed in is a real read and is nowhere else in the tree.
@@ -1025,8 +1411,22 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
                     select=select,
                     expr=stmt,
                     whole_copy=whole_copy,
+                    star_note=star_note,
+                    guessed_columns=guessed,
                 )
             )
+    # A temporary table belongs to the file that made it and to nothing else.
+    _scope_session_tables(f, out)
+    # A file that is one query and builds nothing names its table after itself.
+    # Done here rather than in the loop above because it is only true when the
+    # whole file is that one query -- see _named_after_its_file.
+    building_nothing = [s for s in out if s.target is None and isinstance(s.expr, _A_QUERY)]
+    if len(building_nothing) == 1:
+        one = building_nothing[0]
+        how = _named_after_its_file(f, one, alone=len(out) == 1)
+        if how:
+            one.target = Path(f.path).stem
+            one.named_by = how
     if failures:
         failures.sort(key=lambda p: p["line"])
         problems.append(_why_not(f, cfg, failures, len(out)))
@@ -1319,6 +1719,128 @@ def _stars_over(stmt: Statement, table: str, sources: dict[str, list[str]]) -> l
     return found
 
 
+# ── _TABLE_SUFFIX ──────────────────────────────────────────────────────────
+# A wildcard table reads a whole family of date-sharded tables, and the query
+# almost always narrows that down on the very next line::
+#
+#     SELECT cm13 FROM `p.ds.customer_demographics_*`
+#     WHERE _TABLE_SUFFIX = '20260101'
+#
+# Ripple followed the wildcard and never read the line under it, so scanning
+# ``customer_demographics_19991231`` -- a shard from 1999 that this query
+# provably never touches -- came back `risk medium, prod ['g_published'],
+# breaking true, certain true`, with no hedge anywhere. The predicate is on the
+# same line as the wildcard, inside the snippet Ripple prints, and the answer
+# contradicted it.
+#
+# Only literals decide anything. A parameter, a date calculation or a variable
+# is not something a static reader can evaluate, and guessing at one would trade
+# an over-confident finding for a missing one. Those set `certain=False` and the
+# finding stays.
+#
+# Only ANDs. ``_TABLE_SUFFIX = 'x' OR something_else`` reads the other shards
+# too, and a NOT turns every comparison below it inside out.
+_SUFFIX_COL = "_TABLE_SUFFIX"
+
+
+def _only_ands_above(node: exp.Expression, stop: exp.Expression) -> bool:
+    """Is every branch between here and the WHERE an AND?"""
+    cur = node.parent
+    while cur is not None and cur is not stop:
+        if isinstance(cur, (exp.Or, exp.Not)):
+            return False
+        cur = cur.parent
+    return True
+
+
+def _shard_suffix(table: str, pattern: str) -> str:
+    """The part of a shard's name the wildcard stands for, or ''.
+
+    Empty for the family itself. Somebody who typed ``customer_demographics_*``
+    is asking about every shard, so no one suffix can be tested and every
+    predicate has to be read as letting some of them through.
+    """
+    if is_wildcard(table):
+        return ""
+    prefix = short_name(pattern).upper()
+    if not prefix.endswith(_STAR):
+        return ""
+    prefix = prefix[:-1]
+    name = short_name(table)
+    if not prefix or not name.upper().startswith(prefix):
+        return ""
+    suffix = name[len(prefix):]
+    return "" if _STAR in suffix else suffix
+
+
+def suffix_verdict(stmt: Statement, table: str) -> str:
+    """"reads", "maybe" or "excluded" -- does this statement touch that shard?
+
+    "reads" also means "nothing here says otherwise", which is the answer for
+    every statement that has no _TABLE_SUFFIX in it at all.
+    """
+    if stmt.expr is None:
+        return "reads"
+    patterns = [s for s in stmt.sources if is_wildcard(s) and same_table(s, table)]
+    if not patterns:
+        return "reads"
+    suffix = next((s for s in (_shard_suffix(table, p) for p in patterns) if s), "")
+    if not suffix:
+        return "reads"                      # the family name, not a shard
+    verdict = "reads"
+    for sel in stmt.expr.find_all(exp.Select):
+        where = sel.args.get("where")
+        if where is None:
+            continue
+        for col in where.find_all(exp.Column):
+            if col.name.upper() != _SUFFIX_COL:
+                continue
+            test = col.parent
+            if not _only_ands_above(col, where):
+                return "maybe"
+            hit = _suffix_allows(test, suffix)
+            if hit == "excluded":
+                return "excluded"
+            if hit == "maybe":
+                verdict = "maybe"
+    return verdict
+
+
+def _suffix_allows(test: exp.Expression | None, suffix: str) -> str:
+    """Does this one comparison let that suffix through?"""
+    def literal(node) -> str | None:
+        return node.this if isinstance(node, exp.Literal) else None
+
+    if isinstance(test, exp.Between):
+        low, high = literal(test.args.get("low")), literal(test.args.get("high"))
+        if low is None or high is None:
+            return "maybe"
+        return "reads" if low <= suffix <= high else "excluded"
+    if isinstance(test, exp.In):
+        values = [literal(v) for v in test.expressions]
+        if not values or any(v is None for v in values):
+            return "maybe"
+        return "reads" if suffix in values else "excluded"
+    if isinstance(test, (exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)):
+        # Only when the column is on the left; ``'x' = _TABLE_SUFFIX`` is legal
+        # and rare, and reading it backwards would exclude the wrong shard.
+        if not isinstance(test.this, exp.Column):
+            return "maybe"
+        value = literal(test.args.get("expression"))
+        if value is None:
+            return "maybe"
+        ok = {
+            exp.EQ: suffix == value,
+            exp.NEQ: suffix != value,
+            exp.GT: suffix > value,
+            exp.GTE: suffix >= value,
+            exp.LT: suffix < value,
+            exp.LTE: suffix <= value,
+        }[type(test)]
+        return "reads" if ok else "excluded"
+    return "maybe"
+
+
 def _named_in_except(star: exp.Star, column: str) -> bool:
     """``SELECT * EXCEPT(cm13)`` -- the one shape where a star drops a column."""
     for c in star_except(star):
@@ -1564,6 +2086,115 @@ def _through_merge_columns(stmt: Statement, names: list[str]) -> list[str]:
     return _dedupe(mapped) if mapped else names
 
 
+# ── PIVOT and UNPIVOT ──────────────────────────────────────────────────────
+# Both fold a column away and build differently-named ones out of it, and both
+# NAME the column while doing it -- so the statement itself fails on the day the
+# column goes. Neither was read at all, and each failed in its own direction.
+#
+# UNPIVOT was the worse of the two, and the only case in the whole suite that
+# hedges DOWNWARDS on a statement that hard-fails::
+#
+#     CREATE OR REPLACE TABLE s1 AS SELECT * FROM customer_demographics
+#     UNPIVOT (val FOR metric IN (cm13, other_col));
+#
+# read as a plain SELECT *, so the answer was `risk: low`, `breaking: false`,
+# and the sentence "Nothing here fails on the day of the change" -- printed
+# about a statement whose UNPIVOT list stops being valid SQL.
+#
+# PIVOT failed the other way: the columns it builds are `total_Q1`, `total_Q2`,
+# worked out from the aggregate's alias and each IN value. Nothing derived them,
+# so the trail was declared finished one hop early with the note "Last table in
+# the chain", and the published table reading `total_Q1` was never named.
+#
+# Both column lists are facts written in the statement, not guesses. sqlglot
+# works the PIVOT output names out itself; where it does not, nothing here
+# invents them.
+def _pivots_over(sel: exp.Select) -> list[exp.Expression]:
+    """Every PIVOT or UNPIVOT applied to what this SELECT reads."""
+    out: list[exp.Expression] = []
+    holders: list[exp.Expression | None] = []
+    frm = from_of(sel)
+    if frm is not None:
+        holders.append(frm.this)
+    for j in sel.args.get("joins") or []:
+        holders.append(j.args.get("this"))
+    for node in holders:
+        if node is not None:
+            out.extend(node.args.get("pivots") or [])
+    return out
+
+
+def _pivot_consumes(pivot: exp.Expression) -> set[str]:
+    """The columns this PIVOT or UNPIVOT names, upper case.
+
+    Named means the statement stops being valid SQL if one of them goes -- an
+    UNPIVOT's IN list and a PIVOT's aggregate and FOR column alike.
+    """
+    named: set[str] = set()
+    for field_node in pivot_fields(pivot):
+        for c in field_node.find_all(exp.Column):
+            named.add(c.name.upper())
+    if not is_unpivot(pivot):
+        # PIVOT: the aggregates are over real columns of the table underneath.
+        # An UNPIVOT's ``expressions`` are the NEW names it invents, not columns
+        # it reads, which is why this only applies one way round.
+        for e in pivot.expressions:
+            for c in e.find_all(exp.Column):
+                named.add(c.name.upper())
+    return named
+
+
+def _pivot_outputs(pivot: exp.Expression) -> list[str]:
+    """The columns this PIVOT or UNPIVOT builds, or [] if they cannot be known."""
+    if not is_unpivot(pivot):
+        return pivot_columns(pivot)
+    out: list[str] = []
+    # UNPIVOT (val FOR metric IN (...)) -- the values land in ``val`` and the
+    # column's own NAME lands in ``metric``. Both are followed: renaming the
+    # column changes what is written into the name column just as surely.
+    for e in pivot.expressions:
+        out.extend(i.name for i in e.find_all(exp.Identifier))
+        if not list(e.find_all(exp.Identifier)) and getattr(e, "name", ""):
+            out.append(e.name)
+    for field_node in pivot_fields(pivot):
+        this = field_node.args.get("this") if hasattr(field_node, "args") else None
+        if this is not None and getattr(this, "name", ""):
+            out.append(this.name)
+    return _dedupe([n for n in out if n])
+
+
+# Where a nested SELECT can sit that is NOT a source of rows for the query
+# around it: in the select list, or inside a WHERE, HAVING, QUALIFY, GROUP BY or
+# ORDER BY. A SELECT in one of those places is a VALUE -- one number, one list to
+# test against -- and the names inside it are its own business.
+#
+#     SELECT o.k,
+#            (SELECT MAX(d.cm13) AS c_alias FROM customer_demographics d
+#             WHERE d.k = o.k) AS peak_cm
+#     FROM other_source o
+#
+# Measured before this: the statement's output name for cm13 came back as
+# ``c_alias`` -- a name that exists only inside the brackets and appears on no
+# table anywhere. The real name is ``peak_cm``, which is what the next table
+# reads, so the chain went cold one hop early and reported no production impact.
+# The mirror is just as bad: ``WHERE k IN (SELECT cm13 AS c_alias FROM ...)``
+# INVENTED a column called c_alias on the table being built.
+#
+# A subquery in FROM or JOIN, or a CTE, really does hand its columns to the query
+# around it, and its renames really do survive. Those are untouched.
+_VALUE_POSITIONS = {"expressions", "where", "having", "qualify", "group", "order", "limit"}
+
+
+def _feeds_its_parent(sel: exp.Select) -> bool:
+    """Does this SELECT hand its columns to the query around it?"""
+    node = sel
+    while node.parent is not None and not isinstance(node.parent, exp.Select):
+        node = node.parent
+    if node.parent is None:
+        return True                            # the statement's own SELECT
+    return node.arg_key not in _VALUE_POSITIONS
+
+
 def _select_depth(sel: exp.Select) -> int:
     """How many SELECTs this one is nested inside."""
     depth = 0
@@ -1596,6 +2227,10 @@ def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
     selects = list(stmt.expr.find_all(exp.Select)) if stmt.expr is not None else []
     by_depth: dict[int, list[exp.Select]] = {}
     for sel in selects:
+        # A SELECT written as a value rather than as a source of rows never
+        # names an output of the statement around it. See _feeds_its_parent.
+        if not _feeds_its_parent(sel):
+            continue
         by_depth.setdefault(_select_depth(sel), []).append(sel)
 
     out: list[tuple[dict, dict, bool, set]] = []
@@ -1605,6 +2240,17 @@ def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
         dropped: set[str] = set()
         passthrough = False
         for sel in by_depth[depth]:
+            # PIVOT and UNPIVOT happen to what this SELECT reads, before its own
+            # select list is applied, and they rename by rule rather than with an
+            # AS. Without this the trail ended one hop early on every PIVOT and
+            # went on carrying a name that no longer exists on every UNPIVOT.
+            for pivot in _pivots_over(sel):
+                eaten = _pivot_consumes(pivot)
+                built = _pivot_outputs(pivot)
+                for name in eaten:
+                    dropped.add(name)
+                    for made in built:
+                        derived.setdefault(name, []).append(made)
             for e in sel.expressions:
                 if _is_star(e):
                     passthrough = True
@@ -1618,8 +2264,14 @@ def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
                         if isinstance(a, exp.Alias) and isinstance(a.this, exp.Column):
                             dropped.add(a.this.name.upper())
                             direct.setdefault(a.this.name.upper(), []).append(a.alias)
-                    for a in star.args.get("replace") or []:
+                    for a in star_replace(star):
                         if isinstance(a, exp.Alias):
+                            # The output column of that name now holds the
+                            # replacement's value, so the ORIGINAL column of
+                            # that name reaches nothing past here. Exactly what
+                            # EXCEPT does, plus a value put in its place -- and
+                            # without this the star went on carrying it.
+                            dropped.add(a.alias.upper())
                             for c in a.find_all(exp.Column):
                                 derived.setdefault(c.name.upper(), []).append(a.alias)
                 elif isinstance(e, exp.Alias):
@@ -1674,11 +2326,16 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
     sources = _sources_of(stmt) if table else {}
     ctes = _cte_names(stmt.expr) if table else set()
 
+    # A name Ripple put back by hand because the parser read it as a built-in
+    # function. The usage is real; whether the writer meant the column or the
+    # function is not knowable from the file, so it is never asserted.
+    a_guess = column.upper() in stmt.guessed_columns
+
     def owned(node: exp.Expression | None) -> tuple[list[exp.Column], bool]:
         """This table's references to the column, and whether the SQL said so."""
         cols = _cols_named(node, column)
         if not table or not cols:
-            return cols, True
+            return cols, not (a_guess and cols)
         keep: list[exp.Column] = []
         certain = True
         for c in cols:
@@ -1688,7 +2345,35 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
             if verdict == "unknown":
                 certain = False          # kept, and marked rather than asserted
             keep.append(c)
-        return keep, certain
+        return keep, certain and not a_guess
+
+    # 0. How the table it builds is laid out: PARTITION BY and CLUSTER BY.
+    #
+    # These sit on the CREATE line, outside the SELECT, so nothing else in this
+    # function could ever see them. Measured before this: a table partitioned by
+    # the very column being decommissioned returned NO usages at all, and the
+    # whole chain came back `risk low, groups 0, couldNotRead 0`.
+    #
+    # It is not a column of the table being built -- so no chain follows from it
+    # -- but the name is written down on the CREATE line, so the day the column
+    # goes this statement stops compiling and the table stops being built. Every
+    # published table underneath it then quietly serves data that has stopped
+    # being refreshed. That is what "stops being refreshed" exists to report,
+    # and this is what feeds it.
+    props = stmt.expr.args.get("properties") if isinstance(stmt.expr, exp.Create) else None
+    for prop in (props.expressions if props is not None else []):
+        which = type(prop).__name__
+        if "Partition" not in which and "Cluster" not in which:
+            continue
+        cols, sure = owned(prop)
+        # PARTITION BY cm13 with nothing round it parses as a bare identifier
+        # rather than a column, so the search above finds nothing.
+        named = bool(cols) or any(i.name.upper() == column.upper()
+                                  for i in prop.find_all(exp.Identifier))
+        if named:
+            found.append(Usage(kind="layout", column=column, alias=alias_for_column,
+                               detail="CLUSTER BY" if "Cluster" in which else "PARTITION BY",
+                               certain=sure))
 
     # A DELETE or an UPDATE has a WHERE clause and no SELECT at all. Requiring a
     # SELECT made both invisible, so "DELETE FROM stage WHERE market_code = 'US'"
@@ -1760,13 +2445,23 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
             # the exact opposite of what that statement does with it. The star
             # is handled properly at the bottom of this function.
             if _is_star(e):
-                for r in _star_of(e).args.get("replace") or []:
+                for r in star_replace(_star_of(e)):
                     # REPLACE(UPPER(cm13) AS cm13) genuinely reshapes the value.
                     cols, sure = owned(r)
                     if cols:
                         found.append(Usage(kind="transform", column=column,
                                            alias=alias_for_column, detail="REPLACE",
                                            certain=sure))
+                    # SELECT * REPLACE(legacy_code AS cm13) names cm13 out loud.
+                    # Remove it and this statement fails, exactly as it does
+                    # with EXCEPT -- and the column downstream of that name is
+                    # fed by legacy_code from here on, not by this one. Ripple
+                    # got the right answer for the wrong reason before: the
+                    # rename was followed and nothing said the name was written
+                    # down here, so the row read `breaking: false`.
+                    if isinstance(r, exp.Alias) and r.alias.upper() == column.upper():
+                        found.append(Usage(kind="excluded", column=column,
+                                           alias=alias_for_column, detail="REPLACE"))
                 continue
             cols, sure = owned(e)
             if not cols:
@@ -1832,6 +2527,17 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
             found.append(Usage(kind="ranking" if sel.args.get("limit") else "sort",
                                column=column, alias=alias_for_column, certain=sure))
 
+        # 4c. PIVOT and UNPIVOT. The column is named in the statement, so the
+        # statement stops being valid SQL the day it goes -- and it leaves under
+        # names worked out by rule rather than written with an AS. See
+        # _pivots_over. Nothing above finds these: an UNPIVOT's IN list is under
+        # the FROM clause, not in any select list, WHERE or JOIN.
+        for pivot in _pivots_over(sel):
+            if column.upper() not in _pivot_consumes(pivot):
+                continue
+            found.append(Usage(kind="pivoted", column=column, alias=alias_for_column,
+                               detail="UNPIVOT" if is_unpivot(pivot) else "PIVOT"))
+
     # 5. window ORDER BY -- the ranking case, where removal is silent and awful
     for w in stmt.expr.find_all(exp.Window):
         cols, sure = owned(w.args.get("order"))
@@ -1864,7 +2570,17 @@ def usages_of(stmt: Statement, column: str, table: str = "") -> list[Usage]:
     # Nothing above can see this: there is no column node to find. The column is
     # carried all the same, and refusing to say so is what turned a change that
     # breaks a published table one hop later into a clean result.
-    if table:
+    # A column folded away by a PIVOT or an UNPIVOT is not carried on by the
+    # star over it. The pivot is definitive about what happens to that one
+    # column, and letting the star speak as well would put "carried through
+    # untouched" beside "named here, and this statement fails without it".
+    pivoted = any(column.upper() in _pivot_consumes(p)
+                  for sel in stmt.expr.find_all(exp.Select)
+                  for p in _pivots_over(sel))
+    # Same for a column the star REPLACEs by name: the output column of that
+    # name is fed by the replacement, so this one is not carried through.
+    replaced = any(u.kind == "excluded" and u.detail == "REPLACE" for u in found)
+    if table and not pivoted and not replaced:
         if star_excludes(stmt, column, table, sources):
             found.append(Usage(kind="excluded", column=column, alias=alias_for_column))
         elif star_carries(stmt, column, table, sources):

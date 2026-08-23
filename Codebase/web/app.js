@@ -419,11 +419,16 @@ function daysLeft(iso) {
   if (isNaN(d)) return null;
   return Math.round((d - new Date(new Date().toDateString())) / 86400000);
 }
+/* "No impact" is the only thing this tool sells, so there has to be a word for
+   "I found nothing AND there is something here I could not read". Those are not
+   the same answer, and printed as the same green badge the second one is a lie
+   that reads as a promise. See _risk_of in lineage.py. */
 const RISK = {
-  high:   ['red',   'High risk'],
-  medium: ['amber', 'Medium risk'],
-  low:    ['blue',  'Low risk'],
-  none:   ['green', 'No impact'],
+  high:    ['red',   'High risk'],
+  medium:  ['amber', 'Medium risk'],
+  low:     ['blue',  'Low risk'],
+  unknown: ['amber', 'Not sure — needs a person'],
+  none:    ['green', 'No impact'],
 };
 
 // ── chrome ────────────────────────────────────────────────────────────────
@@ -862,6 +867,19 @@ function step3(root) {
           + 'rather than written inside them. Those .sql files were read on their own account. '
           + 'Any that name a file which is not in this repository are listed as gaps after a scan.' }));
     }
+    // File types Ripple does not open. Nothing recorded these before — the walk
+    // had a bare `continue` with no counter — so a repository whose pipeline is
+    // written in .ipynb or .tf files looked exactly like one with no pipeline
+    // in it. The point is not to read them. It is that the NEXT unlisted
+    // extension is visible instead of silent.
+    if (h.repo.unknownExt?.length) {
+      const total = h.repo.unknownExt.reduce((n, k) => n + k.files, 0);
+      kinds.append(el('div', { className: 'small muted', style: 'margin-top:14px;line-height:1.55',
+        textContent: `${total} other file${total === 1 ? '' : 's'} here ${total === 1 ? 'has' : 'have'} `
+          + 'a type Ripple does not open, so nothing in them is in any answer: '
+          + h.repo.unknownExt.map(k => `${k.ext} · ${k.files}`).join(', ')
+          + '. If one of those holds your pipeline, tell me and it can be added.' }));
+    }
     kinds.append(el('div', { className: 'small muted', style: 'margin-top:14px;line-height:1.55',
       textContent: 'Read-only access. Ripple never writes to your repository.' }));
   }
@@ -1142,6 +1160,15 @@ function step4(root) {
   done.append(el('div', { style: 'display:flex;align-items:baseline;gap:9px;margin-top:18px;flex-wrap:wrap' },
     el('span', { className: 'big', textContent: String(sc.filesScanned) }),
     el('span', { className: 'small muted', textContent: `files read · ${sc.filesMatched} mention the names you confirmed` })));
+  // The sentence that qualifies every other sentence on this screen. Ripple read
+  // one folder. "No impact" is a fact about that folder and about nothing else —
+  // and the single commonest way to be wrong with this tool is to read it as a
+  // fact about the warehouse.
+  done.append(el('div', { className: 'small muted', style: 'margin-top:10px;line-height:1.55',
+    textContent: `Ripple read these ${sc.filesScanned} files and nothing else. Anything below `
+      + 'means "nothing in this repository" — not "nothing anywhere". A job in another '
+      + 'repository, a scheduled query, or a dashboard built straight on the table is outside '
+      + 'what Ripple can see.' }));
   x(root, 'progress').append(done);
 
   const st = sc.stats;
@@ -1657,7 +1684,11 @@ function renderTrailGaps(box, sc) {
     // the same way, because they do the same thing, but the card has to name the
     // word the file actually uses or it describes a statement that is not there.
     const copies = sc.starTables.filter(s => s.how);
-    const stars = sc.starTables.length - copies.length;
+    // Not a star in the file either — a placeholder where the column list goes,
+    // filled in by the job at run time. Ripple used to read it as a column
+    // called "cols" and report the published table as having exactly that one.
+    const holes = sc.starTables.filter(s => s.filledIn);
+    const stars = sc.starTables.length - copies.length - holes.length;
     const card = el('div', { className: 'card pad lg', style: 'margin-top:20px;border-color:var(--amberln)' });
     card.append(el('b', { style: 'display:block;font-size:14px', textContent:
       `${n} table${n === 1 ? '' : 's'} on this trail ${n === 1 ? 'has' : 'have'} no column list to read` }));
@@ -1678,8 +1709,17 @@ function renderTrailGaps(box, sc) {
     sc.starTables.forEach(s => chips.append(el('span', { className: 'chip mono',
       textContent: s.how
         ? `${s.table} — ${s.how} of ${s.from}`
+        : s.filledIn
+        ? `${s.table} — column list filled in at run time, from ${s.from}`
         : `${s.table} — from ${s.from}` })));
     card.append(chips);
+    if (holes.length) {
+      card.append(el('div', { className: 'small muted', style: 'margin-top:8px;line-height:1.55',
+        textContent: 'Some of these do not say SELECT * at all. The file writes a placeholder '
+          + 'where the column list goes and the job fills it in when it runs, so the list is '
+          + 'never in the file to read. Ripple used to take the placeholder for a column name '
+          + 'and report the table as having exactly that one column.' }));
+    }
     box.append(card);
   }
 
@@ -1725,6 +1765,82 @@ function renderTrailGaps(box, sc) {
     const chips = el('div', { className: 'chips', style: 'margin-top:10px' });
     sc.wildcardNames.forEach(w => chips.append(el('span', { className: 'chip mono',
       textContent: `${w.table} — matched by ${w.patterns.join(', ')}` })));
+    card.append(chips);
+    box.append(card);
+  }
+
+  // 4a. One table, two files that build it from scratch. Only one of them can
+  //     be the definition that runs, and nothing in the files says which. The
+  //     measured case: the only finding came from a stale copy under archive/,
+  //     presented as certainly as any live one, while the live definition sat
+  //     under "mentions only".
+  if (sc.twoDefinitions?.length) {
+    const n = sc.twoDefinitions.length;
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px' });
+    card.append(el('span', { className: 'lbl', textContent:
+      `${n} table${n === 1 ? '' : 's'} here ${n === 1 ? 'is' : 'are'} built from scratch in more than one file` }));
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      'Each of those files replaces the whole table, so only one of them can be the one that '
+      + 'runs — and nothing in the code says which. Ripple followed all of them. Check which '
+      + 'file your scheduler actually runs before acting on a finding from one of these.' }));
+    const chips = el('div', { className: 'chips', style: 'margin-top:10px' });
+    sc.twoDefinitions.forEach(t => chips.append(el('span', { className: 'chip mono',
+      textContent: `${t.table} — ${t.files.join('  and  ')}` })));
+    card.append(chips);
+    box.append(card);
+  }
+
+  // 4b. Code files Ripple would have read, sitting in a folder it skips. The
+  //     count used to reach the repository screen and nothing else, so a scan
+  //     of a dbt project — whose target/ folder holds the SQL that actually
+  //     runs — came back clean with the reason on a screen nobody looked at.
+  if (sc.skippedInFolders?.length) {
+    const n = sc.skippedInFolders.length;
+    const where = (sc.skippedFolderNames || []).join(', ');
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px;border-color:var(--amberln)' });
+    card.append(el('b', { style: 'display:block;font-size:14px', textContent:
+      `${n} code file${n === 1 ? '' : 's'} ${n === 1 ? 'was' : 'were'} not read — ${n === 1 ? 'it is' : 'they are'} in a skipped folder` }));
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      `Ripple skips ${where} because ${(sc.skippedFolderNames || []).length === 1 ? 'it usually holds' : 'they usually hold'} `
+      + 'build output. Nothing in there has been read, so nothing in there is in this answer. '
+      + "If your pipeline really runs from one of those folders — dbt's target/ holds the SQL "
+      + 'that actually runs — change the skip list on the settings screen and scan again.' }));
+    const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
+    sc.skippedInFolders.slice(0, 200).forEach(f => chips.append(
+      el('span', { className: 'chip mono', textContent: f })));
+    card.append(chips);
+    if (n > 200) {
+      card.append(el('div', { className: 'small muted', style: 'margin-top:8px',
+        textContent: `Showing the first 200 of ${n}.` }));
+    }
+    box.append(card);
+  }
+
+  // 5. The file builds a table but never writes its name. A dbt model is a bare
+  //    SELECT — dbt names the table after the file when it runs it. Ripple
+  //    follows the same rule, because without it a dbt repository produced no
+  //    lineage at all: every chain came back empty and the answer was a clean
+  //    "no impact". Saying so here matters — anybody who opens the file to check
+  //    will not find the table name written in it.
+  if (sc.namedByFile?.length) {
+    const n = sc.namedByFile.length;
+    // "dbt" and "Dataform" are facts — both tools name a model after its file.
+    // "file" is the weaker reading: one query, no CREATE, and something runs it.
+    const dbt = sc.namedByFile.filter(t => t.how !== 'file').length;
+    const tools = [...new Set(sc.namedByFile.filter(t => t.how !== 'file').map(t => t.how))].join(' and ');
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px' });
+    card.append(el('span', { className: 'lbl', textContent:
+      `${n} table${n === 1 ? '' : 's'} here ${n === 1 ? 'is' : 'are'} named after ${n === 1 ? 'its' : 'their'} file, not by the SQL` }));
+    card.append(el('div', { style: 'margin-top:8px;line-height:1.55', textContent:
+      (dbt === n
+        ? `These files are ${tools} models. Such a model is a query with no CREATE in front of it, and the tool that runs it names the table after the file. `
+        : dbt
+        ? `Some are ${tools} models; the rest are files holding one query and no CREATE. Whatever runs them puts the rows somewhere named after the file. `
+        : 'Each file holds one query and no CREATE. Whatever runs it puts the rows somewhere, and every tool that works this way names it after the file. ')
+      + 'So the table name is not written in the file. Open it and you will see the query, not the name.' }));
+    const chips = el('div', { className: 'chips', style: 'margin-top:10px' });
+    sc.namedByFile.forEach(t => chips.append(el('span', { className: 'chip mono',
+      textContent: `${t.table} — from ${t.file}` })));
     card.append(chips);
     box.append(card);
   }

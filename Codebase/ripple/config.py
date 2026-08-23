@@ -160,8 +160,15 @@ class Settings:
     )
 
     # File types worth reading at all.
+    #
+    # ``.sqlx`` is Dataform -- Google's own tool for building BigQuery pipelines,
+    # and the one most likely to be in a BigQuery repository after dbt. A .sqlx
+    # file is an ordinary SELECT with a ``config { }`` block on top, and it was
+    # not opened, not counted and not mentioned: `indexed False, risk none,
+    # prod []`, with nothing anywhere recording that the file existed.
     code_extensions: tuple[str, ...] = (
-        ".sql", ".ddl", ".hql", ".py", ".scala", ".java", ".sh", ".xml", ".yaml", ".yml",
+        ".sql", ".sqlx", ".ddl", ".hql", ".py", ".scala", ".java", ".sh",
+        ".xml", ".yaml", ".yml",
     )
     # Never walk into these.
     skip_dirs: tuple[str, ...] = (

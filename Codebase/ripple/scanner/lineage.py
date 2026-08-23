@@ -9,7 +9,7 @@ actually has to defend.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from sqlglot import exp
 
@@ -28,6 +28,7 @@ from .sqlread import (
     output_names,
     short_name,
     snippet,
+    suffix_verdict,
     usages_of,
 )
 
@@ -38,14 +39,21 @@ from .sqlread import (
 # that breaks is whatever reads the missing column further down. Calling the
 # star hop itself breaking would put a red badge on the one row in the chain
 # that carries on working.
+#
+# "pivoted" is in every set but value_change, for the same reason "excluded" is:
+# the column is NAMED in the statement, so removing or renaming it stops the SQL
+# compiling. A change to its VALUES does not -- an UNPIVOT folds whatever is
+# there into rows either way. Reading the type wrong can still break it, because
+# every column an UNPIVOT folds together has to share one.
 BREAKS = {
     "removal":      {"filter", "join_key", "ranking", "dedup_key", "transform", "aggregation",
-                     "sort", "excluded", "select"},
+                     "sort", "excluded", "pivoted", "layout", "select"},
     "rename":       {"filter", "join_key", "ranking", "dedup_key", "transform", "aggregation",
-                     "sort", "excluded", "select"},
+                     "sort", "excluded", "pivoted", "layout", "select"},
     "value_change": {"filter", "join_key", "transform"},
-    "type_change":  {"filter", "join_key", "transform"},
-    "unknown":      {"filter", "join_key", "ranking", "dedup_key", "transform", "sort"},
+    "type_change":  {"filter", "join_key", "transform", "pivoted", "layout"},
+    "unknown":      {"filter", "join_key", "ranking", "dedup_key", "transform", "sort",
+                     "pivoted", "layout"},
 }
 # Usages with no local fix: the replacement has to come from the upstream team.
 NO_LOCAL_FIX = {"ranking", "dedup_key"}
@@ -67,9 +75,30 @@ def _impact_sentence(u: Usage, change_type: str, target: str | None,
                 f"what breaks. Ripple cannot see {tgt}'s column list, so everything past this "
                 f"point is worked out rather than read.")
     if u.kind == "excluded":
+        if u.detail == "REPLACE":
+            return (f"This statement puts another value in this column's place by name - "
+                    f"SELECT * REPLACE. The column of that name in {tgt} is fed by the "
+                    f"replacement from here on, not by this one, so the trail stops here - and "
+                    f"the name is written down, so removing or renaming it makes this statement "
+                    f"itself fail.")
         return (f"This statement takes every column EXCEPT this one by name. The column never "
                 f"reaches {tgt}, so the trail stops here - but the name is written down, so "
                 f"removing or renaming it makes this statement itself fail.")
+    if u.kind == "layout":
+        how = u.detail or "PARTITION BY"
+        return (f"{tgt} is laid out by this column ({how}). Nothing published gains or loses a "
+                f"column when it goes -- but the name is written on the CREATE line, so the "
+                f"statement stops compiling, {tgt} stops being built, and everything below it "
+                f"quietly serves data that has stopped being refreshed.")
+    if u.kind == "pivoted":
+        if u.detail == "UNPIVOT":
+            return (f"This column is named in an UNPIVOT list. Its values are folded into rows "
+                    f"under a new column name, so the column itself does not reach {tgt} - but "
+                    f"the name is written down here, so removing or renaming it makes this "
+                    f"statement fail outright and {tgt} stops loading.")
+        return (f"This column is fed into a PIVOT, which turns its values into columns of "
+                f"{tgt} under names worked out from each value. The name is written down here, "
+                f"so removing or renaming it makes this statement fail outright.")
     if u.kind == "filter":
         if change_type in ("removal", "rename"):
             return (f"Used in a filter here. Once the column is gone this query fails outright, "
@@ -153,6 +182,13 @@ class Finding:
     # published table pointed at another statement's lines and named another
     # statement's target -- and the count of usages was quietly short.
     at: int = 0
+    # The target table as the reader keyed it, which is not always what goes on
+    # screen: a temporary table is fenced to the file that built it, and the
+    # fence is stripped for display. Anything that walks ONWARDS from a finding
+    # has to use this, or it looks the table up by a name that matches every
+    # other file's temporary table of the same name -- which is the merge this
+    # fence exists to stop, leaking back in one screen further along.
+    target_key: str = field(default="", compare=False)
 
     def key(self) -> tuple:
         return (self.file, self.at, self.source_table, self.source_column, self.kind)
@@ -202,6 +238,24 @@ class ScanResult:
     # the statement really does read this table, but "which shard" is a question
     # the file does not answer, and the person acting on it has to know that.
     wildcard_names: list[dict] = field(default_factory=list)
+    # Tables on the trail whose name is nowhere in the file that builds them. A
+    # dbt model is a bare SELECT with no CREATE: the table it loads is named
+    # after the file, by dbt, at run time. Ripple follows that rule -- without it
+    # a dbt repository produced no lineage at all -- and then says so here,
+    # because somebody sent to that line to check will not find the table
+    # written on it, and a finding they cannot verify is one they will dismiss.
+    named_by_file: list[dict] = field(default_factory=list)
+    # Files Ripple would have read but did not, because they sit in a folder it
+    # is told to skip -- build, dist, target, venv. The count reached the
+    # repository screen and nothing else, so a scan of a dbt project (whose
+    # target/ folder holds the SQL that actually runs) came back `risk none,
+    # prod []` with the reason on a screen nobody was looking at.
+    # Tables on the trail that more than one file builds from scratch. Only one
+    # of those definitions can be the one that runs, and nothing in the files
+    # says which -- so both are followed and both are named. See rebuilt_in.
+    two_definitions: list[dict] = field(default_factory=list)
+    skipped_in_folders: list[str] = field(default_factory=list)
+    skipped_folder_names: list[str] = field(default_factory=list)
     # Published tables that are not built FROM this column, but that stop being
     # refreshed because the statement feeding them stops running on the day of
     # the change. A different kind of impact from the findings above, and it
@@ -230,6 +284,10 @@ class ScanResult:
             "cutShort": self.cut_short,
             "mergedNames": self.merged_names,
             "wildcardNames": self.wildcard_names,
+            "namedByFile": self.named_by_file,
+            "twoDefinitions": self.two_definitions,
+            "skippedInFolders": self.skipped_in_folders,
+            "skippedFolderNames": self.skipped_folder_names,
             "stopsLoading": self.stops_loading,
             "stopsLoadingCapped": self.stops_loading_capped,
             "maxHops": self.max_hops,
@@ -305,6 +363,9 @@ def trace(
     res.unreadable = list(parsed.unreadable)
     res.held_online = list(index.held_online)
     res.too_long = list(index.too_long)
+    # Beside the answer, not on another screen. See ScanResult.skipped_in_folders.
+    res.skipped_in_folders = list(index.in_skipped_dirs)
+    res.skipped_folder_names = list(index.skipped_dir_names)
     breaks = BREAKS.get(change_type, BREAKS["unknown"])
 
     # Searched on the table's own name, not on the whole thing somebody typed.
@@ -338,6 +399,10 @@ def trace(
     cut_seen: dict[tuple, dict] = {}
     merged_seen: dict[str, dict] = {}
     wild_seen: dict[str, dict] = {}
+    # tables whose name came from the file path, not from the statement
+    file_named_seen: dict[str, dict] = {}
+    # tables more than one file builds from scratch
+    forked_seen: dict[str, dict] = {}
     # Every table the chain actually stood on. Used at the end to look through
     # the statements Ripple could not understand for one that names any of
     # them -- see _opaque_on_the_trail.
@@ -470,6 +535,15 @@ def trace(
                     us = usages_of(stmt, cur_col, cur_table)
                     if not us:
                         continue
+                    # This statement reads a whole family of date-sharded
+                    # tables, and the line under the wildcard says which. See
+                    # suffix_verdict: a shard the query provably never touches
+                    # used to come back breaking and certain.
+                    reads = suffix_verdict(stmt, cur_table)
+                    if reads == "excluded":
+                        continue
+                    if reads == "maybe":
+                        us = [replace(u, certain=False) for u in us]
                     primary = us[0]
                     src = index.get(stmt.file)
                     if src is None:
@@ -483,7 +557,13 @@ def trace(
                         "transform": "Value is reshaped here",
                         "aggregation": "Group label changes with the value",
                         "sort": "Sort order - the statement stops running if this goes",
-                        "excluded": "Named in EXCEPT - dropped here, and breaks here",
+                        "excluded": ("Named in REPLACE - swapped here, and breaks here"
+                                     if primary.detail == "REPLACE"
+                                     else "Named in EXCEPT - dropped here, and breaks here"),
+                        "pivoted": f"Named in {primary.detail or 'PIVOT'} - reshaped here, "
+                                   "and breaks here",
+                        "layout": f"{primary.detail or 'PARTITION BY'} - this table stops "
+                                  "being built without it",
                         "star": "SELECT * - carried on without being named",
                         "select": f"Carried forward as {primary.alias or cur_col}",
                     }.get(primary.kind, "Used here")
@@ -495,6 +575,23 @@ def trace(
                     # to the line to look for a statement that is not there --
                     # and then to doubt the finding rather than the label.
                     logic = primary.label
+                    # The file does not say SELECT * -- it says {cols}, and the
+                    # column list arrives when the job runs. A row that claims
+                    # the file says SELECT * sends somebody to a line where no
+                    # such statement is written.
+                    if stmt.star_note and primary.kind == "star":
+                        logic = "Carried by a placeholder"
+                        note = stmt.star_note
+                    # PIVOT and UNPIVOT are opposite operations, and the file
+                    # says which one. A row labelled PIVOT beside a line reading
+                    # UNPIVOT is describing a statement that is not there.
+                    if primary.kind == "pivoted" and primary.detail:
+                        logic = f"Named in {primary.detail}"
+                    # EXCEPT drops the column; REPLACE puts another value in its
+                    # place. Both name it and both break here, but they are not
+                    # the same statement and the file says which.
+                    if primary.kind == "excluded" and primary.detail == "REPLACE":
+                        logic = "Named in REPLACE"
                     if stmt.whole_copy and primary.kind == "star":
                         logic = f"Carried by {stmt.whole_copy}"
                         note = (f"{stmt.whole_copy} of the whole table - every column "
@@ -522,6 +619,7 @@ def trace(
                         copied_by=stmt.whole_copy,
                         inferred_hops=inferred + (1 if carried_by_star else 0),
                         at=stmt.line_offset,
+                        target_key=stmt.target or "",
                     )
                     findings_by_key.setdefault(f.key(), f)
                     f = findings_by_key[f.key()]
@@ -540,6 +638,21 @@ def trace(
                         "kind": _kind_of_node(short_name(tgt), cfg),
                         "alias": primary.alias or cur_col,
                     }
+                    # The statement builds a table it never names -- a dbt model
+                    # or any other one-query file. The hop is real and the name
+                    # is the tool's own rule, not a guess, but it is not written
+                    # on the line, so it is said out loud beside the answer.
+                    # More than one file builds this table from scratch, and
+                    # only one of them can be the definition that runs. See
+                    # ParsedRepo.rebuilt_in.
+                    forks = parsed.rebuilt_in(tgt)
+                    if forks:
+                        node["twoDefinitions"] = True
+                        forked_seen.setdefault(shown, {"table": shown, "files": forks})
+                    if stmt.named_by:
+                        node["namedByFile"] = True
+                        file_named_seen.setdefault(shown, {
+                            "table": shown, "file": stmt.file, "how": stmt.named_by})
                     if carried_by_star:
                         # This table is built with SELECT *, so its column list
                         # is nowhere in the repository. The hop is real and the
@@ -556,6 +669,9 @@ def trace(
                             # statement that is not in the file is worse than
                             # no card. Which word was written travels with it.
                             "how": stmt.whole_copy,
+                            # Not a star in the file at all, but a hole where
+                            # the column list goes. See Statement.star_note.
+                            "filledIn": stmt.star_note,
                         })
                         if attr not in entry["roots"]:
                             entry["roots"].append(attr)
@@ -697,6 +813,8 @@ def trace(
     res.cut_short = sorted(cut_seen.values(), key=lambda c: c["table"].upper())
     res.merged_names = sorted(merged_seen.values(), key=lambda m: m["table"].upper())
     res.wildcard_names = sorted(wild_seen.values(), key=lambda w: w["table"].upper())
+    res.named_by_file = sorted(file_named_seen.values(), key=lambda m: m["table"].upper())
+    res.two_definitions = sorted(forked_seen.values(), key=lambda m: m["table"].upper())
     placed |= {f.key() for fs in end_groups.values() for f in fs}
     res.other = [_finding_row(f) for f in res.findings if f.key() not in placed]
 
@@ -762,7 +880,11 @@ def trace(
     broken: dict[str, str] = {}
     for f in res.findings:
         if f.breaking and f.target_table:
-            broken.setdefault(short_name(f.target_table).upper(), f.target_table)
+            # Keyed on what goes on screen, walked on from what the reader
+            # keyed. For a temporary table those are two different names -- see
+            # Finding.target_key.
+            broken.setdefault(short_name(f.target_table).upper(),
+                              f.target_key or f.target_table)
     res.stops_loading, res.stops_loading_capped = _stops_loading(
         parsed, cfg, broken,
         {short_name(g["prod"]).upper() for g in res.groups}, show)
@@ -781,7 +903,17 @@ def trace(
                                       {u.get("file") for u in res.unreadable}):
         res.unreadable.append(entry)
 
-    res.risk = _risk_of(res)
+    # A gap Ripple knows about, on the subject of this scan. See _risk_of.
+    # Restricted to files that mention one of the names being followed, because
+    # every real pipeline has some file the reader cannot make sense of, and a
+    # badge that says "not sure" on every scan ever run is one nobody reads. A
+    # file that was never OPENED is not restricted that way -- nothing can say
+    # whether it mentions the name, which is exactly the problem with it.
+    opened = {f.path for f in index.files}
+    unread_on_topic = (any(u.get("file") in matched_files for u in res.unreadable)
+                       or any(u.get("file") not in opened for u in res.unreadable)
+                       or bool(res.held_online) or bool(res.too_long))
+    res.risk = _risk_of(res, unread_on_topic)
     return res
 
 
@@ -1047,9 +1179,22 @@ def _finding_row(f: Finding) -> dict:
     }
 
 
-def _risk_of(res: ScanResult) -> str:
+def _risk_of(res: ScanResult, unread_on_topic: bool = False) -> str:
+    """The badge at the top of the answer.
+
+    "No impact" is the only thing this tool sells, so it is the one word that
+    must never be printed over a gap. A file that mentions the very name being
+    scanned and could not be read, or a file that was never opened at all, is a
+    gap -- Ripple does not know what is in it, and "I found nothing" and "I could
+    not look" are not the same answer however similar they look on screen.
+
+    Measured before this: an EXECUTE IMMEDIATE holding a whole CREATE ... SELECT
+    of the scanned column printed a green "No impact" with couldNotRead 1 sitting
+    underneath it, and a file whose first statement was eaten by a byte-order
+    mark did the same.
+    """
     if not res.findings:
-        return "none"
+        return "unknown" if unread_on_topic else "none"
     if any(f.no_local_fix for f in res.findings):
         return "high"
     if any(f.breaking for f in res.findings):

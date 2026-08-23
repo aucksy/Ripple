@@ -283,6 +283,13 @@ def health() -> dict:
             # Code files Ripple walked past because of the folder they sit in.
             "inSkippedDirs": len(idx.in_skipped_dirs),
             "skippedDirNames": list(idx.skipped_dir_names),
+            # File types Ripple does not open, biggest first. Nothing recorded
+            # these before, so a repository whose pipeline is written in one of
+            # them looked exactly like a repository with no pipeline in it.
+            "unknownExt": [
+                {"ext": k, "files": n}
+                for k, n in sorted(idx.unknown_ext.items(), key=lambda kv: (-kv[1], kv[0]))
+            ][:12],
             # Programs that run SQL kept in a separate .sql file. Two folders of
             # DAGs are written that way, and without this they read as empty.
             "runsSqlFrom": len([r for r in parsed.runs_sql_from if r["runs"]]),

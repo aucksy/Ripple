@@ -542,7 +542,9 @@ A scan result, as JSON sent to the browser:
   {attributes[], groups[], reached[], other[], graphs[], unreadable[],
    mentionsOnly[], heldOnline[], pathTooLong[], filesScanned, filesMatched,
    risk, stats{}}
-  risk is one of: high, medium, low, none
+  risk is one of: high, medium, low, unknown, none
+  "none" is the only thing this tool sells, so it is the one word that must
+  never cover a gap: see Phase 5.
   stats = {productionTables, tablesReached, intermediateTables,
            attributesImpacted, filesWithImpact, breakingUsages,
            couldNotRead, neverOpened}
@@ -782,7 +784,7 @@ RepoIndex.build(root, cfg, on_progress=None). Text compresses well and only
 files with a useful extension are kept, so a real repository fits easily.
 
 Fields: files[] of SourceFile, skipped[], root, held_online[], too_long[],
-in_skipped_dirs[], skipped_dir_names[].
+in_skipped_dirs[], skipped_dir_names[], unknown_ext{}.
 
 Rules that matter, each for a reason:
 
@@ -818,8 +820,38 @@ Rules that matter, each for a reason:
    the pipeline, and then this is a scan of half a repository with nothing on
    screen to say so.
 
-4. Files over max_file_bytes, and files that will not decode as UTF-8 (try
-   latin-1 second), go in skipped[] with a plain-English reason.
+4. Files over max_file_bytes go in skipped[] with a plain-English reason.
+
+5. HOW THE FILE WAS SAVED. Read the bytes and work the encoding out; do not
+   just ask for UTF-8. Windows writes byte-order marks by default — Notepad,
+   PowerShell's Out-File, Excel's CSV export, every Office "save as UTF-8" box
+   — and a mark is invisible in every editor and lethal to a SQL parser. It
+   lands on the FIRST statement of the file, which in a pipeline file is the
+   one that names the source table, so the statement that matters is the one
+   that is lost and the file still reports as read. Measured before this: the
+   first statement failed, risk came back "none", and with two statements in
+   the file the wording actively reassured — "1 of 2 statements in this file
+   could not be read - the other 1 was".
+     Check for a mark first: EF BB BF is utf-8-sig; FF FE 00 00 and
+     00 00 FE FF are utf-32; FF FE and FE FF are utf-16.
+     With no mark, look at the first 4 KB. Real text has no NUL bytes at all,
+     so more than about a tenth of them being NUL means UTF-16 with no mark —
+     PowerShell's ">" redirection has written UTF-16-LE by default for twenty
+     years. Decide which way round from whether byte 2 is NUL.
+     Then UTF-8, and latin-1 as the last fallback.
+   If a NUL byte SURVIVES all that, do not index the file: put it in skipped[]
+   saying it contains NUL bytes and is either not text or was saved in an
+   encoding Ripple could not work out. A NUL left in the text makes the parser
+   swallow the statement it sits in and say nothing — measured at
+   couldNotRead 0, no warning of any kind, risk none.
+
+6. FILE TYPES YOU DO NOT OPEN. Count them. When a file is passed over because
+   its extension is not on the read list, add one to unknown_ext[ext]. The walk
+   used to have a bare "continue" with no counter, so a repository whose
+   pipeline is written in .ipynb, .tf or .json files reported "indexed False,
+   risk none, prod []" with NOTHING anywhere recording that a file had been
+   passed over. The point is not to read them. It is that the NEXT unlisted
+   extension is visible instead of silent.
 
 Also in this file:
 
@@ -906,6 +938,16 @@ Databricks, and { python_format } — the last one deliberately narrow, so that
 a regular expression's {3} inside a string literal is left alone. For dbt,
 ref('orders') and source('raw','orders') resolve to the last quoted name,
 because that is a real table and taking it is the whole point of ref().
+
+One placeholder must resolve to NOTHING AT ALL: a dbt directive. {{ config(
+materialized='table') }} — and set, test, macro, endmacro, snapshot,
+endsnapshot, do, print, log — are instructions to dbt, not values. Turned into
+a bare identifier, a word lands where SQL expects a keyword and THE WHOLE FILE
+stops parsing: not one table, not one column, nothing. Measured: adding a
+config header to a readable dbt model took it from a full chain to 100%
+unreadable, in every spelling tried. Every dbt model in the world opens with
+one. Return an empty string for those, and make sure the "which words came out
+of a hole" set skips the empties rather than collecting a blank name.
 
 TWO RULES THIS FILE KEEPS:
   Line numbers do not move. Every replacement puts back exactly as many line
@@ -1266,6 +1308,254 @@ giving the best guess at the real 1-based line, scoring lines by whether they
 also contain the keywords that kind lives near; snippet(file, line, note)
 returning a few lines of real code with the important one marked.
 
+A FILE THAT IS ONE QUERY AND BUILDS NOTHING. A dbt model is a bare SELECT.
+There is no CREATE, no INSERT and no MERGE, so nothing in the file names the
+table it builds — dbt does, after the file. models/marts/customer_published.sql
+builds customer_published. Measured before this: a three-hop dbt chain gave
+productionTables 0, reachesProduction false, and the finding text "Selected
+straight through into the next table" when there was no next table. EVERY dbt
+repository produced zero lineage, and dbt is the commonest way a BigQuery
+pipeline is written. That is the loudest possible version of this tool's worst
+failure: a calm, clean, complete no-impact answer over none of the picture.
+
+  The name is not a guess. A dbt model's name IS its file stem — that is the
+  rule dbt itself runs on, and ref('customer_published') elsewhere in the
+  repository resolves through exactly the same rule. Dataform (.sqlx) and every
+  hand-rolled one-query-per-file runner work the same way.
+
+  Three levels of evidence, labelled differently because they are not equally
+  sure. Record which one applied on the statement, as named_by:
+    "Dataform" — the file is .sqlx, or it opens with a config { } block.
+    "dbt"      — the file is under models/, snapshots/ or definitions/, or it
+                 calls ref(), source(), config() or this().
+    "file"     — a .sql file holding exactly ONE query and no CREATE anywhere.
+                 Something runs it and puts the rows somewhere; naming that
+                 somewhere after the file is the convention every such runner
+                 uses. Following it costs a row somebody can dismiss by opening
+                 the file. Not following it costs the chain.
+
+  Only ever name the ONE statement in the file that has no target and is a bare
+  query. Two bare SELECTs in one file cannot both be the table the file is
+  named after. For "dbt" and "file" also require that the whole file is that
+  one query; a Dataform model may have pre_operations beside it.
+
+  THE TRAP: check the FILE'S OWN FIRST LINE OF CODE, not the parse tree. Several
+  statements that build nothing and are named after nothing are rewritten into a
+  bare SELECT on the way into the parser — EXPORT DATA is the one that caught
+  this — and by the time the tree exists they are indistinguishable from a dbt
+  model. EXPORT DATA delivers a file to somebody outside the warehouse; naming
+  its destination "a.sql" would be a table that exists nowhere. So for the "dbt"
+  and "file" readings, require the file to say SELECT or WITH on its first line
+  of code once comments and placeholders are taken off.
+
+  Say it on the result. Anybody sent to that line to check will not find the
+  table name written on it, and a finding somebody cannot verify is one they
+  dismiss. See the namedByFile list in Phase 5.
+
+A TEMPORARY TABLE BELONGS TO ONE FILE. A TEMP table is gone when its script
+finishes, so two files that both build a "t" are not sharing a table — they
+cannot be, because a static scan can never know two files ran in one session.
+Temp names in real repositories are t, tmp, stg, base, deduped, so collisions
+are the norm. Measured before this: two unrelated files, each building its own
+"t", put BOTH of their published tables on the chain, marked the second one
+breaking, and printed no warning of any kind.
+
+  The dataset rule that keeps stage.orders apart from archive.orders cannot
+  help, because a temp table has no dataset. So invent one: a scope standing for
+  "inside this file", made of the file's own path with every non-alphanumeric
+  character turned into an underscore, and marked with a "#" — a character no
+  warehouse allows in a name. Apply it once the whole file is parsed, so a temp
+  table used above the line that creates it is still caught.
+
+  Move a name only when it has no dataset, or the _SESSION dataset BigQuery uses
+  for them. ds.t is a real table that happens to share a short name with a temp
+  one, and taking it would cut a genuine chain.
+
+  same_table must treat a scoped name as ABSOLUTE: if either side carries the
+  mark, the two datasets have to be identical. This is the one place the loose
+  "no dataset given matches anything" rule is switched off, and it has to be —
+  nothing outside that file can be reading a table that exists only inside it.
+  For the same reason, when reading() is asked for a name with no dataset, drop
+  any statement whose only matching source is scoped.
+
+  Do NOT count the scope as a dataset when working out which names are
+  ambiguous, or every "t" in the repository is reported as a name standing for
+  more than one table. And STRIP THE MARK for display: it is your fence, not
+  something anybody wrote, and a name on screen that is in no file sends
+  somebody looking for a table that does not exist.
+
+  Watch the leak one screen further along. Anything that walks ONWARDS from a
+  finding — "published tables that stop being refreshed" does — must use the
+  name the reader keyed, not the name shown on screen. Carry the real target on
+  the finding for that purpose. Measured: fencing the chain off moved the false
+  claim rather than removing it, and the unrelated published table reappeared
+  under "stops being refreshed", worded as certainly as before.
+
+INFORMATION_SCHEMA IS NOT DATA. It is BigQuery's catalogue of its own tables,
+and its views are called COLUMNS, TABLES, JOBS, VIEWS, PARTITIONS — ordinary
+words, and a warehouse of any size has real tables called some of them.
+Measured: a real p.base.columns was reported as feeding a published table it
+never touches, with a warning beside it that blamed CAPITALISATION — so the one
+thing on screen pointing at the problem named the wrong cause, and following it
+would not have found anything.
+  If ANY dot-separated part of a qualified name is INFORMATION_SCHEMA, or the
+  first part starts with "region-", it is the warehouse describing itself: never
+  record it as a source, never record it as a target, never merge it with
+  anything. Nothing that changes in a real table changes a COLUMN of
+  INFORMATION_SCHEMA.COLUMNS — a ROW of it changes, and a row is not lineage.
+
+PIVOT AND UNPIVOT. Both fold a column away and build differently-named ones out
+of it, and both NAME the column while doing it, so the statement itself fails on
+the day the column goes. Neither was read at all, and each failed in its own
+direction.
+
+  UNPIVOT was the worse of the two and the only case in the whole suite that
+  hedges DOWNWARDS on a statement that hard-fails:
+    CREATE OR REPLACE TABLE s1 AS SELECT * FROM customer_demographics
+    UNPIVOT (val FOR metric IN (cm13, other_col));
+  read as a plain SELECT *, so the answer was risk "low", breaking false, and
+  the sentence "Nothing here fails on the day of the change" — printed about a
+  statement whose UNPIVOT list stops being valid SQL.
+
+  PIVOT failed the other way: the columns it builds are total_Q1 and total_Q2,
+  worked out from the aggregate's alias and each IN value. Nothing derived them,
+  so the trail was declared finished one hop early with the note "Last table in
+  the chain", and the published table reading total_Q1 was never named.
+
+  A PIVOT hangs off the FROM clause, not off any select list, so nothing that
+  walks projections, WHERE clauses or joins can ever see it. Collect them from
+  the FROM's table or subquery and from every join's, then:
+    which columns it NAMES — an UNPIVOT's IN list; a PIVOT's IN list plus the
+      columns inside its aggregates
+    which columns it BUILDS — for a PIVOT, the output names the parser works
+      out for you; for an UNPIVOT, the value column names plus the name column
+      (renaming the source column changes what is written into the name column
+      just as surely, so follow both)
+  Map each named column to each built one as a reshape, add every named column
+  to the "dropped by the star over it" set, and record a usage of its own kind —
+  breaking on removal, rename and type change, but NOT on a value change, since
+  an UNPIVOT folds whatever is there into rows either way. Suppress the SELECT *
+  usage for a column a pivot consumes: the pivot is definitive about that one
+  column, and letting the star speak as well puts "carried through untouched"
+  beside "named here, and this statement fails without it". And label the row
+  with the word the FILE uses — PIVOT and UNPIVOT are opposite operations.
+
+PARTITION BY AND CLUSTER BY ON THE CREATE LINE. These sit outside the SELECT, so
+nothing that walks a query can see them. Measured: a table partitioned by the
+very column being decommissioned returned NO usages at all, and the whole chain
+came back risk low, groups 0, couldNotRead 0. It is not a column of the table
+being built, so no chain follows from it — but the name is written on the CREATE
+line, so the day the column goes the statement stops compiling, the table stops
+being built, and every published table underneath it quietly serves data that
+has stopped being refreshed. Walk the CREATE's properties for anything whose
+name mentions Partition or Cluster and record a usage. Note that PARTITION BY
+cm13 with nothing round it parses as a bare IDENTIFIER, not a column, so
+searching for columns alone finds nothing.
+
+A COLUMN NAMED AFTER A PARENLESS FUNCTION. BigQuery lets CURRENT_DATE,
+CURRENT_TIME, CURRENT_TIMESTAMP and CURRENT_DATETIME be written with no
+brackets, so "SELECT current_date FROM customer_demographics" parses as a call
+and not as a column at all. A table with a column of that name then produces the
+cleanest possible zero: risk none, prod [], found 0, nameInTables 0 — Ripple did
+not miss the column, it never saw one. Backticked, the very same scan is risk
+medium and reaches production.
+  Which of the two the writer meant cannot be known from the file: both are
+  valid BigQuery and both are written exactly the same way. So FOLLOW BOTH —
+  read the node back as a column — and mark every usage of that name in that
+  statement as not certain. Only where the file writes the name with NO brackets
+  after it; CURRENT_DATE() is unambiguously the function.
+
+A HOLE WHERE THE COLUMN LIST GOES. A great many Airflow DAGs build SQL as
+  cols = "cm13, cm14"
+  sql = f"CREATE OR REPLACE TABLE ds.final_published AS SELECT {cols} FROM ..."
+The placeholder is filled in before BigQuery ever sees it, so the column list
+genuinely is "cm13, cm14" — but it is not in the file, and Ripple reads
+"SELECT cols FROM ...". Measured: Ripple believed the published table had
+exactly one column, called "cols", and answered reachesProduction False, risk
+none, unreadable 0, couldNotRead 0. Identical with .format().
+  A hole standing where a projection goes is a SELECT * that has not been filled
+  in yet. Replace it with a star, which makes the whole existing star machinery
+  work: the trail carries on, the table is listed as one whose column list is
+  not visible, and every finding past it is marked worked out rather than read.
+  Record on the statement that the star came from a placeholder, and use that
+  everywhere the screen would otherwise say the file writes SELECT *. It does
+  not, and a row that claims it does sends somebody to a line where no such
+  statement is written.
+
+A SELECT WRITTEN AS A VALUE IS NOT A SOURCE OF ROWS. When you group a
+statement's SELECTs by nesting depth to work out what each column leaves as,
+skip any SELECT that sits in the select list, or inside a WHERE, HAVING,
+QUALIFY, GROUP BY or ORDER BY. Those are values — one number, one list to test
+against — and the names inside them are their own business.
+    SELECT o.k,
+           (SELECT MAX(d.cm13) AS c_alias FROM customer_demographics d
+            WHERE d.k = o.k) AS peak_cm
+    FROM other_source o
+  Measured before this: the statement's output name for cm13 came back as
+  c_alias — a name that exists only inside the brackets and appears on no table
+  anywhere. The real name is peak_cm, which is what the next table reads, so the
+  chain went cold one hop early and reported no production impact. The mirror is
+  just as bad: WHERE k IN (SELECT cm13 AS c_alias FROM ...) INVENTED a column
+  called c_alias on the table being built. A subquery in FROM or JOIN, and a
+  CTE, really do hand their columns to the query around them: leave those alone.
+  Walk up from the nested SELECT to the enclosing one and look at which argument
+  of it the chain arrived through.
+
+SELECT * REPLACE(legacy_code AS cm13) NAMES cm13. Remove it and this statement
+fails, exactly as it does with EXCEPT — and the column of that name downstream
+is fed by the replacement from here on, not by this one. Ripple got the right
+answer for the wrong reason: the rename was followed, but nothing said the name
+was written down here, so the row read "breaking: false" about a statement that
+stops compiling. Record a usage on the REPLACE target, add the replaced name to
+the star's dropped set, and suppress the plain SELECT * usage for it. Label the
+row REPLACE rather than EXCEPT — they are different statements and the file says
+which.
+
+_TABLE_SUFFIX. A wildcard table reads a whole family of date-sharded tables, and
+the query almost always narrows that down on the very next line:
+    SELECT cm13 FROM `p.ds.customer_demographics_*`
+    WHERE _TABLE_SUFFIX = '20260101'
+Ripple followed the wildcard and never read the line under it, so scanning
+customer_demographics_19991231 — a shard from 1999 this query provably never
+touches — came back risk medium, breaking true, CERTAIN true, with no hedge
+anywhere. The predicate is on the same line as the wildcard, inside the snippet
+Ripple prints, and the answer contradicted it.
+  Work out the shard's suffix from the wildcard's own prefix, then read the
+  _TABLE_SUFFIX comparisons in the WHERE: =, !=, <, <=, >, >=, IN and BETWEEN
+  against string literals. Excluded means drop the finding. Anything you cannot
+  evaluate — a parameter, a date calculation, a variable — sets certain=false and
+  the finding STAYS; guessing at one would trade an over-confident answer for a
+  missing one. Only ANDs: an OR or a NOT above the comparison means other shards
+  are read too. And never narrow when the person typed the family name with the
+  asterisk in it, because then no one suffix can be tested.
+
+ONE TABLE, TWO FILES THAT BUILD IT. A CREATE OR REPLACE replaces the whole
+table, so only one of them can be the definition that runs. Two of them in two
+files is a fork — usually a live copy and a stale one under archive/ or dev/
+that nothing schedules. Measured: the ONLY finding reported came from the
+archive copy, presented with breaking true and certain true and the same wording
+as any live finding, while the live definition appeared under "mentions only".
+Where the real build is generated at deploy time and only the stale copy is
+committed, that is a confident, clean answer about a pipeline that no longer
+exists. Keep a map of short table name to the files that fully REPLACE it, and
+report the ones with more than one. An INSERT or a MERGE adds to a table and
+several files loading one that way is ordinary; only a CREATE forks it.
+
+DATAFORM FILES. A .sqlx file is Google's own way of writing a BigQuery pipeline:
+an ordinary SELECT with blocks on top that are JavaScript, not SQL.
+    config { type: "table" }
+    js { const x = 1 }
+    pre_operations { DELETE FROM ... }
+
+    SELECT cm13 FROM ${ref("customer_demographics")}
+The parser refuses the whole file on the first line, so nothing at all is
+learned from it. In the same place you rewrite the other shapes the parser
+refuses, drop the config and js blocks whole (keeping their line breaks), and
+for pre_operations and post_operations drop the brackets and KEEP the contents
+as one more statement — those hold real SQL that really runs. Match braces
+yourself rather than with a regular expression, because a brace inside a quoted
+string closes nothing.
+
 Tests with unittest, not pytest: a statement split rescues the readable
 statements around a bad one; MERGE, DELETE and UPDATE are seen; CTE names are
 not treated as tables; a column renamed inside a subquery is followed out; a
@@ -1412,7 +1702,32 @@ that picks one row per key. Without it the choice becomes arbitrary; the
 wrong record can win, and nothing is raised to tell you."
 
 Risk: high if any finding has no local fix, medium if any breaks, low if
-there are findings, none if there are none.
+there are findings.
+
+With no findings at all the answer is "none" — EXCEPT where there is a gap
+Ripple knows about, and then it is "unknown", worded on screen as "Not sure —
+needs a person". "No impact" is the only thing this tool sells, so it is the
+one word that must never be printed over something Ripple could not look at.
+"I found nothing" and "I could not look" are not the same answer, however
+similar they look on screen. A gap means any of:
+  a file that could not be read AND that mentions one of the names being
+    followed — restricted that way because every real pipeline has some file
+    the reader cannot make sense of, and a badge that says "not sure" on every
+    scan ever run is one nobody reads;
+  a file that could not be read and was never OPENED either, so nothing can say
+    whether it mentions the name — which is exactly the problem with it;
+  any file held online-only, or whose path was too long to open.
+Measured before this: an EXECUTE IMMEDIATE holding a whole CREATE ... SELECT of
+the scanned column printed a green "No impact" with couldNotRead 1 sitting
+underneath it, and a file whose first statement was eaten by a byte-order mark
+did the same. So did a whole repository read with the wrong SQL dialect, where
+three files failed and nothing at all was learned.
+
+Also carry the target table AS THE READER KEYED IT on each finding, beside the
+one shown on screen. They are not always the same name — a temporary table is
+fenced to the file that built it and the fence is stripped for display — and
+anything that walks onwards from a finding has to use the keyed one or it looks
+the table up by a name that matches every other file's temporary table.
 
 Order groups WORST FIRST — most impacts, then by name. On a real repository
 this list is hundreds of tables long, and alphabetical order means the first
@@ -1445,6 +1760,29 @@ could read). A scan for a column half the warehouse shares looks identical on
 screen to a scan for one only this table has, and they are not remotely the
 same answer.
 
+FOUR MORE LISTS ON THE RESULT, each a caveat that must sit BESIDE the answer
+it qualifies and never on another screen:
+
+  namedByFile[]      {table, file, how} — tables whose name is nowhere in the
+                     file that builds them, because the tool names them after
+                     the file. "how" is "dbt", "Dataform" or "file". Without
+                     this, somebody who opens the file to check the finding
+                     will not find the table name written on it, and a finding
+                     they cannot verify is one they dismiss.
+  twoDefinitions[]   {table, files[]} — tables more than one file builds FROM
+                     SCRATCH. Only one of those can be the definition that
+                     runs, and nothing in the code says which.
+  skippedInFolders[] the code files Ripple walked past because of the folder
+                     they sit in, with skippedFolderNames[]. This count used to
+                     reach the repository screen and nothing else, so a scan of
+                     a dbt project — whose target/ folder holds the SQL that
+                     actually runs — came back "risk none, prod []" with the
+                     reason on a screen nobody was looking at.
+  starTables[]       gains a "filledIn" field. A table whose column list is not
+                     visible is not always a SELECT *: it can be a placeholder
+                     the job fills in when it runs. No screen may tell somebody
+                     the file says SELECT * when it does not.
+
 Also produce graphs[] for the dependency picture: per attribute, the branches
 that reach a published table and the branches that end elsewhere, each a list
 of {name, kind, alias, prod}. Drop any branch that is only the start of a
@@ -1456,7 +1794,8 @@ findings are reported even when NOTHING matches the published rule, and the
 risk is not "none"; correcting the rule turns them into production tables; a
 genuinely clean result is still clean; a name inside a quoted string is
 reported even in a file that has findings, with a count of lines; groups come
-back worst first.
+back worst first; a repository with nothing found but a file it could not read
+comes back "unknown", and a clean one still comes back "none".
 ````
 
 **Check it worked**, from `ripple-build`:
@@ -2039,8 +2378,11 @@ understood, and, ONLY when they are not zero, files never opened, files that
 would not parse, and files in folders Ripple skips. "Files indexed 1,770" is
 the number somebody reads to decide the whole folder was covered, so when it
 was not, the rows saying otherwise sit directly underneath it.
-Right: what kinds of file are in the index, counted; a confirmation note with
-the branch and the file count; the never-opened note if there is one, saying
+Right: what kinds of file are in the index, counted; the file types Ripple does
+NOT open with a count each, from unknown_ext, so the next unlisted extension is
+visible instead of silent — nothing recorded those before, and a repository whose
+pipeline is written in .ipynb or .tf files looked exactly like one with no
+pipeline in it; a confirmation note with the branch and the file count; the never-opened note if there is one, saying
 the number, why, and the one thing that fixes it; the skipped-folders note if
 there is one; and the catalogue counts, which arrive from a separate request —
 while waiting, say what it is waiting for rather than leaving a heading with
@@ -2118,6 +2460,33 @@ THE REST OUT LOUD — every one of them is already a finding on the previous
 step. A legend, and one line saying the alias is the rename a word search
 would miss. The line under the title must be true of the picture underneath
 it: if no branch reaches a published table, say so there.
+
+FIVE CARDS UNDER THE FINDINGS, each one a thing Ripple could not see and each
+one BESIDE the answer it qualifies. Every one of these was, at some point, a
+warning that lived on another screen while a scan said "no impact":
+
+  Tables whose column list is not readable (starTables). Say which kind each is
+  — built with SELECT *, a whole table copied or renamed with COPY / CLONE /
+  LIKE / RENAME, or a placeholder the job fills in at run time. Never describe a
+  statement the file does not contain.
+  One name standing for more than one table (mergedNames).
+  Tables read through a wildcard rather than by name (wildcardNames).
+  Tables built from scratch in more than one file (twoDefinitions). Say that
+  only one of them can be the one that runs and that nothing in the code says
+  which, so the reader checks their scheduler before acting.
+  Code files not read because of the folder they are in (skippedInFolders).
+  Name the folders, and say that if the pipeline really runs from one of them
+  the skip list on the settings screen can be changed.
+  Tables named after their file rather than by the SQL (namedByFile). Say which
+  tool names them, and that opening the file will show the query and not the
+  name.
+
+AND ONE SENTENCE UNDER THE FILE COUNT, on every scan, that qualifies every other
+sentence on the screen: Ripple read these N files and nothing else, so "no
+impact" means "nothing in this repository", not "nothing anywhere" — a job in
+another repository, a scheduled query, or a dashboard built straight on the
+table is outside what it can see. That is the single commonest way to be wrong
+with this tool.
 
 STEP 6 — the summary. The headline with a risk badge, the narrative, the
 bullets, and the change details. A right-hand rail with the deadline and days

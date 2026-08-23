@@ -130,6 +130,14 @@ def _health() -> dict:
             "exists": folder["ok"],
             "kinds": [{"lang": k, "files": n}
                       for k, n in sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))],
+            # File types Ripple does not open, biggest first. The screen that
+            # shows these is the SAME app.js the online build uses, so leaving
+            # the key out here means the offline copy silently shows nothing
+            # where the online one shows the tally.
+            "unknownExt": [
+                {"ext": k, "files": n}
+                for k, n in sorted(idx.unknown_ext.items(), key=lambda kv: (-kv[1], kv[0]))
+            ][:12],
         },
         "catalog": {"tables": len(cat.tables),
                     "columns": sum(len(v) for v in cat.tables.values())},

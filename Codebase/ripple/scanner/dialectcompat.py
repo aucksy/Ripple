@@ -44,6 +44,52 @@ def star_replace(star: exp.Star) -> list:
     return list(star.args.get("replace") or star.args.get("replace_") or [])
 
 
+def is_unpivot(pivot: exp.Expression) -> bool:
+    """PIVOT turns rows into columns; UNPIVOT turns columns into rows."""
+    return bool(pivot.args.get("unpivot"))
+
+
+def pivot_fields(pivot: exp.Expression) -> list:
+    """The ``FOR x IN (...)`` parts of a PIVOT or UNPIVOT.
+
+    Where the names live. For an UNPIVOT the IN list IS the column list being
+    folded away, so reading the wrong key means a statement that hard-fails on
+    the day the column goes is reported as carrying it through untouched.
+    """
+    fields = pivot.args.get("fields")
+    if fields is None:
+        fields = pivot.args.get("field")
+    if fields is None:
+        return []
+    return list(fields) if isinstance(fields, list) else [fields]
+
+
+def pivot_columns(pivot: exp.Expression) -> list[str]:
+    """The output column names a PIVOT produces -- ``total_Q1``, ``total_Q2``.
+
+    sqlglot works these out itself, which is worth having: the rule involves the
+    aggregate's alias, whether it has one, and each IN value. Empty means it did
+    not, and the caller must not pretend it knows the names.
+    """
+    return [c.name if hasattr(c, "name") else str(c)
+            for c in (pivot.args.get("columns") or [])]
+
+
+def is_temporary(stmt: exp.Expression | None) -> bool:
+    """Was this CREATE written as TEMP or TEMPORARY?
+
+    A temporary table lives inside one script and is gone when it ends, so two
+    files that both call one ``t`` are not sharing a table. Read the wrong key
+    and they get merged, which invents a chain to a published table nobody
+    touched -- and the finding on it looks exactly like a real one.
+    """
+    props = getattr(stmt, "args", {}).get("properties") if stmt is not None else None
+    node = getattr(exp, "TemporaryProperty", None)
+    if props is None or node is None:
+        return False
+    return any(isinstance(p, node) for p in props.expressions)
+
+
 def merge_whens(merge: exp.Expression) -> list:
     """Every WHEN branch of a MERGE, whichever shape it arrives in."""
     whens = merge.args.get("whens")

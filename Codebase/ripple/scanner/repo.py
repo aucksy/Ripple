@@ -70,6 +70,55 @@ def online_only(p: Path) -> int:
     return attrs & (_DEFINITELY_ONLINE_ONLY | FILE_ATTRIBUTE_OFFLINE)
 
 
+# ── the first three bytes of a file ────────────────────────────────────────
+# A byte-order mark is invisible in every editor and lethal to a SQL parser. It
+# arrives on the front of the FIRST statement, which in a pipeline file is the
+# one that names the source table -- so the statement that matters is the one
+# that is lost, and the file still reports as read.
+#
+# Measured before this: the first statement failed, `risk` came back `none`, and
+# with two statements in the file the wording actively reassured -- "1 of 2
+# statements in this file could not be read - the other 1 was". Windows writes
+# these by default: Notepad, PowerShell's `Out-File`, Excel's CSV export, and
+# every "save as UTF-8" box in Office.
+#
+# UTF-16 is the same problem one step worse. PowerShell's `>` redirection has
+# written UTF-16-LE by default for twenty years, and read as UTF-8 the file
+# comes back as text with a NUL between every letter, which parses as nothing at
+# all and says so about the whole file rather than about one statement.
+_BOMS = (
+    (b"\xef\xbb\xbf", "utf-8-sig"),
+    (b"\xff\xfe\x00\x00", "utf-32"),
+    (b"\x00\x00\xfe\xff", "utf-32"),
+    (b"\xff\xfe", "utf-16"),
+    (b"\xfe\xff", "utf-16"),
+)
+# How much of the head to look at when there is no mark to go by, and how much
+# of it has to be NUL before UTF-16 is the better guess. Real text has none.
+_SNIFF_BYTES = 4096
+_NUL_SHARE = 0.10
+
+
+def _decoded(raw: bytes) -> str:
+    """The file as text, whichever way Windows happened to write it.
+
+    Raises UnicodeDecodeError like ``read_text`` does, so the caller's existing
+    fallback still runs.
+    """
+    for mark, encoding in _BOMS:
+        if raw.startswith(mark):
+            return raw.decode(encoding)
+    head = raw[:_SNIFF_BYTES]
+    if head.count(0) > len(head) * _NUL_SHARE:
+        # No mark, but full of NULs. Which end the NULs sit on says which way
+        # round it is; guessing wrong here only costs the same failure as now.
+        try:
+            return raw.decode("utf-16-le" if raw[1:2] == b"\x00" else "utf-16-be")
+        except UnicodeDecodeError:
+            pass
+    return raw.decode("utf-8")
+
+
 def _looks_like_a_cloud_error(exc: BaseException) -> bool:
     """Did this read fail because the file was still in the cloud?
 
@@ -80,6 +129,7 @@ def _looks_like_a_cloud_error(exc: BaseException) -> bool:
 
 LANG_BY_EXT = {
     ".sql": "SQL",
+    ".sqlx": "Dataform SQL",
     ".ddl": "SQL",
     ".hql": "Hive SQL",
     # "Python", not "Spark SQL": a .py file here might be a Spark job, a
@@ -137,6 +187,14 @@ class RepoIndex:
     # thing an entire folder of code is missing from every answer with nothing
     # on screen to say so. Counted, and said.
     in_skipped_dirs: list[str] = field(default_factory=list)
+    # Files whose extension is not on the read list, counted by extension. This
+    # is the only place an unlisted file type is recorded at all: the walk had a
+    # bare ``continue`` with no counter, so a repository whose pipeline lives in
+    # .sqlx, .ipynb or .tf files reported `indexed False, risk none, prod []`
+    # with NOTHING anywhere saying a file had been passed over. The point is not
+    # to read them -- it is that the NEXT unlisted extension is visible instead
+    # of silent.
+    unknown_ext: dict = field(default_factory=dict)
     skipped_dir_names: list[str] = field(default_factory=list)
 
     @classmethod
@@ -175,6 +233,9 @@ class RepoIndex:
                         idx.skipped_dir_names.append(hit)
                 continue
             if ext not in cfg.code_extensions:
+                # Counted, not read. See RepoIndex.unknown_ext.
+                if ext:
+                    idx.unknown_ext[ext] = idx.unknown_ext.get(ext, 0) + 1
                 continue
             rel = relative.as_posix()
 
@@ -197,7 +258,7 @@ class RepoIndex:
                         {"file": rel, "reason": f"file is {size // 1024} KB - too large to read"}
                     )
                     continue
-                text = p.read_text(encoding="utf-8")
+                text = _decoded(p.read_bytes())
             except UnicodeDecodeError:
                 try:
                     text = p.read_text(encoding="latin-1")
@@ -215,6 +276,19 @@ class RepoIndex:
                     idx.too_long.append(rel)
                 else:
                     idx.skipped.append({"file": rel, "reason": f"could not open ({exc})"})
+                continue
+            # A NUL that survived decoding. The parser swallows the statement it
+            # sits in and says nothing at all -- measured: couldNotRead 0, no
+            # warning of any kind, risk none. Either this is a mis-decoded file
+            # the sniff above did not catch, or it is not text; both are worth
+            # saying out loud rather than half-reading.
+            if "\x00" in text:
+                idx.skipped.append({
+                    "file": rel,
+                    "reason": "contains NUL bytes - it is not plain text, or it was "
+                              "saved in an encoding Ripple could not work out",
+                    "hint": "Open it and save it as UTF-8. Nothing in it has been read.",
+                })
                 continue
             idx.files.append(
                 SourceFile(path=rel, abs_path=p, text=text, lang=LANG_BY_EXT.get(ext, "Text"))

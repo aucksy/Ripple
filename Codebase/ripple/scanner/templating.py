@@ -60,6 +60,17 @@ _BRACE = re.compile(r"\{(?P<body>[A-Za-z_][A-Za-z0-9_.\[\]'\"]{0,60})\}")
 _DBT = re.compile(r"^\s*(?:ref|source)\s*\(", re.IGNORECASE)
 _QUOTED = re.compile(r"""['"]([A-Za-z_][A-Za-z0-9_]*)['"]""")
 
+# {{ config(materialized='table') }} -- and its siblings. These are instructions
+# to dbt, not values. Every dbt model in the world opens with one, and turning it
+# into a bare identifier puts a word where SQL expects a keyword, so the WHOLE
+# FILE stops parsing: not one table, not one column, nothing. Measured: adding a
+# config header to a readable dbt model took it from a full chain to 100%
+# unreadable. They carry nothing, so they leave nothing behind.
+_DBT_DIRECTIVE = re.compile(
+    r"^\s*(?:config|set|test|macro|endmacro|snapshot|endsnapshot|do|print|log)\s*\(",
+    re.IGNORECASE,
+)
+
 _ANY = (_COMMENT, _TAG, _VAR, _DOLLAR, _BRACE)
 
 
@@ -87,6 +98,8 @@ def describe(text: str) -> str:
 def _identifier(body: str) -> str:
     """A plain SQL identifier standing in for one placeholder."""
     body = body.strip()
+    if _DBT_DIRECTIVE.match(body):
+        return ""                     # {{ config(...) }} -- an instruction, not a name
     if _DBT.match(body):
         names = _QUOTED.findall(body)
         if names:
@@ -129,7 +142,9 @@ def placeholder_names(text: str) -> set[str]:
     out: set[str] = set()
     for pattern in (_VAR, _DOLLAR, _BRACE):
         for m in pattern.finditer(text):
-            out.add(_identifier(m.group("body")).upper())
+            name = _identifier(m.group("body"))
+            if name:
+                out.add(name.upper())
     return out
 
 

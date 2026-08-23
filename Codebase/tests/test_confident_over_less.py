@@ -32,7 +32,13 @@ def build(tmp_path: Path, files: dict, production: str = "_published",
     for name, text in files.items():
         p = tmp_path / name
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text, encoding="utf-8")
+        # Bytes, not text, when the test is about how the file was SAVED -- a
+        # byte-order mark, UTF-16, a stray NUL. Writing those through write_text
+        # would put the very bytes under test back through an encoder.
+        if isinstance(text, bytes):
+            p.write_bytes(text)
+        else:
+            p.write_text(text, encoding="utf-8")
     cfg = Settings()
     cfg.sql_dialect = "bigquery"
     cfg.repo_path = tmp_path
@@ -1100,3 +1106,627 @@ def test_a_struct_of_named_columns_is_not_a_whole_row(tmp_path):
                  "(SELECT STRUCT(other_col AS z) AS p FROM customer_demographics);",
         "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM s1;"})
     assert out["groups"] == []
+
+
+# ── a query with no CREATE in front of it ──────────────────────────────────
+# A dbt model is a bare SELECT. Nothing in the file names the table it builds --
+# dbt does, after the file. Before this, a dbt repository produced ZERO lineage:
+# every chain came back empty, no production table was ever named, and the answer
+# was the calmest, cleanest "no impact" this tool can print. dbt is the commonest
+# way a BigQuery pipeline is written.
+DBT = {
+    "models/staging/stg_customers.sql":
+        "SELECT cust_id, cm13 FROM {{ source('raw', 'customer_demographics') }}",
+    "models/intermediate/int_customers.sql":
+        "SELECT cust_id, cm13 FROM {{ ref('stg_customers') }}",
+    "models/marts/customer_published.sql":
+        "{{ config(materialized='table') }}\n"
+        "SELECT cust_id, cm13, COUNT(*) AS n FROM {{ ref('int_customers') }}\n"
+        "GROUP BY cust_id, cm13",
+}
+
+
+def test_a_dbt_repository_reaches_its_published_table(tmp_path):
+    """The reproduction. Three models, one chain, and a published table at the
+    end of it -- which used to come back as no production table at all."""
+    out = scan(tmp_path, DBT)
+    assert [g["prod"] for g in out["groups"]] == ["customer_published"]
+    assert out["stats"]["productionTables"] == 1
+
+
+def test_a_dbt_config_header_does_not_make_the_file_unreadable(tmp_path):
+    """``{{ config(materialized='table') }}`` is an instruction to dbt, not a
+    value. Turned into a bare identifier it put a word where SQL expects a
+    keyword, so the WHOLE FILE stopped parsing -- measured at 100% unreadable in
+    every spelling tried. Every dbt model in the world opens with one."""
+    out = scan(tmp_path, DBT)
+    assert out["stats"]["couldNotRead"] == 0, out["unreadable"]
+
+
+def test_the_dbt_chain_says_the_table_name_came_from_the_file(tmp_path):
+    """Nobody sent to that line will find the table name written on it. A
+    finding somebody cannot verify is one they dismiss."""
+    out = scan(tmp_path, DBT)
+    named = {t["table"]: t for t in out["namedByFile"]}
+    assert "customer_published" in named
+    assert named["customer_published"]["how"] == "dbt"
+    assert named["customer_published"]["file"] == "models/marts/customer_published.sql"
+
+
+def test_one_query_in_a_plain_sql_file_is_still_followed(tmp_path):
+    """No models/ folder and no dbt call, so this is the weaker evidence -- but
+    something runs the file and puts the rows somewhere, and every tool that
+    works this way names it after the file. Labelled for what it is."""
+    out = scan(tmp_path, {
+        "jobs/mid.sql": "SELECT cust_id, cm13 FROM customer_demographics",
+        "jobs/final_published.sql": "SELECT cust_id, cm13 FROM mid"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert {t["how"] for t in out["namedByFile"]} == {"file"}
+
+
+def test_a_file_holding_two_queries_is_not_named_after_itself(tmp_path):
+    """Two bare SELECTs cannot both be the table the file is named after, and
+    guessing which would merge two unrelated queries into one table."""
+    out = scan(tmp_path, {
+        "jobs/mid.sql": "SELECT cm13 FROM customer_demographics;\n"
+                        "SELECT other_col FROM customer_demographics;",
+        "jobs/final_published.sql": "SELECT cm13 FROM mid"})
+    assert out["groups"] == []
+    assert "mid" not in {t["table"] for t in out["namedByFile"]}
+
+
+def test_export_data_is_not_a_table_named_after_its_file(tmp_path):
+    """EXPORT DATA is rewritten to a bare SELECT on the way into the parser, so
+    by the time the tree exists it is indistinguishable from a dbt model. It
+    delivers a file to somebody outside the warehouse and builds no table;
+    naming its destination after the .sql file would be a table nobody has."""
+    out = scan(tmp_path, {
+        "a.sql": "EXPORT DATA OPTIONS(uri='gs://b/out/*.csv', format='CSV') AS\n"
+                 " SELECT cm13 FROM customer_demographics;"})
+    assert out["groups"] == []
+    assert out["namedByFile"] == []
+    assert out["other"], "the read itself is still reported"
+
+
+# ── a temporary table belongs to one file ──────────────────────────────────
+# A TEMP table is gone when its script finishes, so two files that both build a
+# ``t`` are not sharing a table -- and a static scan can never know two files
+# ran in one session. Temp names in real repositories are t, tmp, stg, base,
+# deduped, so collisions are the norm. Before this, the second file's published
+# table was reported as broken by a change nothing in it had touched, and
+# mergedNames was EMPTY: no warning of any kind.
+TEMP_COLLISION = {
+    "a.sql": "CREATE TEMP TABLE t AS SELECT cm13 AS mkt FROM `p.d.customer_demographics`;\n"
+             "CREATE OR REPLACE TABLE `p.d.report_a_published` AS SELECT mkt FROM t;",
+    "b.sql": "CREATE TEMP TABLE t AS SELECT mkt FROM `p.d.unrelated`;\n"
+             "CREATE OR REPLACE TABLE `p.d.report_b_published` AS SELECT mkt FROM t;",
+}
+
+
+def test_two_files_with_the_same_temp_table_name_are_not_one_chain(tmp_path):
+    out = scan(tmp_path, TEMP_COLLISION)
+    assert [g["prod"] for g in out["groups"]] == ["report_a_published"]
+
+
+def test_the_unrelated_table_is_named_nowhere_on_the_result(tmp_path):
+    """The same merge, one screen further along. "Stops being refreshed" walks
+    onwards from a finding, and it walked from the name shown on SCREEN -- which
+    for a temporary table is the short one that matches every other file's. So
+    fencing the chain off moved the false claim rather than removing it: the
+    unrelated published table left the findings and reappeared under "stops
+    being refreshed", worded as certainly as before."""
+    out = scan(tmp_path, TEMP_COLLISION)
+    everywhere = repr(out)
+    assert "report_b_published" not in everywhere, out["stopsLoading"]
+
+
+def test_a_session_table_is_scoped_the_same_way(tmp_path):
+    """BigQuery's other spelling for the same thing."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE TABLE _SESSION.stg AS SELECT cm13 AS mkt FROM `p.d.customer_demographics`;\n"
+                 "CREATE OR REPLACE TABLE `p.d.report_a_published` AS SELECT mkt FROM _SESSION.stg;",
+        "b.sql": "CREATE TABLE _SESSION.stg AS SELECT mkt FROM `p.d.unrelated`;\n"
+                 "CREATE OR REPLACE TABLE `p.d.report_b_published` AS SELECT mkt FROM _SESSION.stg;"})
+    assert [g["prod"] for g in out["groups"]] == ["report_a_published"]
+
+
+def test_a_temp_table_still_carries_the_chain_inside_its_own_file(tmp_path):
+    """The guard on the change above. Fencing them off must not cut the chain
+    that runs through one, which is what a temp table is for."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE TEMP TABLE t AS SELECT cm13 AS mkt FROM `p.d.customer_demographics`;\n"
+                 "CREATE OR REPLACE TABLE `p.d.report_a_published` AS SELECT mkt FROM t;"})
+    assert [g["prod"] for g in out["groups"]] == ["report_a_published"]
+
+
+def test_the_fence_is_not_shown_as_part_of_the_table_name(tmp_path):
+    """The scope is Ripple's own, not something anybody wrote. A name on screen
+    that is in no file sends somebody looking for a table that does not exist."""
+    out = scan(tmp_path, TEMP_COLLISION)
+    names = [r["inter"] for g in out["groups"] for r in g["rows"]]
+    assert "t" in names, names
+    assert not any("#" in (n or "") for n in names), names
+
+
+def test_a_real_table_sharing_a_name_with_a_temp_one_is_left_alone(tmp_path):
+    """``ds.t`` is a real table that happens to be called t. Fencing it off with
+    the temporary one would cut a genuine chain."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE TEMP TABLE t AS SELECT other_col FROM `p.d.unrelated`;",
+        "b.sql": "CREATE OR REPLACE TABLE `p.d.t` AS SELECT cm13 FROM `p.d.customer_demographics`;",
+        "c.sql": "CREATE OR REPLACE TABLE `p.d.real_published` AS SELECT cm13 FROM `p.d.t`;"})
+    assert [g["prod"] for g in out["groups"]] == ["real_published"]
+
+
+# ── the warehouse describing itself ────────────────────────────────────────
+# INFORMATION_SCHEMA views are called COLUMNS, TABLES, JOBS, VIEWS -- ordinary
+# words, and a warehouse of any size has real tables called some of them. Before
+# this, the metadata view and the real table were treated as one, a published
+# table was reported as fed by a table it never reads, and the warning printed
+# beside it blamed CAPITALISATION -- so the one thing on screen pointing at the
+# problem named the wrong cause.
+METADATA = {
+    "a.sql": "CREATE TABLE `p.base.columns` (table_name STRING, column_name STRING);",
+    "b.sql": "CREATE OR REPLACE TABLE `p.pub.report_published` AS "
+             "SELECT column_name FROM `p.base`.INFORMATION_SCHEMA.COLUMNS;",
+}
+
+
+def test_a_real_table_is_not_merged_with_the_metadata_view_of_that_name(tmp_path):
+    out = scan(tmp_path, METADATA, table="columns", attrs=("column_name",))
+    assert out["groups"] == []
+    assert out["risk"] == "none"
+
+
+def test_no_warning_blames_capitals_for_a_metadata_read(tmp_path):
+    """A warning naming the wrong cause is worse than none: following it does
+    not lead anywhere near what actually happened."""
+    out = scan(tmp_path, METADATA, table="columns", attrs=("column_name",))
+    assert out["mergedNames"] == []
+
+
+def test_the_region_wide_job_history_is_not_a_table_either(tmp_path):
+    """``region-us`` is a whole region's job log addressed as if it were a
+    project. Nothing in it is anybody's data -- and ``jobs`` is a name plenty of
+    warehouses have a real table under."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE TABLE `p.base.jobs` (job_id STRING, cm13 STRING);",
+        "b.sql": "CREATE OR REPLACE TABLE `p.pub.usage_published` AS "
+                 "SELECT job_id FROM `region-us`.INFORMATION_SCHEMA.JOBS;"},
+        table="jobs", attrs=("job_id",))
+    assert out["groups"] == []
+    assert out["mergedNames"] == []
+
+
+def test_a_real_table_called_columns_still_carries_its_own_chain(tmp_path):
+    """The guard on the change above. Only the metadata view is dropped."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE `p.pub.report_published` AS "
+                 "SELECT column_name FROM `p.base.columns`;"},
+        table="columns", attrs=("column_name",))
+    assert [g["prod"] for g in out["groups"]] == ["report_published"]
+
+
+# ── PIVOT and UNPIVOT ──────────────────────────────────────────────────────
+# Both fold a column away and build differently-named ones out of it, and both
+# NAME the column while doing it. Neither was read, and each failed in its own
+# direction.
+UNPIVOTED = {
+    "a.sql": "CREATE OR REPLACE TABLE s1 AS SELECT * FROM customer_demographics\n"
+             "UNPIVOT (val FOR metric IN (cm13, other_col));",
+    "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT val, metric FROM s1;",
+}
+PIVOTED = {
+    "a.sql": "CREATE OR REPLACE TABLE s1 AS "
+             "SELECT * FROM (SELECT k, quarter, cm13 FROM customer_demographics)\n"
+             "PIVOT (SUM(cm13) AS total FOR quarter IN ('Q1', 'Q2'));",
+    "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT k, total_Q1 FROM s1;",
+}
+
+
+def test_an_unpivot_that_names_the_column_is_breaking(tmp_path):
+    """The only case in this suite that hedged DOWNWARDS on a statement that
+    hard-fails. It read as a plain SELECT *, so the answer was risk low,
+    breaking false, and the sentence "Nothing here fails on the day of the
+    change" -- about a statement whose UNPIVOT list stops being valid SQL."""
+    out = scan(tmp_path, UNPIVOTED)
+    rows = [r for g in out["groups"] for r in g["rows"]] + \
+           [r for e in out["reached"] for r in e["rows"]]
+    named = [r for r in rows if r["file"] == "a.sql"]
+    assert named, rows
+    assert named[0]["breaking"] is True
+    assert "Nothing here fails" not in named[0]["impact"]
+
+
+def test_an_unpivot_carries_the_column_on_under_its_new_name(tmp_path):
+    """The values land in ``val`` and the column's own NAME lands in ``metric``.
+    Following neither ended the trail before the published table."""
+    out = scan(tmp_path, UNPIVOTED)
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_an_unpivot_row_says_unpivot_and_not_pivot(tmp_path):
+    """They are opposite operations and the file says which. A row labelled
+    PIVOT beside a line reading UNPIVOT describes a statement that is not
+    there, and the reader doubts the finding rather than the label."""
+    out = scan(tmp_path, UNPIVOTED)
+    rows = [r for g in out["groups"] for r in g["rows"] if r["file"] == "a.sql"]
+    assert rows[0]["logic"] == "Named in UNPIVOT", rows[0]["logic"]
+
+
+def test_a_pivot_output_column_is_derived_so_the_trail_carries_on(tmp_path):
+    """PIVOT builds total_Q1 and total_Q2 from the aggregate's alias and each IN
+    value. Nothing derived them, so the trail was declared finished one hop
+    early -- with the note "Last table in the chain" -- and the published table
+    reading total_Q1 was never named."""
+    out = scan(tmp_path, PIVOTED)
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    rows = [r for g in out["groups"] for r in g["rows"] if r["file"] == "a.sql"]
+    assert rows[0]["alias"] == "total_Q1", rows[0]["alias"]
+    assert rows[0]["breaking"] is True
+
+
+def test_an_unpivoted_column_is_not_also_reported_as_carried_by_a_star(tmp_path):
+    """The star over an UNPIVOT does not carry the folded column: it no longer
+    exists as a column. Letting both speak puts "carried through untouched"
+    beside "named here, and this statement fails without it"."""
+    out = scan(tmp_path, UNPIVOTED)
+    assert out["starTables"] == []
+    assert out["stats"]["inferredFindings"] == 0
+
+
+def test_a_column_the_pivot_never_names_is_still_carried_by_the_star(tmp_path):
+    """The guard on the change above. UNPIVOT folds the columns in its IN list
+    and leaves every other column of the table alone."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE s1 AS SELECT * FROM customer_demographics\n"
+                 "UNPIVOT (val FOR metric IN (other_col, third_col));",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM s1;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert [t["table"] for t in out["starTables"]] == ["s1"]
+
+
+# ── how the file was saved ─────────────────────────────────────────────────
+# A byte-order mark is invisible in every editor and lethal to a SQL parser. It
+# lands on the FIRST statement of the file, which in a pipeline file is the one
+# that names the source table -- so the statement that matters is the one that
+# is lost, and the file still reports as read. Windows writes these by default:
+# Notepad, PowerShell's Out-File, Excel's CSV export, every Office "save as".
+BOM = b"\xef\xbb\xbf"
+FIRST = "CREATE OR REPLACE TABLE stage1 AS SELECT cm13 FROM customer_demographics;"
+SECOND = "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage1;"
+
+
+def test_a_byte_order_mark_does_not_eat_the_first_statement(tmp_path):
+    out = scan(tmp_path, {"a.sql": BOM + FIRST.encode("utf-8"), "b.sql": SECOND})
+    assert out["stats"]["couldNotRead"] == 0, out["unreadable"]
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_a_utf_16_file_is_read_rather_than_half_read(tmp_path):
+    """PowerShell's ``>`` has written UTF-16-LE by default for twenty years.
+    Read as UTF-8 the file comes back with a NUL between every letter."""
+    out = scan(tmp_path, {"a.sql": FIRST.encode("utf-16"), "b.sql": SECOND})
+    assert out["stats"]["couldNotRead"] == 0, out["unreadable"]
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_a_file_full_of_nul_bytes_is_said_out_loud(tmp_path):
+    """The worst of the three. The parser swallowed the statement and said
+    nothing: couldNotRead 0, no warning anywhere, risk none."""
+    out = scan(tmp_path, {"a.sql": FIRST.encode("utf-8") + b"\x00\x00rubbish\x00"})
+    assert out["stats"]["couldNotRead"] == 1, out["unreadable"]
+    assert "NUL" in out["unreadable"][0]["reason"]
+
+
+# ── "No impact" is the one word that must never cover a gap ────────────────
+def test_risk_is_never_none_while_a_file_on_the_subject_could_not_be_read(tmp_path):
+    """EXECUTE IMMEDIATE holds a whole CREATE ... SELECT of the scanned column
+    as text. Ripple can SEE it and cannot parse it -- and printed a green
+    "No impact" over it. "I found nothing" and "I could not look" are not the
+    same answer, however similar they look on screen."""
+    out = scan(tmp_path, {
+        "a.sql": "EXECUTE IMMEDIATE '''CREATE OR REPLACE TABLE final_published AS "
+                 "SELECT cm13 FROM customer_demographics''';"})
+    assert out["stats"]["couldNotRead"] == 1
+    assert out["risk"] == "unknown", out["risk"]
+
+
+def test_a_clean_repository_still_says_no_impact(tmp_path):
+    """The guard on the change above. A badge that says "not sure" on every scan
+    ever run is a badge nobody reads."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE final_published AS SELECT other_col "
+                 "FROM customer_demographics;"})
+    assert out["stats"]["couldNotRead"] == 0
+    assert out["risk"] == "none"
+
+
+# ── the CREATE line, outside the SELECT ────────────────────────────────────
+def test_a_partition_key_is_read(tmp_path):
+    """A table partitioned by the very column being decommissioned returned NO
+    usages at all -- the whole chain came back risk low, groups 0, couldNotRead
+    0. Nothing published loses a column; the table simply stops being built,
+    and everything under it serves data that is no longer refreshed."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE ds.mid PARTITION BY DATE(cm13)\n"
+                 "AS SELECT other_col FROM ds.customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE ds.final_published AS SELECT other_col FROM ds.mid;"})
+    assert out["risk"] != "none"
+    assert [s["prod"] for s in out["stopsLoading"]] == ["final_published"], out["stopsLoading"]
+
+
+def test_a_cluster_key_is_read_too(tmp_path):
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE ds.mid CLUSTER BY cm13\n"
+                 "AS SELECT other_col FROM ds.customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE ds.final_published AS SELECT other_col FROM ds.mid;"})
+    assert [s["prod"] for s in out["stopsLoading"]] == ["final_published"], out["stopsLoading"]
+
+
+def test_a_bare_partition_column_is_read(tmp_path):
+    """``PARTITION BY cm13`` with nothing round it parses as a bare identifier,
+    not a column, so searching for columns finds nothing."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE ds.mid PARTITION BY cm13\n"
+                 "AS SELECT other_col FROM ds.customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE ds.final_published AS SELECT other_col FROM ds.mid;"})
+    assert [s["prod"] for s in out["stopsLoading"]] == ["final_published"], out["stopsLoading"]
+
+
+# ── a column named after a function ────────────────────────────────────────
+PARENLESS = {
+    "a.sql": "CREATE OR REPLACE TABLE stage_k AS SELECT current_date FROM customer_demographics;",
+    "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT current_date FROM stage_k;",
+}
+
+
+def test_a_column_named_after_a_parenless_function_is_followed(tmp_path):
+    """BigQuery lets CURRENT_DATE be written with no brackets, so a column of
+    that name parses as a call and is invisible: risk none, found 0,
+    nameInTables 0. Backticked, the very same scan reaches production."""
+    out = scan(tmp_path, PARENLESS, attrs=("current_date",))
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_that_column_is_never_asserted_because_it_could_be_the_function(tmp_path):
+    """Both readings are valid BigQuery and both are written the same way. So
+    both are followed, and the row says the table is a guess."""
+    out = scan(tmp_path, PARENLESS, attrs=("current_date",))
+    rows = [r for g in out["groups"] for r in g["rows"]]
+    assert rows and all(r["certain"] is False for r in rows), rows
+
+
+def test_an_ordinary_use_of_the_function_is_left_alone(tmp_path):
+    """The guard. ``WHERE dt = current_date`` is in a great many files, and a
+    scan of an unrelated column must not be dragged into doubt by it."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 "
+                 "FROM customer_demographics WHERE dt = current_date;"})
+    rows = [r for g in out["groups"] for r in g["rows"]]
+    assert rows and all(r["certain"] is True for r in rows), rows
+
+
+# ── a hole where the column list goes ──────────────────────────────────────
+def test_a_placeholder_in_the_select_list_is_not_a_column(tmp_path):
+    """A great many Airflow DAGs build SQL as f"SELECT {cols} FROM ...". Ripple
+    read it as a column called ``cols``, believed the published table had
+    exactly that one, and answered risk none, unreadable 0, couldNotRead 0 -- a
+    clean, confident, complete zero."""
+    out = scan(tmp_path, {
+        "job.py": 'cols = "cm13, cm14"\n'
+                  'sql = f"""CREATE OR REPLACE TABLE ds.final_published AS '
+                  'SELECT {cols} FROM ds.customer_demographics"""\n'})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_that_placeholder_is_not_described_as_a_select_star(tmp_path):
+    """It carries columns nobody can see and names none of them, which is what
+    a star does -- but the file does not say SELECT *, and a row that claims it
+    does sends somebody to a line where no such statement is written."""
+    out = scan(tmp_path, {
+        "job.py": 'cols = "cm13, cm14"\n'
+                  'sql = f"""CREATE OR REPLACE TABLE ds.final_published AS '
+                  'SELECT {cols} FROM ds.customer_demographics"""\n'})
+    star = out["starTables"]
+    assert len(star) == 1 and star[0]["filledIn"], star
+    rows = [r for g in out["groups"] for r in g["rows"]]
+    assert all("SELECT *" not in r["logic"] for r in rows), [r["logic"] for r in rows]
+
+
+# ── a SELECT written as a value, not as a source of rows ───────────────────
+def test_an_alias_inside_a_scalar_subquery_is_not_the_output_name(tmp_path):
+    """``c_alias`` exists only inside the brackets and is on no table anywhere.
+    The real output name is peak_cm, which is what the next table reads -- so
+    the chain went cold one hop early and reported no production impact."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE s1 AS\n"
+                 "SELECT o.k, (SELECT MAX(d.cm13) AS c_alias FROM customer_demographics d "
+                 "WHERE d.k = o.k) AS peak_cm\nFROM other_source o;",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT k, peak_cm FROM s1;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+def test_an_alias_inside_an_in_subquery_does_not_invent_a_column(tmp_path):
+    """The mirror of the same bug, over-reporting instead of under-reporting: a
+    name written inside WHERE ... IN (SELECT cm13 AS c_alias ...) was published
+    as a column of the table being built."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE s1 AS SELECT k FROM other_source\n"
+                 "WHERE k IN (SELECT cm13 AS c_alias FROM customer_demographics);",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT c_alias FROM s1;"})
+    assert out["groups"] == [], "c_alias is not a column of s1"
+
+
+def test_a_rename_inside_a_from_subquery_still_survives(tmp_path):
+    """The guard. A subquery in FROM really does hand its columns to the query
+    around it, and its renames really do reach the table being built."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE s1 AS SELECT mc FROM "
+                 "(SELECT cm13 AS mc FROM customer_demographics);",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT mc FROM s1;"})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+
+
+# ── a folder Ripple is told to skip ────────────────────────────────────────
+def test_code_in_a_skipped_folder_is_named_beside_the_answer(tmp_path):
+    """``target/`` is dbt's compiled output -- the SQL that actually runs. The
+    count reached the repository screen and nothing else, so the scan came back
+    clean with the reason on a screen nobody was looking at."""
+    out = scan(tmp_path, {
+        "target/compiled/a.sql": "CREATE OR REPLACE TABLE final_published AS "
+                                 "SELECT cm13 FROM customer_demographics;"})
+    assert out["skippedInFolders"] == ["target/compiled/a.sql"]
+    assert "target" in out["skippedFolderNames"]
+
+
+# ── SELECT * REPLACE names the column ──────────────────────────────────────
+REPLACED = {
+    "a.sql": "CREATE OR REPLACE TABLE stage_r AS "
+             "SELECT * REPLACE(legacy_code AS cm13) FROM customer_demographics;",
+    "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_r;",
+}
+
+
+def test_a_replaced_column_breaks_the_statement_that_names_it(tmp_path):
+    """Ripple got the right answer for the wrong reason: the rename was
+    followed, but nothing said the name is written down here, so the row read
+    breaking false about a statement that stops compiling."""
+    out = scan(tmp_path, REPLACED)
+    rows = [r for e in out["reached"] for r in e["rows"] if r["file"] == "a.sql"]
+    assert rows and rows[0]["breaking"] is True, rows
+    assert "REPLACE" in rows[0]["logic"], rows[0]["logic"]
+
+
+def test_a_replaced_column_stops_carrying_its_own_values_onward(tmp_path):
+    """The output column of that name holds the replacement's value from here
+    on. The original column reaches nothing past this statement -- but the
+    table it builds does stop being refreshed."""
+    out = scan(tmp_path, REPLACED)
+    assert out["groups"] == []
+    assert [s["prod"] for s in out["stopsLoading"]] == ["final_published"]
+    assert out["starTables"] == [], "it is not carried by the star either"
+
+
+# ── the line under the wildcard ────────────────────────────────────────────
+SUFFIXED = {
+    "a.sql": "CREATE OR REPLACE TABLE g_published AS SELECT cm13 FROM "
+             "`p.ds.customer_demographics_*` WHERE _TABLE_SUFFIX = '20260101';",
+}
+
+
+def test_a_shard_the_query_never_reads_is_not_reported(tmp_path):
+    """A shard from 1999 against a query pinned to one day in 2026 came back
+    risk medium, breaking true, CERTAIN true -- with the predicate that
+    contradicts it printed in the snippet underneath."""
+    out = scan(tmp_path, SUFFIXED, table="customer_demographics_19991231")
+    assert out["groups"] == []
+
+
+def test_the_shard_the_query_does_read_is_still_reported(tmp_path):
+    """The guard on the change above."""
+    out = scan(tmp_path, SUFFIXED, table="customer_demographics_20260101")
+    assert [g["prod"] for g in out["groups"]] == ["g_published"]
+
+
+def test_a_range_of_shards_is_read_as_a_range(tmp_path):
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE g_published AS SELECT cm13 FROM "
+                 "`p.ds.customer_demographics_*` WHERE _TABLE_SUFFIX BETWEEN "
+                 "'20260101' AND '20260131';"}, table="customer_demographics_20260115")
+    assert [g["prod"] for g in out["groups"]] == ["g_published"]
+
+
+def test_a_suffix_filter_ripple_cannot_evaluate_hedges_rather_than_drops(tmp_path):
+    """A parameter is not something a static reader can work out. Dropping the
+    finding on a guess would trade an over-confident answer for a missing one."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE g_published AS SELECT cm13 FROM "
+                 "`p.ds.customer_demographics_*` WHERE _TABLE_SUFFIX = @run_date;"},
+        table="customer_demographics_19991231")
+    rows = [r for g in out["groups"] for r in g["rows"]]
+    assert rows and all(r["certain"] is False for r in rows), rows
+
+
+def test_asking_about_the_family_itself_is_never_narrowed(tmp_path):
+    """Somebody who typed the asterisk is asking about every shard, so no one
+    suffix can be tested against the predicate."""
+    out = scan(tmp_path, SUFFIXED, table="customer_demographics_*")
+    assert [g["prod"] for g in out["groups"]] == ["g_published"]
+
+
+# ── one table, two files that build it ─────────────────────────────────────
+def test_a_table_built_in_two_files_is_said_out_loud(tmp_path):
+    """The only finding reported came from a stale copy under archive/,
+    presented with breaking true and certain true and the same wording as any
+    live finding, while the live definition sat under "mentions only"."""
+    out = scan(tmp_path, {
+        "live/a.sql": "CREATE OR REPLACE TABLE ds.final_published AS "
+                      "SELECT id FROM ds.customer_demographics;",
+        "archive/old.sql": "CREATE OR REPLACE TABLE ds.final_published AS "
+                           "SELECT cm13 FROM ds.customer_demographics;"})
+    forked = out["twoDefinitions"]
+    assert len(forked) == 1, forked
+    assert forked[0]["table"] == "final_published"
+    assert forked[0]["files"] == ["archive/old.sql", "live/a.sql"]
+
+
+def test_one_table_built_in_one_file_says_nothing(tmp_path):
+    """The guard. A warning printed on every scan is one nobody reads."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE ds.final_published AS "
+                 "SELECT cm13 FROM ds.customer_demographics;"})
+    assert out["twoDefinitions"] == []
+
+
+def test_a_table_loaded_by_several_inserts_is_not_a_fork(tmp_path):
+    """Several files adding rows to one table is ordinary. Only a CREATE that
+    replaces the whole thing makes two definitions of it."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE ds.final_published AS "
+                 "SELECT cm13 FROM ds.customer_demographics;",
+        "b.sql": "INSERT INTO ds.final_published (cm13) "
+                 "SELECT cm13 FROM ds.customer_demographics;"})
+    assert out["twoDefinitions"] == []
+
+
+# ── Dataform ───────────────────────────────────────────────────────────────
+# Google's own tool for building BigQuery pipelines, and the likeliest thing in
+# a BigQuery repository after dbt. A .sqlx file is an ordinary SELECT with a
+# JavaScript ``config { }`` block on top. It was not opened, not counted and not
+# mentioned: indexed False, risk none, prod [], with nothing anywhere recording
+# that the file existed.
+DATAFORM = {
+    "definitions/mid.sqlx": 'config { type: "table" }\n\n'
+                            'SELECT cm13 FROM ${ref("customer_demographics")}',
+    "definitions/final_published.sqlx": 'config { type: "table" }\n\n'
+                                        'SELECT cm13 FROM ${ref("mid")}',
+}
+
+
+def test_a_dataform_repository_reaches_its_published_table(tmp_path):
+    out = scan(tmp_path, DATAFORM)
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert out["stats"]["couldNotRead"] == 0, out["unreadable"]
+
+
+def test_a_dataform_model_says_where_its_name_came_from(tmp_path):
+    out = scan(tmp_path, DATAFORM)
+    assert {t["how"] for t in out["namedByFile"]} == {"Dataform"}
+
+
+def test_dataform_pre_operations_are_read_as_the_sql_they_are(tmp_path):
+    """config { } and js { } carry no lineage. pre_operations { } holds real
+    SQL that runs before the model builds, so its brackets go and its contents
+    stay."""
+    _, _, parsed = build(tmp_path, {
+        "definitions/mid.sqlx":
+            'config { type: "incremental" }\n'
+            'pre_operations {\n'
+            '  DELETE FROM `p.d.staging_published` WHERE cm13 IS NULL\n'
+            '}\n'
+            'SELECT other_col FROM ${ref("customer_demographics")}'})
+    targets = {s.target for s in parsed.statements}
+    assert "d.staging_published" in targets, targets
+    assert "mid" in targets, "the model itself is still named after its file"
+    assert parsed.unreadable == [], parsed.unreadable

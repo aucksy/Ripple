@@ -201,14 +201,84 @@ def _rewrite_load_data(text: str) -> str:
         text = text[:m.start()] + replacement + _keep_lines(chunk) + text[end:]
 
 
+# ── Dataform ───────────────────────────────────────────────────────────────
+# A .sqlx file is Google's own way of writing a BigQuery pipeline: an ordinary
+# SELECT with a block on top that is JavaScript, not SQL.
+#
+#     config { type: "table", schema: "reporting" }
+#     js { const x = 1 }
+#     pre_operations { DELETE FROM ... }
+#
+#     SELECT cm13 FROM ${ref("customer_demographics")}
+#
+# The parser refuses the whole file on the first line, so nothing at all is
+# learned from it. The blocks carry no lineage -- the config names a schema, and
+# the SELECT under it is the thing that builds the table -- so they are dropped
+# on the way in, keeping every line where it was.
+#
+# ``pre_operations`` and ``post_operations`` DO hold real SQL, so their brackets
+# are dropped and their contents kept, as one more statement in the file.
+_DATAFORM_BLOCK = re.compile(r"^[ \t]*(config|js)\s*\{", re.IGNORECASE | re.MULTILINE)
+_DATAFORM_OPS = re.compile(r"^[ \t]*(pre_operations|post_operations)\s*\{",
+                           re.IGNORECASE | re.MULTILINE)
+
+
+def _balanced_braces(text: str, open_at: int) -> int:
+    """The index just past the ``}`` closing the ``{`` at ``open_at``, or -1."""
+    depth = 0
+    quote = ""
+    i = open_at
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"`":
+            quote = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return -1
+
+
+def _strip_dataform(text: str) -> str:
+    """Drop the JavaScript blocks a Dataform file opens with."""
+    for pattern, keep_inside in ((_DATAFORM_BLOCK, False), (_DATAFORM_OPS, True)):
+        while True:
+            m = pattern.search(text)
+            if m is None:
+                break
+            brace = text.find("{", m.start())
+            end = _balanced_braces(text, brace) if brace >= 0 else -1
+            if end < 0:
+                break
+            if keep_inside:
+                # Real SQL, run before or after the model builds. Keep it, as
+                # one more statement in the file.
+                head = _keep_lines(text[m.start():brace])
+                text = text[:m.start()] + head + text[brace + 1:end - 1] + ";" + text[end:]
+            else:
+                text = text[:m.start()] + _keep_lines(text[m.start():end]) + text[end:]
+    return text
+
+
 def needed(text: str) -> bool:
-    return bool(_WORTH_LOOKING.search(text))
+    return bool(_WORTH_LOOKING.search(text) or _DATAFORM_BLOCK.search(text)
+                or _DATAFORM_OPS.search(text))
 
 
 def rewrite(text: str) -> str:
     """The same SQL, in a shape the parser will read. Line numbers do not move."""
     if not needed(text):
         return text
+    text = _strip_dataform(text)
     out = _SNAPSHOT.sub(lambda m: "CREATE TABLE", text)
     out = _REPLICA.sub(
         lambda m: (f"CREATE TABLE {m.group('t')} COPY {m.group('s')}"

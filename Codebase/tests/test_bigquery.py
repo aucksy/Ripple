@@ -120,7 +120,10 @@ def test_without_the_dialect_bigquery_sql_does_not_parse(repo):
     _, _, parsed, cat, out = scan(repo, "")
     assert len(parsed.unreadable) >= 3, "generic SQL should visibly fail on BigQuery"
     assert not cat.tables, "nothing should be learned from unparsed files"
-    assert out["risk"] == "none"
+    # It used to say "No impact" here, in green, with three unreadable files
+    # underneath it and nothing at all learned from the repository. That is the
+    # one answer this tool sells, printed over a scan that read nothing.
+    assert out["risk"] == "unknown", "a green No impact over files it could not read"
 
 
 def test_with_the_dialect_every_file_is_read(repo):

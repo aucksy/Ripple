@@ -301,3 +301,27 @@ def test_the_offline_screen_shows_the_build_card():
     offline_js = Path(__file__).resolve().parent.parent / "web" / "offline.js"
     source = offline_js.read_text(encoding="utf-8")
     assert "buildCard(h)" in source, "the offline settings screen must show the build stamp"
+
+
+def test_the_repository_block_carries_everything_the_screen_reads(client):
+    """This build has its own /api/health, and the SCREEN it feeds is the very
+    same app.js the online build uses. So a key added to one health block and
+    not the other does not fail anywhere -- the offline copy just silently shows
+    nothing where the online one shows a number. That is how the file-types-not-
+    opened tally shipped online and was blank here.
+
+    Compared against the online block itself rather than against a list written
+    out by hand, because a list written out by hand goes stale the same way.
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "Codebase"))
+    import inspect
+    import re as _re
+    from ripple import api as online
+
+    source = inspect.getsource(online.health)
+    block = source.split('"repo": {', 1)[1]
+    online_keys = set(_re.findall(r'^\s{12}"([A-Za-z]+)":', block, _re.MULTILINE))
+    here = set(client.get("/api/health").json()["repo"])
+    missing = online_keys - here
+    assert not missing, f"the offline repository block is missing {sorted(missing)}"
