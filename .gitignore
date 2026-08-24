@@ -19,3 +19,9 @@ Codebase/ripple.db
 # Photographs taken on a phone, of a template from work. Same reason as Docs/:
 # this repository is public, and what is in the pictures is not.
 PPT/
+
+# A whole working copy of Ripple, rebuilt from the repair kit to try something
+# out. It carries its own vendored sqlglot and a packaged build, which is
+# tens of megabytes of files this repository already holds the source of.
+# Kept on disk, kept out of git. See "never commit a build artefact".
+RIPPLE COPILOT DEMO/
