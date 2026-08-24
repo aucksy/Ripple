@@ -699,7 +699,9 @@ def trace(
                 where somebody decides whether to worry reports a setting as a
                 fact about their warehouse.
                 """
-                if hop >= cfg.max_hops:
+                # Zero means "until the code runs out" -- see Settings.max_hops.
+                # The `seen` set below is what actually guarantees this ends.
+                if cfg.max_hops and hop >= cfg.max_hops:
                     entry = cut_seen.setdefault(
                         (cur_table.upper(), cur_col.upper()),
                         {"table": show(cur_table), "attr": cur_col, "hop": hop, "roots": []},
@@ -1275,7 +1277,11 @@ def _stops_loading(parsed: ParsedRepo, cfg: Settings, broken: dict[str, str],
     seen = set(broken)
     frontier = [(table, [show(table)]) for table in broken.values()]
     capped = False
-    for _ in range(max(1, cfg.max_hops)):
+    # Zero means "until the code runs out". `seen` grows every round and is
+    # never cleared, so this walk ends when the frontier does -- or at
+    # MAX_DOWNSTREAM below, which IS reported.
+    rounds = cfg.max_hops if cfg.max_hops else len(parsed.statements) + 1
+    for _ in range(max(1, rounds)):
         if not frontier:
             break
         nxt: list[tuple[str, list[str]]] = []

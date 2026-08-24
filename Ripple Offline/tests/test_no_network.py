@@ -85,7 +85,7 @@ def test_localhost_by_name_still_works(blocked):
 
 # ── the whole flow, with the network blocked ───────────────────────────────
 def test_the_whole_flow_runs_with_nothing_reaching_out(blocked, clean_home):
-    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4}))
+    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4, "prodTables": "_PROD"}))
     reindex()
     client = TestClient(app)
 
@@ -130,7 +130,7 @@ def test_the_real_server_serves_over_loopback_with_the_guard_on(blocked, clean_h
     is what the built program does."""
     import uvicorn
 
-    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4}))
+    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4, "prodTables": "_PROD"}))
     reindex()
 
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

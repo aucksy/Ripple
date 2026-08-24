@@ -138,10 +138,26 @@ class Settings:
     #
     # A limit that is too low does not fail loudly. It reports "the chain ends
     # here and does not reach production", which is a sentence about this
-    # number wearing the clothes of a sentence about the warehouse. A trail
-    # stopped by this limit is now reported as stopped, and can be followed
-    # further from the result screen.
-    max_hops: int = field(default_factory=lambda: int(_env("RIPPLE_MAX_HOPS", "10")))
+    # number wearing the clothes of a sentence about the warehouse.
+    #
+    # ZERO means follow the trail until the CODE runs out, and that is now the
+    # default. Ten was still a wall, just a further-off one, and the screen's
+    # offer to follow twice as far did not get past it either: measured on a
+    # 36-hop chain, ten renames cut the trail short, twenty cut it short, and
+    # twenty-five -- the deepest the screen would offer -- cut it short as well.
+    # There was no number a person could choose that produced an answer, and
+    # every attempt cost another whole scan to be told the same thing.
+    #
+    # This is safe because the walk already carries a set of every
+    # (table, column) it has been through, so a ring of tables closes on itself
+    # whatever this is set to. The counter was a second guard that could only
+    # ever truncate a real answer. Measured on a real BigQuery warehouse of
+    # 7,304 files: following to the end costs 10.6s against 10.5s at ten hops,
+    # for the same tables plus the ones that were past the limit.
+    #
+    # A limit somebody sets on purpose is still obeyed, and a trail stopped by
+    # it is still reported as stopped rather than as a chain that ended.
+    max_hops: int = field(default_factory=lambda: int(_env("RIPPLE_MAX_HOPS", "0")))
 
     # Which tables count as the ones this team publishes. See the note at the
     # top of this file for why this is a setting and not a constant.
@@ -151,12 +167,16 @@ class Settings:
     # pattern. ``production_text`` is what was actually pasted, kept exactly as
     # it arrived so the box can be opened and edited again rather than being
     # handed back a tidied-up version of somebody's list.
+    #
+    # There is no default any more, and that is deliberate. Whoever deploys a
+    # hosted copy can still set RIPPLE_PROD_TABLES; on a copy where nobody has,
+    # this is empty, and empty means NOT GIVEN rather than "nothing is
+    # published". See set_production and has_production.
     production_patterns: tuple[str, ...] = field(
         default_factory=lambda: parse_production_rule(_env("RIPPLE_PROD_TABLES", ""))
-        or DEFAULT_PRODUCTION
     )
     production_text: str = field(
-        default_factory=lambda: _env("RIPPLE_PROD_TABLES", "") or DEFAULT_PRODUCTION_TEXT
+        default_factory=lambda: _env("RIPPLE_PROD_TABLES", "")
     )
 
     # File types worth reading at all.
@@ -249,20 +269,34 @@ class Settings:
     def set_production(self, text: str) -> ProductionRule:
         """Take a pasted list, in whatever shape it arrived. Returns what was read.
 
-        An empty box would mean "no table is ever production", which reports
-        every repository as clean whatever it does. Falling back to the shipped
-        default is the only safe reading of one.
+        An empty box stays empty. It used to fall back to the shipped default --
+        _PROD, _PRD, _PUBLISHED -- and that is the most expensive thing this
+        tool ever did: on a warehouse that names its published tables anything
+        else, the default matches NOTHING, and matching nothing does not read as
+        "I do not know which tables are yours". It reads as "no production table
+        is affected", in green, over a change that breaks all of them.
+
+        Empty now means NOT GIVEN, which is a different thing from "nothing is
+        published" and is treated as one everywhere: see has_production, which
+        every entry point checks before it will scan.
         """
         rule = parse_production_text(text or "")
-        if rule.is_empty():
-            rule = parse_production_text(DEFAULT_PRODUCTION_TEXT)
-            self.production_text = DEFAULT_PRODUCTION_TEXT
-        else:
-            self.production_text = str(text or "")
+        self.production_text = "" if rule.is_empty() else str(text or "")
         self.production_patterns = tuple(e.given for e in rule.entries)
         object.__setattr__(self, "_production_cache",
                            (self.production_patterns, rule))
         return rule
+
+    def has_production(self) -> bool:
+        """Has anybody said which tables this team publishes?
+
+        The one setting Ripple cannot work out for itself, and the one that
+        decides whether the answer says "production impact" at all. Nothing may
+        be scanned until it has been given -- an answer computed against a list
+        nobody chose is worth less than no answer, because it looks the same as
+        a real one.
+        """
+        return bool(self.production_patterns)
 
     def is_production_table(self, table: str) -> bool:
         return self.production().matches(table)

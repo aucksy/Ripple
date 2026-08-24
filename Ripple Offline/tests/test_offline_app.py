@@ -14,7 +14,7 @@ from ripple_offline.app import app, reindex
 
 @pytest.fixture(scope="module")
 def client():
-    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4}))
+    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4, "prodTables": "_PROD"}))
     reindex()
     return TestClient(app)
 
@@ -25,7 +25,7 @@ def unconfigured(clean_home):
     reindex()
     with TestClient(app) as c:
         yield c
-    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4}))
+    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4, "prodTables": "_PROD"}))
     reindex()
 
 
@@ -72,18 +72,28 @@ def test_ripple_never_scans_its_own_program_folder(unconfigured):
     assert h["repo"]["path"] == ""
 
 
-def test_a_scan_before_a_folder_is_chosen_finds_nothing_rather_than_lying(unconfigured):
-    out = unconfigured.post("/api/scan", json={
+def test_a_scan_before_ripple_is_set_up_is_refused_rather_than_answered(unconfigured):
+    """Nothing has been chosen: no folder, and no list of published tables. An
+    answer computed from that is worth less than no answer, because "no
+    production table is affected" over an empty setup looks exactly like the
+    same words over a real scan. So it is refused, and the refusal says what to
+    go and do."""
+    r = unconfigured.post("/api/scan", json={
         "upstream": [{"table": "customer_demographics", "attrs": ["market_code"]}],
-        "changeKind": "value_change"}).json()
-    assert out["risk"] == "none" and out["groups"] == []
+        "changeKind": "value_change"})
+    assert r.status_code == 400, r.json()
+    assert "published" in r.json()["detail"].lower()
 
 
 # ── choosing the folder and the dialect ────────────────────────────────────
 def test_saving_a_folder_reads_it(clean_home):
     with TestClient(app) as c:
+        # The published-table list goes in with the folder. Without it Ripple is
+        # not set up: it can read every file and still not know what any of it
+        # means for anybody. See prefs.configured.
         h = c.post("/api/settings", json={"repoPath": str(MOCKREPO),
-                                          "sqlDialect": "bigquery", "maxHops": 4}).json()
+                                          "sqlDialect": "bigquery", "maxHops": 4,
+                                          "prodTables": "_PROD"}).json()
         assert h["configured"] is True
         assert h["repo"]["files"] > 15
         assert h["sqlDialect"] == "bigquery"
@@ -168,7 +178,7 @@ def test_the_dialect_really_changes_what_is_read(clean_home, tmp_path):
         assert generic["repo"]["statements"] == 0 and generic["repo"]["unreadable"] == 1
     finally:
         prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery",
-                                "maxHops": 4}))
+                                "maxHops": 4, "prodTables": "_PROD"}))
         reindex()
 
 
@@ -325,3 +335,19 @@ def test_the_repository_block_carries_everything_the_screen_reads(client):
     here = set(client.get("/api/health").json()["repo"])
     missing = online_keys - here
     assert not missing, f"the offline repository block is missing {sorted(missing)}"
+
+
+def test_the_answer_given_while_still_reading_is_a_whole_one(clean_home):
+    """One app.js paints both builds. The screen reads this payload before the
+    repository has been read, and a key missing from it is a blank on screen and
+    nothing at all in a test."""
+    from ripple_offline import prefs                              # noqa: PLC0415
+    from ripple_offline.app import _health, _still_reading        # noqa: PLC0415
+
+    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery",
+                            "maxHops": 4, "prodTables": "_PROD"}))
+    values = prefs.load()
+    whole = set(_health())
+    partial = set(_still_reading(values, prefs.folder_state(values["repoPath"])))
+    missing = sorted(whole - partial)
+    assert not missing, f"the still-reading answer never names: {missing}"

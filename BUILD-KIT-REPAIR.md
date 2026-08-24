@@ -222,6 +222,19 @@ rows and ordinary prose mixed in - and has to say what it ignored and why.
 
 Never make this quietly accept something it does not understand. A line it cannot
 read must be reported, not dropped.
+
+There is NO DEFAULT LIST, and there must never be one again. It used to ship with
+_PROD, _PRD, _PUBLISHED - and on a warehouse naming its published tables any other
+way, that matched nothing. Matching nothing does not read as "I do not know which
+tables are yours". It reads as "no production table is affected", in green, over a
+change that breaks all of them.
+
+So an empty list means NOT GIVEN, which is a different state from "nothing is
+published":
+* has_production() is the one question every entry point asks.
+* The scan route refuses, with a message naming what to go and do.
+* The screen blocks the scan button and says why on the same screen.
+* Offline, "configured" means a folder AND a list, never just a folder.
 ````
 **Check it worked:** `python -m pytest tests/test_production.py -q`
 
@@ -364,6 +377,16 @@ Rules that hold this file together:
   production impact. Which branch somebody happened to type first then decides
   whether a real break is found. Only line them up when the branch has the same
   number of items as there are output names and no star is in the way.
+* The hop limit is ZERO by default and zero means "follow until the code runs
+  out". Do not put a number back. Any number reports itself as the end of the
+  warehouse - "the chain ends here and does not reach production" is a sentence
+  about a setting dressed as a sentence about somebody's data. The walk carries
+  a set of every (table, column) it has been through, so a ring of tables closes
+  on itself without any counter at all. Measured: following to the end costs
+  10.6 seconds against 10.5 at ten hops on a 7,304-file warehouse.
+* Zero is a REAL request. Test it with "is not None", never for truthiness. Read
+  as falsy, the button asking to follow a trail to the end sends nothing, the
+  saved limit is used anyway, and the same cut-short answer comes back.
 * A loose name match is right for FOLLOWING a chain and catastrophic for RULING
   ONE OUT.
 * When the SQL does not say which of two tables a column came from, keep the usage
@@ -500,6 +523,22 @@ before you change this one.
 
 Do not move any thinking into this file. If a route needs a decision made, that
 decision belongs in the file that owns it.
+
+The health route does NOT read the repository. Reading takes minutes, and health
+is the request the screen makes before it can paint anything - measured on 7,304
+files, 101 seconds of blank window with no way for the screen to ask what was
+happening, because the only request that would tell it was the one it was waiting
+on. So the read runs on a thread, health answers at once with indexing:true and
+the counted progress, and the screen waits there.
+
+Three things about that you must not take away:
+* The still-reading answer is the SAME SHAPE as the finished one, counts at zero.
+  One screen file paints both builds, and a key left out is a blank on screen that
+  no test would ever see. There is a test comparing the two sets of keys.
+* One reader at a time, behind a lock. Two threads reading the same repository
+  would do all of it twice and then disagree about which answer to keep.
+* Keep the read error and show it. A read that failed and a read that never
+  finished look identical from the screen, and one of them needs somebody to act.
 ````
 **Check it worked:** start Ripple and click through the screen that uses the route.
 On the locked-down build there is also `python -m pytest tests/test_api.py -q`.

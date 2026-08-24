@@ -258,7 +258,8 @@ def test_no_count_and_no_warning_was_moved_behind_the_information_button():
         ("Where Ripple could not see through", "the coverage card"),
         ("Every attribute you asked about", "the per-attribute panel"),
         ("Nothing is scanned until you confirm", "confirm before scanning"),
-        ("Nobody has said which tables you publish", "the published-table warning"),
+        ("Ripple needs to know which tables you publish", "the published-table gate"),
+        ("Nothing can be scanned until this list is set", "the same gate on settings"),
         ("What Ripple did read on", "the columns Ripple did see"),
         # the stat cards
         ("'Production tables at risk'", "the production-tables stat"),
@@ -288,3 +289,20 @@ def test_the_information_button_survives_into_the_offline_build():
     # It must not sit inside an online-only block, which the offline build deletes.
     assert before.count("//<online-only>") == before.count("//</online-only>"), \
         "the information button is inside an online-only block, so the offline build has none"
+
+
+def test_the_scan_button_state_is_decided_in_exactly_one_place():
+    """It was set twice in the same function, and the second assignment quietly
+    undid the first -- so the published-table gate showed its own label on a
+    button that was still pressable. Measured on the rendered screen: the text
+    said "Add your published tables first" and disabled came back false.
+
+    A control whose state is written twice is a control nobody can reason about
+    by reading the code, which is how the second one got there."""
+    js = (Path(__file__).resolve().parent.parent / "web" / "app.js").read_text(encoding="utf-8")
+    sets = js.count("x(root, 'next').disabled")
+    assert sets == 1, f"the scan button's state is assigned {sets} times, not once"
+    where = js.index("x(root, 'next').disabled")
+    line = js[where:js.index("\n", where)]
+    assert "productionSet" in line, line
+    assert "repoOk" in line, line

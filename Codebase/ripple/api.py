@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,81 @@ _state: dict[str, Any] = {
     # list is gone when this server restarts.
     "prodEntered": False,
 }
+
+
+# The thread doing the first read, and the lock that stops two starting. See
+# health() for why this exists at all.
+_reading_lock = threading.Lock()
+_reading: dict[str, Any] = {"thread": None, "error": ""}
+
+
+def _start_reading() -> None:
+    """Begin reading the repository on a thread, unless one is already at it."""
+    with _reading_lock:
+        alive = _reading["thread"]
+        if alive is not None and alive.is_alive():
+            return
+
+        def work() -> None:
+            try:
+                _reading["error"] = ""
+                repo_state()
+            except Exception as exc:                       # noqa: BLE001
+                # Kept and shown rather than swallowed. A read that failed and a
+                # read that never finished look identical from the screen, and
+                # one of them needs somebody to go and do something.
+                _reading["error"] = str(exc)
+            finally:
+                progress.finish()
+
+        t = threading.Thread(target=work, name="ripple-read", daemon=True)
+        _reading["thread"] = t
+        t.start()
+
+
+def _still_reading() -> dict:
+    """The health answer while the repository is being read for the first time.
+
+    Deliberately the same shape as the real one, with the counts at zero and
+    ``indexing`` true. A screen given half a payload has to guess at the rest,
+    and every guess it makes is a number on screen that nothing counted.
+    """
+    return {
+        "ok": True,
+        "indexing": True,
+        "readError": _reading["error"],
+        "progress": progress.snapshot(),
+        "build": build_info(),
+        "source": _state["source"],
+        "github": None,
+        "tokenSet": bool(_active_token()),
+        "tokenFrom": _token_origin(),
+        "connectError": _state["error"],
+        "error": _state["error"],
+        "serverless": settings.serverless,
+        "limits": {
+            "maxUploadBytes": settings.max_upload_bytes,
+            "maxRepoBytes": settings.max_repo_bytes,
+            "historyKept": not settings.serverless,
+        },
+        "repo": {
+            "label": settings.repo_label,
+            "path": str(settings.repo_path),
+            "branch": settings.repo_branch,
+            "files": 0, "statements": 0, "unreadable": 0, "kinds": [],
+            "heldOnline": 0, "pathTooLong": 0, "inSkippedDirs": 0,
+            "skippedDirNames": [], "unknownExt": [],
+            "exists": settings.repo_path.exists(),
+        },
+        "catalog": {"tables": 0, "columns": 0},
+        "sqlDialect": settings.sql_dialect or "generic",
+        "maxHops": settings.max_hops,
+        "production": settings.production_rule(),
+        "productionRule": settings.production().to_dict(),
+        "productionFrom": _production_origin(),
+        "productionSet": settings.has_production(),
+        "ai": _ai_facts(),
+    }
 
 
 def _active_token() -> str:
@@ -133,6 +209,18 @@ def repo_state() -> tuple[RepoIndex, ParsedRepo, Catalog]:
     local folder and remembers why, so the screen can say so rather than the
     whole app failing.
     """
+    # One reader at a time. The first read now happens on a thread (see
+    # _start_reading) while other requests keep arriving, and two threads
+    # reading the same repository at once would do all of it twice and then
+    # disagree about which answer to keep.
+    with _build_lock:
+        return _build_if_needed()
+
+
+_build_lock = threading.RLock()
+
+
+def _build_if_needed() -> tuple[RepoIndex, ParsedRepo, Catalog]:
     if _state["index"] is None:
         if settings.repo_source == "github" and settings.github_repo:
             token = _active_token()
@@ -239,6 +327,19 @@ def _github_facts() -> dict | None:
 
 @app.get("/api/health")
 def health() -> dict:
+    # Reading a repository the size of a real warehouse takes minutes, and this
+    # is the request the screen makes before it can paint anything at all.
+    # Measured on 7,304 files: 101 seconds in here, during which the browser has
+    # a blank page and no way to ask what is happening -- because the only
+    # request that would tell it is the one it is already waiting on. A working
+    # program that says nothing for a hundred seconds is a hung one.
+    #
+    # So the read happens on a thread, this answers straight away, and the
+    # screen shows the counted progress that was always being recorded and never
+    # had anywhere to go. See _start_reading and /api/progress.
+    if _state["index"] is None:
+        _start_reading()
+        return _still_reading()
     idx, parsed, cat = repo_state()
     # What kinds of file are actually in the index, biggest group first. The
     # screen shows these, so they have to be counted rather than assumed.
@@ -311,6 +412,14 @@ def health() -> dict:
         # Where the list came from, so "I set that and it is gone" has an
         # answer. Online it survives a restart only as an environment variable.
         "productionFrom": _production_origin(),
+        # Whether anything can be scanned at all yet. The screens gate on this
+        # rather than on the text being non-empty, so there is one answer to
+        # the question and every screen gives the same one.
+        "productionSet": settings.has_production(),
+        # The repository is read and these numbers are real. The screen paints
+        # the reading progress instead when this is true. See _still_reading.
+        "indexing": False,
+        "readError": _reading["error"],
         "ai": _ai_facts(),
     }
 
@@ -322,7 +431,9 @@ def _production_origin() -> str:
         return "entered"
     if os.environ.get("RIPPLE_PROD_TABLES", "").strip():
         return "environment"
-    return "default"
+    # "unset", not "default". There is no default any more: nothing is scanned
+    # until somebody says which tables are theirs. See Settings.has_production.
+    return "unset"
 
 
 @app.get("/api/progress")
@@ -590,12 +701,30 @@ def scan(payload: ScanIn) -> dict:
     upstream = [{"table": u.table, "attrs": u.attrs} for u in payload.upstream]
     if not upstream:
         raise HTTPException(status_code=400, detail="No upstream tables were supplied.")
+    # Refused, never answered around. Without the list every table fails the
+    # published test, and a scan that reaches three published tables reports
+    # "no production table is affected" -- the same green tick as a genuinely
+    # clean answer, over a change that breaks all of them.
+    if not settings.has_production():
+        raise HTTPException(
+            status_code=400,
+            detail=("Ripple does not know which of your tables are the published ones yet, "
+                    "so it cannot say whether this change reaches any. Add them on the "
+                    "settings screen — paste the table names, or a pattern such as "
+                    "_PUBLISHED — and run this again."))
     cfg = settings
-    if payload.maxHops and payload.maxHops != settings.max_hops:
+    # ``is not None``, never truthiness. Zero is a real choice -- "follow it to
+    # the end of the code" -- and read as falsy the deeper button sent its
+    # request, the saved limit was used anyway, and the same cut-short answer
+    # came back: a button that does nothing.
+    if payload.maxHops is not None and payload.maxHops != settings.max_hops:
         # This scan only. The setting on the settings screen is left alone, so
         # running one scan deeper does not quietly change every later scan.
         cfg = copy.copy(settings)
-        cfg.max_hops = max(1, min(int(payload.maxHops), HOP_CEILING))
+        asked = int(payload.maxHops)
+        # Zero survives the clamp: it means "to the end of the code", which is
+        # bounded by the walk's own memory of where it has been, not by a number.
+        cfg.max_hops = 0 if asked <= 0 else min(asked, HOP_CEILING)
     try:
         res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=cfg,
                     on_progress=progress.reader("scanning"))

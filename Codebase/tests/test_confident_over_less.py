@@ -2798,3 +2798,142 @@ def test_a_welded_statement_is_not_also_read_in_half(tmp_path):
     out = scan(tmp_path, GLUED)
     rows = [r for g in out["groups"] for r in g["rows"]]
     assert len(rows) == 1, [(r["file"], r["lines"][0]["n"]) for r in rows]
+
+
+# ── the trail ends where the code ends, not where a counter does ──────────
+# A limit of 10 renames was reported as "the chain ends here and does not reach
+# production" -- a sentence about a setting wearing the clothes of a sentence
+# about the warehouse. The result screen offered to follow the trail twice as
+# far, and on a chain longer than the ceiling that button changed NOTHING: the
+# same cut-short trail, the same empty production list, run again for the same
+# answer. Measured on a 36-hop chain: 10 hops cut short, 20 cut short, and 25 --
+# the highest the screen would offer -- cut short as well. There was no number
+# to type that produced an answer.
+#
+# The walk already carries a set of every (table, column) it has been through,
+# so a cycle cannot run forever whatever the limit is. The counter was a second
+# guard that could only ever truncate a real answer. Measured on a real
+# BigQuery warehouse of 7,304 files: following to the end costs 10.6s against
+# 10.5s at ten hops, and finds the same tables plus the ones past the limit.
+DEEP_CHAIN = {"00.sql": "CREATE OR REPLACE TABLE s00 AS SELECT id, cm13 AS c00 "
+                        "FROM customer_demographics;"}
+for _i in range(1, 30):
+    DEEP_CHAIN[f"{_i:02d}.sql"] = (
+        f"CREATE OR REPLACE TABLE s{_i:02d} AS SELECT id, c{_i - 1:02d} AS c{_i:02d} "
+        f"FROM s{_i - 1:02d};")
+DEEP_CHAIN["99.sql"] = ("CREATE OR REPLACE TABLE deep_published AS "
+                        "SELECT c29 AS market_code FROM s29;")
+
+
+def test_a_chain_longer_than_any_offered_limit_still_reaches_production(tmp_path):
+    """Thirty renames deep. Nothing a person could choose on screen reached it,
+    so the answer was "no production table" however many times they asked."""
+    out = scan(tmp_path, DEEP_CHAIN, max_hops=0)
+    assert [g["prod"] for g in out["groups"]] == ["deep_published"], out["groups"]
+    assert out["cutShort"] == [], out["cutShort"]
+
+
+def test_following_to_the_end_is_the_default(tmp_path):
+    """The setting a person never touches has to be the one that answers the
+    question. A default that quietly truncates is the same wrong answer with
+    nobody to blame for it."""
+    cfg, idx, parsed = build(tmp_path, DEEP_CHAIN, max_hops=Settings().max_hops)
+    from ripple.scanner.lineage import trace                      # noqa: PLC0415
+    out = trace(idx, parsed, [{"table": "customer_demographics", "attrs": ["cm13"]}],
+                change_type="removal", cfg=cfg).to_dict()
+    assert [g["prod"] for g in out["groups"]] == ["deep_published"], out["groups"]
+    assert out["cutShort"] == [], out["cutShort"]
+
+
+def test_a_limit_that_was_asked_for_is_still_obeyed_and_still_said(tmp_path):
+    """The guard. Somebody who sets a limit gets it -- and a trail stopped by it
+    is still reported as stopped, never as a chain that ended."""
+    out = scan(tmp_path, DEEP_CHAIN, max_hops=5)
+    assert [g["prod"] for g in out["groups"]] == [], out["groups"]
+    assert out["cutShort"], "a trail stopped by a limit must say so"
+    assert out["maxHops"] == 5
+
+
+def test_a_ring_of_tables_does_not_run_forever(tmp_path):
+    """Why the counter looked necessary. It never was: the walk carries every
+    (table, column) it has been through, so a ring closes on itself."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE ring_a AS SELECT cm13 FROM customer_demographics;",
+        "b.sql": "CREATE OR REPLACE TABLE ring_b AS SELECT cm13 FROM ring_a;",
+        "c.sql": "CREATE OR REPLACE TABLE ring_a AS SELECT cm13 FROM ring_b;",
+        "d.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM ring_b;",
+    }, max_hops=0)
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+# ── the published-table list is the person's, never Ripple's ──────────────
+# The list of table names that count as published shipped with a default:
+# _PROD, _PRD, _PUBLISHED. On a warehouse that names its published tables
+# anything else, that default matches NOTHING -- and matching nothing does not
+# read as "I do not know which tables are yours". It reads as "no production
+# table is affected", in green, over a change that breaks all of them.
+#
+# It is the most expensive setting in the tool and the only one Ripple cannot
+# work out for itself, so it is now asked for rather than guessed, and nothing
+# is scanned until it has been given.
+
+
+def test_a_scan_with_no_published_list_refuses_rather_than_reassures(tmp_path):
+    """The whole point. Silence here has to be a refusal, never a green tick."""
+    from ripple.config import Settings                             # noqa: PLC0415
+    cfg = Settings()
+    cfg.set_production("")
+    assert not cfg.has_production(), \
+        "an empty list must read as 'not given', never as 'nothing is published'"
+
+
+def test_an_empty_list_does_not_quietly_become_the_shipped_default(tmp_path):
+    """The old behaviour: an empty box fell back to _PROD, _PRD, _PUBLISHED, and
+    the screen then reported findings against a rule nobody chose."""
+    from ripple.config import Settings                             # noqa: PLC0415
+    cfg = Settings()
+    cfg.set_production("")
+    assert cfg.production_patterns == (), cfg.production_patterns
+    assert cfg.production_text == "", cfg.production_text
+
+
+def test_a_list_that_was_given_is_used_exactly_as_given(tmp_path):
+    """The guard. Asking for the list is only an improvement if what arrives is
+    what gets matched."""
+    from ripple.config import Settings                             # noqa: PLC0415
+    cfg = Settings()
+    cfg.set_production("marts_gold, _published")
+    assert cfg.has_production()
+    assert cfg.is_production_table("customer_marts_gold") or \
+        cfg.is_production_table("marts_gold")
+    assert cfg.is_production_table("anything_published")
+
+
+def test_asking_for_the_end_of_the_code_is_not_read_as_asking_for_nothing(tmp_path):
+    """Zero is a real request -- follow it to the end -- and read as falsy it
+    was indistinguishable from not asking at all. The button ran, the saved
+    limit was used anyway, and the same cut-short answer came back."""
+    from fastapi.testclient import TestClient                     # noqa: PLC0415
+    from ripple import api                                        # noqa: PLC0415
+    from ripple.config import settings as live                    # noqa: PLC0415
+
+    for name, text in DEEP_CHAIN.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    before_path, before_hops = live.repo_path, live.max_hops
+    live.repo_path, live.max_hops = tmp_path, 5
+    live.set_production("_published")
+    api._state["index"] = None
+    try:
+        api.repo_state()
+        with TestClient(api.app) as c:
+            body = {"upstream": [{"table": "customer_demographics", "attrs": ["cm13"]}],
+                    "changeKind": "removal"}
+            shallow = c.post("/api/scan", json=body).json()
+            assert shallow["cutShort"], "a limit of five must cut this chain short"
+            deep = c.post("/api/scan", json={**body, "maxHops": 0}).json()
+            assert deep["maxHops"] == 0, deep["maxHops"]
+            assert deep["cutShort"] == [], deep["cutShort"]
+            assert [g["prod"] for g in deep["groups"]] == ["deep_published"], deep["groups"]
+    finally:
+        live.repo_path, live.max_hops = before_path, before_hops
+        api._state["index"] = None

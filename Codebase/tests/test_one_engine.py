@@ -80,7 +80,10 @@ def test_a_fix_to_the_engine_is_visible_from_all_three_editions():
     from ripple.scanner.lineage import ScanResult
     from ripple.scanner.sqlread import same_table, star_carries
 
-    assert Settings().max_hops == 10
+    # Zero means "follow until the code runs out", which is the default. A
+    # number here is a wall, and every wall reported itself as the end of the
+    # warehouse. See Settings.max_hops.
+    assert Settings().max_hops == 0
     assert callable(star_carries) and callable(same_table)
     result = ScanResult()
     for field in ("star_tables", "cut_short", "merged_names", "max_hops"):

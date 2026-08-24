@@ -39,7 +39,7 @@ def test_the_hop_limit_can_be_raised_far_enough_to_follow_a_cut_trail(clean_home
     from ripple.config import Settings
 
     assert prefs.max_hops_ceiling() >= Settings().max_hops * 2
-    saved = prefs.save({"repoPath": str(MOCKREPO), "maxHops": 20})
+    saved = prefs.save({"repoPath": str(MOCKREPO), "maxHops": 20, "prodTables": "_PROD"})
     assert saved["maxHops"] == 20
 
 
@@ -48,7 +48,7 @@ def test_nothing_is_configured_on_a_fresh_machine(clean_home):
 
 
 def test_settings_survive_a_restart(clean_home):
-    prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "snowflake", "maxHops": 5})
+    prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "snowflake", "maxHops": 5, "prodTables": "_PROD"})
     again = prefs.load()
     assert again["repoPath"] == str(MOCKREPO)
     assert again["sqlDialect"] == "snowflake"
@@ -57,7 +57,7 @@ def test_settings_survive_a_restart(clean_home):
 
 
 def test_the_settings_file_is_readable_by_a_person(clean_home):
-    prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4})
+    prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4, "prodTables": "_PROD"})
     written = json.loads((clean_home / "ripple-settings.json").read_text(encoding="utf-8"))
     assert written["repoPath"] == str(MOCKREPO)
     assert written["sqlDialect"] == "bigquery"
@@ -71,7 +71,7 @@ def test_a_damaged_settings_file_does_not_stop_ripple_starting(clean_home):
 
 def test_a_dialect_that_does_not_exist_is_refused(clean_home):
     assert not prefs.valid_dialect("klingon")
-    saved = prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "klingon", "maxHops": 4})
+    saved = prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "klingon", "maxHops": 4, "prodTables": "_PROD"})
     assert saved["sqlDialect"] == "bigquery"
 
 
@@ -84,7 +84,7 @@ def test_every_offered_dialect_is_one_sqlglot_really_knows():
 
 
 def test_the_label_defaults_to_the_folder_name(clean_home):
-    saved = prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4})
+    saved = prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4, "prodTables": "_PROD"})
     assert saved["repoLabel"] == "mockrepo"
 
 
@@ -106,15 +106,21 @@ def test_the_rule_reaches_the_shared_engine(clean_home):
     assert settings.is_production_table("sales_prod") is False
 
 
-def test_an_empty_rule_falls_back_rather_than_calling_everything_safe(clean_home):
-    """An empty box would mean no table is ever production, which reports every
-    repository on earth as clean."""
+def test_an_empty_rule_is_not_given_rather_than_calling_everything_safe(clean_home):
+    """An empty box means no table is ever production, which would report every
+    repository on earth as clean. It used to fall back to what Ripple shipped
+    with -- and on a warehouse naming its published tables anything other than
+    _PROD, that matched nothing and read exactly the same way.
+
+    So an empty box is now NOT GIVEN: Ripple is not set up, and the scan route
+    refuses rather than answering against a rule nobody chose."""
     saved = prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery",
                         "maxHops": 4, "prodTables": "   "})
-    assert saved["prodTables"] == prefs.default_production()
+    assert saved["prodTables"] == ""
+    assert prefs.configured(saved) is False, "a folder alone is not set up"
     prefs.apply(saved)
     from ripple.config import settings
-    assert settings.is_production_table("sales_prod") is True
+    assert settings.has_production() is False
 
 
 PASTED = """Table name\tOwner
@@ -193,7 +199,7 @@ def test_no_folder_chosen_is_not_an_error_message_about_crashes():
 # ── what the settings mean to the shared engine ────────────────────────────
 def test_applying_settings_points_the_shared_engine_at_the_folder(clean_home):
     from ripple.config import settings
-    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4}))
+    prefs.apply(prefs.save({"repoPath": str(MOCKREPO), "sqlDialect": "bigquery", "maxHops": 4, "prodTables": "_PROD"}))
     assert str(settings.repo_path) == str(MOCKREPO)
     assert settings.sql_dialect == "bigquery"
     assert settings.repo_source == "folder"

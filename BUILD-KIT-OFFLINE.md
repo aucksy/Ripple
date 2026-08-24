@@ -1370,6 +1370,112 @@ WHAT COUNTS AS SQL INSIDE A PROGRAM INCLUDES THE STATEMENTS WITH NO SELECT.
   out of it", which is not English -- on the one list whose whole job is to
   persuade somebody to go and open a file.
 
+THE TRAIL ENDS WHERE THE CODE ENDS, NOT WHERE A COUNTER DOES.
+
+  A limit on how many renames deep to follow a column reports itself as a fact
+  about the warehouse. "The chain ends here and does not reach production" is a
+  sentence about a setting wearing the clothes of a sentence about somebody's
+  data, and it is indistinguishable from the real thing.
+
+  Ten was still a wall, just a further-off one. The result screen offered to
+  follow twice as far, and on a chain longer than that offer it changed NOTHING:
+  measured on a 36-hop chain, ten renames cut the trail short, twenty cut it
+  short, and twenty-five -- the deepest the screen would offer -- cut it short as
+  well. Three whole scans, three identical empty answers, and no number a person
+  could choose that produced one. That is what "the button does nothing" is.
+
+  So the default is ZERO, and zero means follow until the code runs out.
+
+  This is safe, and the reason it is safe is already in the walk: it carries a
+  set of every (table, column) pair it has been through, so a ring of tables
+  closes on itself whatever any counter says. The counter was a second guard
+  that could only ever truncate a real answer. Measured on a real BigQuery
+  warehouse of 7,304 files: following to the end costs 10.6 seconds against 10.5
+  at ten hops, and finds the same tables plus the ones that were past the limit.
+
+  Three things to get right around it:
+
+  * A limit somebody sets ON PURPOSE is still obeyed, and a trail stopped by it
+    is still reported as stopped rather than as a chain that ended.
+  * Zero is a REAL request, not a missing one. Test it with "is not None",
+    never for truthiness -- read as falsy, the button that asks for the end of
+    the code sends nothing, the saved limit is used anyway, and the same
+    cut-short answer comes back. That is the bug this replaced, reintroduced.
+  * Do not print zero as a number. "0 hops deep" reads as "Ripple follows no
+    renames at all", which is the opposite of what it means. Say it in words.
+
+  The other walk with a counter -- the one that finds published tables which
+  stop being refreshed -- takes the same treatment. Its own seen-set grows every
+  round and is never cleared, so it ends when the frontier does. Its real limit
+  is the downstream cap, and THAT one is reported.
+
+NOTHING IS SCANNED UNTIL SOMEBODY SAYS WHICH TABLES THEY PUBLISH.
+
+  A published table is one people outside the team read. It is the thing every
+  finding is measured against, it is the only setting Ripple cannot work out for
+  itself, and it used to ship with a default: _PROD, _PRD, _PUBLISHED.
+
+  On a warehouse that names its published tables any other way, that default
+  matches NOTHING. And matching nothing does not read as "I do not know which
+  tables are yours". It reads as "no production table is affected", in green,
+  over a change that breaks all of them. It is the most expensive thing this
+  tool has ever done, because a wrong list and a right list produce answers that
+  look identical.
+
+  So there is no default, anywhere, and empty means NOT GIVEN rather than
+  "nothing is published":
+
+  * ``set_production`` keeps an empty box empty. It does not fall back.
+  * ``has_production`` is the one question every entry point asks.
+  * The scan route REFUSES with a message naming what to go and do, rather than
+    answering against a rule nobody chose.
+  * The screen blocks the scan button and says why on the same screen. A button
+    that runs and comes back with an error is a worse way of being told than a
+    button that says what is missing before it is pressed.
+  * Offline, "configured" means a folder AND a list. A folder on its own is a
+    Ripple that can read every file and still not know what any of it means.
+
+  Whoever deploys a hosted copy can still set the list in the environment. What
+  cannot happen is a copy scanning with a list nobody chose.
+
+  Set the button's state in ONE place. It was assigned twice in the same
+  function and the second assignment quietly undid the first, so the gate showed
+  its own label on a button that was still pressable -- measured on the rendered
+  screen: the text said "Add your published tables first" and disabled came back
+  false. A control whose state is written twice cannot be reasoned about by
+  reading the code, which is how the second one got there.
+
+READING THE REPOSITORY MUST NOT HOLD THE FIRST SCREEN BLANK.
+
+  Reading a repository the size of a real warehouse takes minutes, and the
+  health request is the one the screen makes before it can paint anything at
+  all. Measured on 7,304 files: 101 seconds inside that request, during which
+  the window is blank and has no way to ask what is happening -- because the one
+  request that would tell it is the one it is already waiting on.
+
+  A working program that says nothing for a hundred seconds is reported as a
+  hung one. Offline that window IS the product.
+
+  So the read happens on a thread, health answers straight away with
+  ``indexing: true``, and the screen shows the counted file numbers that were
+  always being recorded and never had anywhere to go. It waits there, polling,
+  until the read is done.
+
+  Four things this depends on:
+
+  * The still-reading answer is the SAME SHAPE as the finished one, with the
+    counts at zero. One screen file paints both, and a key left out of it is a
+    blank on screen that no test would ever see. Pin that with a test comparing
+    the two sets of keys.
+  * One reader at a time. The read now happens on a thread while other requests
+    keep arriving, and two threads reading the same repository would do all of
+    it twice and then disagree about which answer to keep.
+  * A read that FAILED and a read that never finished look identical from the
+    screen. Keep the error and show it; one of them needs somebody to act.
+  * Every number stays counted. Nothing is estimated, nothing is smoothed, and
+    no bar moves on a timer -- the numbers on that screen are files that have
+    really been opened.
+
 TWO MORE THINGS ABOUT MINING SQL OUT OF A FILE
 
   A quoted YAML value may run over several lines. Taking only the key's own line

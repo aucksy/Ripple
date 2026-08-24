@@ -58,8 +58,26 @@ def default_hops() -> int:
 
 
 def max_hops_ceiling() -> int:
-    """The deepest this program will follow, however deep it is asked to."""
+    """The deepest this program will follow when a limit is asked for.
+
+    Zero is not capped by this: zero means "follow until the code runs out",
+    which is the default and is bounded by the walk's own memory of where it has
+    been rather than by a number. See ripple.config.Settings.max_hops -- a
+    counter here could only ever cut a real trail short and report the cut as
+    the end of the warehouse.
+    """
     return 25
+
+
+def clamp_hops(value) -> int:
+    """A hop setting, kept meaningful. Zero survives; anything else is 1..25."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default_hops()
+    if n <= 0:
+        return 0
+    return min(max_hops_ceiling(), n)
 
 
 def default_production() -> str:
@@ -72,12 +90,14 @@ DEFAULTS: dict[str, Any] = {
     "repoPath": "",
     "repoLabel": "",
     "sqlDialect": DEFAULT_DIALECT,
-    "maxHops": 10,
-    # Which table names are the ones this team publishes. Online this is an
-    # environment variable set by whoever deploys Ripple. Offline there is
-    # nobody to set one, and leaving it at _PROD on a repository that names
-    # nothing _PROD is what turns a real impact into a confident "no impact".
-    "prodTables": "_PROD, _PRD, _PUBLISHED",
+    # Zero: follow until the code runs out. Matches the shared engine, and
+    # test_settings.py fails if the two ever drift.
+    "maxHops": 0,
+    # Which table names are the ones this team publishes. There is no default,
+    # and there must never be one again: leaving it at _PROD on a repository
+    # that names nothing _PROD is what turns a real impact into a confident
+    # "no impact". Empty means NOT GIVEN, and nothing is scanned until it is.
+    "prodTables": "",
 }
 
 
@@ -112,9 +132,10 @@ def load() -> dict[str, Any]:
             out[key] = raw[key]
     if not valid_dialect(str(out["sqlDialect"])):
         out["sqlDialect"] = DEFAULT_DIALECT
-    out["maxHops"] = max(1, min(max_hops_ceiling(), int(out["maxHops"] or default_hops())))
-    if not str(out["prodTables"]).strip():
-        out["prodTables"] = default_production()
+    out["maxHops"] = clamp_hops(out["maxHops"])
+    # No fallback. An unset list is a state to be asked about, not a rule to be
+    # matched against. See DEFAULTS above.
+    out["prodTables"] = str(out["prodTables"] or "").strip()
     return out
 
 
@@ -129,11 +150,11 @@ def save(values: dict[str, Any]) -> dict[str, Any]:
     keep["repoLabel"] = str(keep["repoLabel"] or "").strip() or folder_label(keep["repoPath"])
     if not valid_dialect(str(keep["sqlDialect"])):
         keep["sqlDialect"] = DEFAULT_DIALECT
-    keep["maxHops"] = max(1, min(max_hops_ceiling(), int(keep["maxHops"] or default_hops())))
-    # An empty box would mean "no table is ever production", which would report
-    # every repository as clean. Falling back to the default is the only safe
-    # reading of an empty box here.
-    keep["prodTables"] = str(keep["prodTables"] or "").strip() or default_production()
+    keep["maxHops"] = clamp_hops(keep["maxHops"])
+    # Saved exactly as typed, empty included. Empty means NOT GIVEN -- see
+    # DEFAULTS. Falling back here is what let a scan run against a rule nobody
+    # chose and report "no production table is affected" from it.
+    keep["prodTables"] = str(keep["prodTables"] or "").strip()
     path = paths.settings_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(keep, indent=2) + "\n", encoding="utf-8")
@@ -141,9 +162,17 @@ def save(values: dict[str, Any]) -> dict[str, Any]:
 
 
 def configured(values: dict[str, Any] | None = None) -> bool:
-    """Has anyone chosen a repository folder yet?"""
+    """Is Ripple set up enough to answer anything?
+
+    Two things, and BOTH are required. A folder with no published-table list is
+    a Ripple that can read every file and still not know what any of it means
+    for anybody: every table fails the published test, and a change that breaks
+    three published tables comes back "no production table is affected". That is
+    the same green tick as a genuinely clean answer.
+    """
     values = values if values is not None else load()
-    return bool(str(values.get("repoPath") or "").strip())
+    return (bool(str(values.get("repoPath") or "").strip())
+            and bool(str(values.get("prodTables") or "").strip()))
 
 
 def folder_label(path: str | Path) -> str:
@@ -167,10 +196,10 @@ def apply(values: dict[str, Any]) -> None:
     settings.repo_label = str(values.get("repoLabel") or "") or folder_label(settings.repo_path)
     settings.repo_branch = git_branch(settings.repo_path)
     settings.sql_dialect = str(values.get("sqlDialect") or "")
-    settings.max_hops = int(values.get("maxHops") or default_hops())
-    # The pasted list, in whatever shape it arrived. An empty one falls back to
-    # the shipped default inside set_production, because "nothing is production"
-    # would report every repository as clean.
+    settings.max_hops = clamp_hops(values.get("maxHops"))
+    # The pasted list, in whatever shape it arrived. An empty one stays empty
+    # and means NOT GIVEN; the scan route refuses rather than answering against
+    # a rule nobody chose. See DEFAULTS.
     settings.set_production(str(values.get("prodTables") or ""))
     settings.db_path = paths.history_file()
     settings.serverless = False

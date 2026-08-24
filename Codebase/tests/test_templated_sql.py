@@ -594,4 +594,7 @@ def test_an_empty_rule_is_not_read_as_every_table_being_safe():
     """An empty list would make is_production_table always false, which reports
     every repository in the world as clean."""
     assert parse_production_rule("  ,  , ") == ()
-    assert Settings().production_patterns, "the default must never be empty"
+    cfg = Settings()
+    cfg.set_production("")
+    assert cfg.has_production() is False, \
+        "an unset list must be refusable, never quietly matched against"

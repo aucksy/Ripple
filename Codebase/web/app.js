@@ -441,7 +441,7 @@ function productionCheck(r) {
     // own guess -- and the consequence used to be spelled out here in the same
     // twenty-two words as the note directly underneath, so the screen said the
     // same thing twice in two amber boxes touching each other.
-    const mine = S.health?.productionFrom === 'default' ? 'the names Ripple is guessing' : 'your patterns';
+    const mine = S.health?.productionSet ? 'your patterns' : 'the patterns entered';
     wrap.append(el('div', { className: 'note warn', style: 'margin-top:12px' },
       why(el('b', { textContent: dead.length === 1
           ? `The pattern ${dead[0].given} matches no table in this repository`
@@ -931,16 +931,24 @@ function step3(root) {
         ? `${h.repo.files} file${h.repo.files === 1 ? '' : 's'} ready to scan.`
         : 'check the repository folder in Settings & checks.'))));
   ready.append(neverOpenedNote(h.repo.heldOnline || 0, h.repo.pathTooLong || 0));
-  // Only when nobody has said. A warning printed before every scan ever run is
-  // one nobody reads, and it would take "no impact" down with it.
-  if (h.productionFrom === 'default') {
+  // Only when nobody has said. This is not a warning any more: nothing is
+  // scanned until the list has been given. Ripple used to fill it in with a
+  // guess -- _PROD, _PRD, _PUBLISHED -- and on a warehouse that names its
+  // published tables any other way that guess matched nothing. Matching nothing
+  // did not read as "I do not know which tables are yours"; it read as "no
+  // production table is affected", in green, over a change that broke them all.
+  if (!h.productionSet) {
     ready.append(el('div', { className: 'note warn', style: 'margin-top:12px' },
-      why(el('b', { textContent: 'Nobody has said which tables you publish.' }),
-        'before you scan, what counts as published',
-      `Ripple treats a table as published only if its name matches this rule, and right now `
-      + `that rule is a guess: ${h.production}. If your published tables are named some other `
-      + 'way, this scan will say nothing published is affected even when something is. Set the '
-      + 'real list on Settings & checks first.')));
+      why(el('b', { textContent: 'Ripple needs to know which tables you publish.' }),
+        'why it will not scan without this',
+      'A published table is one people outside your team read, and Ripple has no way of '
+      + 'working out which of yours those are — every warehouse names them differently. '
+      + 'Without the list, every table fails that test, and a change that breaks three of '
+      + 'them comes back as "no production table is affected". That is the same green tick '
+      + 'as a genuinely clean answer, which is why Ripple will not give it.',
+      'Open Settings & checks and paste your published table names, or a pattern they all '
+      + 'share such as _PUBLISHED. It takes a minute and it is the setting the whole answer '
+      + 'rests on.')));
   }
   if (h.repo.inSkippedDirs) {
     const box = el('div', { className: 'note warn', style: 'margin-top:12px' });
@@ -1060,7 +1068,6 @@ function step3(root) {
     render();
   }, `Reading every file in ${h.repo.label}…`);
   x(root, 'next').onclick = () => runScan();
-  x(root, 'next').disabled = S.busy;
   x(root, 'hint').textContent = S.busy
     // Measured on a repository the size of his: a couple of thousand files and
     // statements six hundred lines long take minutes, not seconds. Saying
@@ -1072,9 +1079,18 @@ function step3(root) {
     : repoOk
       ? `The scan will search ${h.repo.label}.`
       : 'Nothing is indexed, so a scan would find nothing.';
-  // Both halves matter. Files can be indexed from a folder that has since been
-  // moved or deleted, and offering to scan it would be scanning a memory.
-  x(root, 'next').disabled = !repoOk || S.busy;
+  // Every half matters, and this is the ONLY place the button's state is set --
+  // it was set twice, further up as well, and the second assignment quietly
+  // undid the first. Files can be indexed from a folder that has since been
+  // moved or deleted, and offering to scan it would be scanning a memory. And
+  // with no published-table list there is nothing to measure an answer against:
+  // the engine refuses the scan anyway, and a button that runs and comes back
+  // with an error is a worse way of being told than one that says what is
+  // missing before it is pressed.
+  x(root, 'next').disabled = !repoOk || S.busy || !h.productionSet;
+  if (!h.productionSet && !S.busy) {
+    x(root, 'next').textContent = 'Add your published tables first';
+  }
 }
 
 /* What Ripple is reading now — the same facts either way. */
@@ -1108,7 +1124,7 @@ function repoFacts(h) {
     // would read as a missing answer rather than as "there isn't one".
     ...(h.repo.branch ? [['Branch', h.repo.branch]] : []),
     ['SQL read as', h.sqlDialect],
-    ['Renames followed', `${h.maxHops} hops deep`],
+    ['Renames followed', hopsPhrase(h.maxHops)],
     // The setting that decides whether the answer says "production impact" at
     // all, on the screen where somebody decides to press Run -- rather than
     // only on a settings screen they have never opened. Learning after a clean
@@ -1233,20 +1249,26 @@ function doConnect() {
    asked for it to be followed further. It applies to that one scan; the setting
    on the settings screen is left where it was. */
 function runScan(deeper) {
+  // Zero is a REAL choice here -- "follow it to the end of the code" -- so this
+  // asks whether an argument was given rather than whether it is truthy. Read
+  // as falsy, pressing "follow these to the end" sent nothing at all and ran the
+  // scan again at the same limit, for the same answer: a button that does
+  // nothing, on the one screen that is meant to be honest.
+  const asked = deeper !== undefined && deeper !== null;
   run(async () => {
     S.scan = await api('/api/scan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         upstream: S.vals.upstream,
         changeKind: S.vals.changeKind || 'unknown',
-        ...(deeper ? { maxHops: deeper } : {}),
+        ...(asked ? { maxHops: deeper } : {}),
       }),
     });
     S.summary = null; S.openGroup = 'p0'; S.openRow = null; S.graphTab = 0;
     goto(4);
-  }, deeper
-    ? `Following the same attributes again, up to ${deeper} renames deep…`
-    : 'Searching every file for these names…');
+  }, !asked ? 'Searching every file for these names…'
+    : deeper ? `Following the same attributes again, up to ${deeper} renames deep…`
+    : 'Following the same attributes again, to the end of the code…');
 }
 
 // ── step 4 ────────────────────────────────────────────────────────────────
@@ -1999,12 +2021,18 @@ function renderTrailGaps(box, sc) {
     sc.cutShort.forEach(c => chips.append(el('span', { className: 'chip mono',
       textContent: `${c.table} · ${c.attr}` })));
     card.append(chips);
-    if (sc.maxHops < 25) {
+    if (sc.maxHops) {
+      // To the END, not twice as far. Doubling was a button that could be
+      // pressed and pressed and never finish: measured on a 36-hop chain, ten
+      // renames cut the trail short, twenty cut it short, and twenty-five --
+      // the deepest this ever offered -- cut it short as well, for the same
+      // empty answer each time. There is no number worth offering, so it offers
+      // the only thing that answers the question.
       const again = el('button', { className: 'ghost', style: 'margin-top:14px',
-        textContent: `Follow these ${deeper} renames deep instead` });
-      again.onclick = () => runScan(deeper);
+        textContent: 'Follow these to the end of the code' });
+      again.onclick = () => runScan(0);
       card.append(el('div', { style: 'margin-top:14px' },
-        why(again, 'what following them deeper costs',
+        why(again, 'what following them to the end costs',
       'This runs the scan again on code Ripple has already read. No file is opened a second '
       + 'time, and nothing on the settings screen changes.')));
     }
@@ -2861,14 +2889,17 @@ function settingsView(root) {
     persistNote: 'Held by this server while it runs. Set RIPPLE_PROD_TABLES to keep it after a restart.',
     savedNote: 'Saved. Every scan from now on uses this list — until this server restarts.',
   }));
-  if (h.productionFrom === 'default') {
+  if (!h.productionSet) {
     root.append(el('div', { className: 'note warn', style: 'margin:14px 0 24px' },
-      why(el('b', { textContent: 'Nobody has said which tables you publish — Ripple is '
-          + 'guessing from names ending _PROD, _PRD or _PUBLISHED.' }),
-        'what happens until you set the list',
-      'If your published tables are named some other way, Ripple will not count any of them as '
-      + 'published. Every finding will be reported as reaching a table it cannot call '
-      + 'production, and the result will look safer than it is.')));
+      why(el('b', { textContent: 'Nothing can be scanned until this list is set.' }),
+        'why this one setting stops everything',
+      'A published table is one people outside your team read. Ripple has no way of working '
+      + 'out which of yours those are — every warehouse names them differently — so until you '
+      + 'say, every table fails that test and every scan would come back "no production table '
+      + 'is affected". That sentence is the one thing this tool sells, and it would be '
+      + 'meaningless.',
+      'Paste the table names above, or a pattern they all share such as _PUBLISHED. You can '
+      + 'change it whenever you like.')));
   } else {
     root.append(el('div', { style: 'height:24px' }));
   }
@@ -2881,7 +2912,7 @@ function settingsView(root) {
    ...(((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0))
      ? [['Files never opened', String((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0))]]
      : []),
-   ['SQL dialect', h.sqlDialect], ['Renames followed', `${h.maxHops} hops`],
+   ['SQL dialect', h.sqlDialect], ['Renames followed', hopsPhrase(h.maxHops)],
    ['Tables you publish', h.production || 'not set']].forEach(([k, v]) =>
     left.append(el('div', { className: 'factrow' },
       el('span', { className: 'small muted', textContent: k }),
@@ -3095,6 +3126,14 @@ function watchProgress() {
   }, 500);
 }
 
+/* How deep the trail is followed, in words. Zero is not "0 hops" -- it means
+   the trail is followed until the CODE runs out, which is the default and is
+   the whole answer to "why did it stop there". Printed as a number, zero read
+   as "Ripple follows no renames at all", which is the opposite of what it is. */
+function hopsPhrase(n) {
+  return n ? `${n} renames deep` : 'to the end of the code';
+}
+
 function progressText(p) {
   if (!p || !p.job) return '';
   const label = p.label || ({ reading: 'Reading the files',
@@ -3147,9 +3186,50 @@ $('#navSettings').onclick = () => { S.view = 'settings'; render(); };
 function afterBoot() {}
 //</online-only>
 
+/* Reading a repository the size of a real warehouse takes minutes. Measured on
+   7,304 files: 101 seconds, during which this page was blank and had no way to
+   ask what was going on, because the only request that would answer was the one
+   it was waiting on. A working program that says nothing for a hundred seconds
+   is reported as a hung one.
+
+   So the server reads on a thread and answers straight away with indexing:true,
+   and this waits here — showing the counted file numbers it was already keeping
+   — until the read is done. Nothing is estimated and no bar moves on a timer:
+   every number below is files that have really been read. */
+async function waitForTheRepository() {
+  while (S.health && S.health.indexing) {
+    renderReading();
+    await new Promise(r => setTimeout(r, 700));
+    try { S.health = await api('/api/health'); }
+    catch (e) { S.bootError = e.message; return; }
+  }
+}
+
+function renderReading() {
+  const h = S.health || {};
+  const p = h.progress || {};
+  const view = $('#view');
+  if (!view) return;
+  view.innerHTML = '';
+  const card = el('div', { className: 'card pad lg', style: 'margin:40px auto;max-width:640px' });
+  card.append(el('b', { style: 'font-size:15px;display:block',
+    textContent: `Reading ${h.repo?.label || 'the repository'}` }));
+  card.append(el('div', { className: 'small muted', style: 'margin-top:8px',
+    textContent: h.readError
+      ? h.readError
+      : (progressText(p)
+         || 'Opening every file and reading the SQL in it. On a repository of a few '
+            + 'thousand files this takes a few minutes. Nothing has been missed — '
+            + 'Ripple is still going.') }));
+  card.append(el('div', { className: 'small muted', style: 'margin-top:10px',
+    textContent: h.repo?.path || '' }));
+  view.append(card);
+}
+
 (async function boot() {
   try { S.health = await api('/api/health'); }
   catch (e) { alert('Could not reach the Ripple server: ' + e.message); }
+  await waitForTheRepository();
   afterBoot();
   render();
 })();

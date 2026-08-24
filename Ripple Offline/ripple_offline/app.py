@@ -15,6 +15,7 @@ here — this is a thin layer, exactly as the online service is.
 from __future__ import annotations
 
 import copy
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -39,9 +40,56 @@ app = FastAPI(title="Ripple Offline", docs_url="/api/docs", redoc_url=None)
 
 _state: dict[str, Any] = {"index": None, "parsed": None, "catalog": None}
 
+# ── reading without holding the screen hostage ─────────────────────────────
+# Reading a repository the size of a real warehouse takes minutes, and /api/health
+# is the request the screen makes before it can paint anything at all. Measured
+# on 7,304 files: 101 seconds in there, during which the window is blank and has
+# no way to ask what is happening -- because the only request that would tell it
+# is the one it is already waiting on. A working program that says nothing for a
+# hundred seconds gets reported as a hung one, and here that window is the whole
+# product.
+#
+# So the read happens on a thread, health answers straight away with
+# indexing:true, and the screen shows the counted file numbers that were always
+# being recorded and never had anywhere to go.
+_build_lock = threading.RLock()
+_reading: dict[str, Any] = {"thread": None, "error": ""}
+
+
+def start_reading() -> None:
+    """Begin reading on a thread, unless one is already at it."""
+    with _build_lock:
+        alive = _reading["thread"]
+        if alive is not None and alive.is_alive():
+            return
+
+        def work() -> None:
+            try:
+                _reading["error"] = ""
+                repo_state()
+            except Exception as exc:                       # noqa: BLE001
+                # Kept and shown. A read that failed and a read that never
+                # finished look identical from the screen, and one of them needs
+                # somebody to go and do something about it.
+                _reading["error"] = str(exc)
+            finally:
+                progress.finish()
+
+        t = threading.Thread(target=work, name="ripple-read", daemon=True)
+        _reading["thread"] = t
+        t.start()
+
 
 # ── the repository, read once and kept until something changes ─────────────
 def repo_state() -> tuple[RepoIndex, ParsedRepo, Catalog]:
+    # One reader at a time: the first read now happens on a thread while other
+    # requests keep arriving, and two threads reading the same repository would
+    # do all of it twice and then disagree about which answer to keep.
+    with _build_lock:
+        return _read_if_needed()
+
+
+def _read_if_needed() -> tuple[RepoIndex, ParsedRepo, Catalog]:
     if _state["index"] is None:
         # A folder that is missing, or has never been chosen, is a normal state
         # here rather than an error: the index comes back empty and the screen
@@ -68,6 +116,50 @@ def reindex() -> None:
 
 
 # ── what the screen is told ────────────────────────────────────────────────
+def _still_reading(values: dict, folder: dict) -> dict:
+    """The health answer while the repository is being read for the first time.
+
+    The SAME SHAPE as the finished one, with the counts at zero and ``indexing``
+    true. One app.js paints from this, and a key left out here is a blank on
+    screen that no test would ever see -- see test_offline_app.
+    """
+    return {
+        "ok": True,
+        "indexing": True,
+        "readError": _reading["error"],
+        "progress": progress.snapshot(),
+        "build": build_info(),
+        "source": "folder",
+        "offline": True,
+        "configured": prefs.configured(values),
+        "folder": folder,
+        "canBrowse": folderpick.available(),
+        "settingsFile": str(paths.settings_file()),
+        "historyFile": str(paths.history_file()),
+        "syncedFolder": synced.detect(paths.app_dir()),
+        "dialects": prefs.dialects(),
+        "serverless": False,
+        "limits": {"maxUploadBytes": settings.max_upload_bytes, "historyKept": True},
+        "repo": {
+            "label": str(values.get("repoLabel") or ""),
+            "path": str(values.get("repoPath") or ""),
+            "branch": settings.repo_branch,
+            "files": 0, "statements": 0, "unreadable": 0,
+            "heldOnline": 0, "pathTooLong": 0, "inSkippedDirs": 0,
+            "skippedDirNames": [], "runsSqlFrom": 0,
+            "exists": folder["ok"], "kinds": [], "unknownExt": [],
+        },
+        "catalog": {"tables": 0, "columns": 0},
+        "sqlDialect": settings.sql_dialect or "generic",
+        "sqlDialectId": settings.sql_dialect,
+        "maxHops": settings.max_hops,
+        "production": settings.production_rule(),
+        "productionRule": settings.production().to_dict(),
+        "productionFrom": "entered" if settings.has_production() else "unset",
+        "productionSet": settings.has_production(),
+    }
+
+
 def _health() -> dict:
     values = prefs.load()
     # Judged on what was actually chosen, not on the engine's path: an unset
@@ -79,6 +171,12 @@ def _health() -> dict:
     # from it is worse than either message on its own.
     if not folder["ok"] and _state["index"] is not None and _state["index"].files:
         _state["index"] = None
+    # Still reading: answer now, with the counted progress, rather than holding
+    # the window blank for the minutes a real repository takes. See start_reading.
+    if _state["index"] is None and str(values["repoPath"]).strip() not in ("", "."):
+        start_reading()
+        if _state["index"] is None:
+            return _still_reading(values, folder)
     idx, parsed, cat = repo_state()
     kinds: dict[str, int] = {}
     for f in idx.files:
@@ -153,6 +251,15 @@ def _health() -> dict:
         # and it holds the paste exactly as it arrived so it can be edited again.
         "production": settings.production_rule(),
         "productionRule": settings.production().to_dict(),
+        # Where the list came from, and whether there is one at all. The screens
+        # gate on these rather than on the text being non-empty, so both builds
+        # give the same answer to the same question.
+        "productionFrom": "entered" if settings.has_production() else "unset",
+        "productionSet": settings.has_production(),
+        # The repository is read and every number above is real.
+        "indexing": False,
+        "readError": _reading["error"],
+        "progress": progress.snapshot(),
     }
 
 
@@ -197,7 +304,11 @@ class ProductionIn(BaseModel):
 class SettingsIn(BaseModel):
     repoPath: str = ""
     sqlDialect: str = prefs.DEFAULT_DIALECT
-    maxHops: int = 0                # 0 means "keep whatever is saved"
+    # Missing means "keep whatever is saved". ZERO means something real and
+    # different -- follow the trail to the end of the code -- and the two were
+    # the same value here while the comment claimed otherwise, so a screen that
+    # left the box alone silently reset the setting.
+    maxHops: int | None = None
     prodTables: str = ""
 
 
@@ -333,9 +444,12 @@ def save_settings(payload: SettingsIn) -> dict:
                or str(before.get("sqlDialect") or "") != payload.sqlDialect
                or _state["index"] is None)
     try:
-        saved = prefs.save({"repoPath": payload.repoPath, "repoLabel": "",
-                            "sqlDialect": payload.sqlDialect, "maxHops": payload.maxHops,
-                            "prodTables": payload.prodTables})
+        saved = prefs.save({
+            "repoPath": payload.repoPath, "repoLabel": "",
+            "sqlDialect": payload.sqlDialect,
+            # Left out of the request means leave it alone. See SettingsIn.
+            "maxHops": before.get("maxHops") if payload.maxHops is None else payload.maxHops,
+            "prodTables": payload.prodTables})
     except OSError as exc:
         # Ripple keeps its settings beside itself. Somewhere like Program Files,
         # or a network share it was opened from, may not allow that -- and
@@ -383,14 +497,29 @@ def scan(payload: ScanIn) -> dict:
     upstream = [{"table": u.table, "attrs": u.attrs} for u in payload.upstream]
     if not upstream:
         raise HTTPException(status_code=400, detail="No upstream tables were supplied.")
+    # Refused, never answered around. Without the list every table fails the
+    # published test, and a scan that reaches three published tables reports
+    # "no production table is affected" -- the same green tick as a genuinely
+    # clean answer, over a change that breaks all of them.
+    if not settings.has_production():
+        raise HTTPException(
+            status_code=400,
+            detail=("Ripple does not know which of your tables are the published ones yet, "
+                    "so it cannot say whether this change reaches any. Add them on the "
+                    "settings screen — paste the table names, or a pattern such as "
+                    "_PUBLISHED — and run this again."))
     cfg = settings
-    if payload.maxHops and payload.maxHops != settings.max_hops:
+    # ``is not None``, never truthiness. Zero is a real choice -- "follow it to
+    # the end of the code" -- and read as falsy the deeper button sent its
+    # request, the saved limit was used anyway, and the same cut-short answer
+    # came back: a button that does nothing.
+    if payload.maxHops is not None and payload.maxHops != settings.max_hops:
         # The result screen offers to follow a cut-short trail further. Without
         # this the button would be pressed, the scan would run at the saved
         # depth, and the same cut-short answer would come back -- a button that
         # does nothing, on the one screen that is meant to be honest.
         cfg = copy.copy(settings)
-        cfg.max_hops = max(1, min(int(payload.maxHops), prefs.max_hops_ceiling()))
+        cfg.max_hops = prefs.clamp_hops(payload.maxHops)
     try:
         res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=cfg,
                     on_progress=progress.reader("scanning"))

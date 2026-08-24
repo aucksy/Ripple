@@ -107,6 +107,9 @@ def scan(repo: Path, dialect: str):
     cfg = Settings()
     cfg.sql_dialect = dialect
     cfg.repo_path = repo
+    # There is no shipped list of published tables any more -- see
+    # Settings.has_production. This stands for one somebody entered.
+    cfg.set_production("_PROD")
     idx = RepoIndex.build(repo, cfg)
     parsed = parse_repo(idx, cfg)
     result = trace(idx, parsed,

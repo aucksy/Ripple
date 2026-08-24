@@ -160,13 +160,20 @@ def test_names_and_patterns_work_side_by_side():
     assert len(rule.names) == 1 and len(rule.patterns) == 2
 
 
-def test_an_empty_box_falls_back_rather_than_meaning_no_table_is_production():
-    """An empty list would make is_production_table always false, which reports
-    every repository in the world as clean."""
+def test_an_empty_box_means_not_given_and_nothing_is_scanned():
+    """An empty list used to fall back to what Ripple shipped with. On a
+    warehouse that names its published tables anything else, that default
+    matched NOTHING -- and matching nothing did not read as "I do not know which
+    tables are yours". It read as "no production table is affected", in green,
+    over a change that broke all of them.
+
+    Empty now means NOT GIVEN, which is a different thing from "nothing is
+    published", and every entry point refuses to scan until it has been."""
     cfg = Settings()
     cfg.set_production("   \n  \n")
-    assert cfg.production_patterns == production.DEFAULT_PRODUCTION
-    assert cfg.is_production_table("sales_prod") is True
+    assert cfg.production_patterns == ()
+    assert cfg.production_text == ""
+    assert cfg.has_production() is False
     # And the older helper still answers the way its callers expect.
     assert parse_production_rule("  ,  , ") == ()
 

@@ -166,3 +166,16 @@ def test_the_page_still_loads_when_the_repository_folder_is_missing(client, monk
     assert h.status_code == 200
     assert h.json()["repo"]["exists"] is False
     assert h.json()["repo"]["files"] == 0
+
+
+def test_the_answer_given_while_still_reading_is_a_whole_one():
+    """The screen paints from this payload before the repository has been read,
+    and a key missing from it is a blank on screen and nothing at all in a test.
+    Every key the finished answer carries has to be here too, with real zeros
+    rather than absent."""
+    from ripple.api import _still_reading, health                 # noqa: PLC0415
+
+    whole = set(health())
+    partial = set(_still_reading())
+    missing = sorted(whole - partial)
+    assert not missing, f"the still-reading answer never names: {missing}"
