@@ -2027,15 +2027,19 @@ function renderTrailGaps(box, sc) {
     const card = el('div', { className: 'card pad lg', style: 'margin-top:20px;border-color:var(--amberln)' });
     card.append(why(
       el('b', { style: 'font-size:14px', textContent:
-        `${n} table${n === 1 ? '' : 's'} on this trail ${n === 1 ? 'has' : 'have'} no column list to read` }),
+        `${n} table${n === 1 ? '' : 's'} the column passes through ${n === 1 ? 'has' : 'have'} no column list to read` }),
       'tables with no column list on the trail',
+      // "Either way" only makes sense when there ARE two ways. On a scan with
+      // one kind it referred back to nothing.
       (copies.length && stars
         ? 'Some of these take every column at once with a SELECT *; the rest are a whole table '
-          + 'copied or renamed into another. '
+          + 'copied or renamed into another. Either way, the code never writes down what their '
+          + 'columns are called. Your attribute '
         : copies.length
-        ? 'These are a whole table copied or renamed into another. '
-        : 'These take every column at once with a SELECT *. ')
-      + 'Either way the code never writes down what their columns are called. Your attribute '
+        ? 'These are a whole table copied or renamed into another, so the code never writes '
+          + 'down what their columns are called. Your attribute '
+        : 'These take every column at once with a SELECT *, so the code never writes down what '
+          + 'their columns are called. Your attribute ')
       + 'really does travel through — what Ripple cannot promise is the name it carries on the '
       + 'other side.',
       holes.length
