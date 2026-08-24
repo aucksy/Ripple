@@ -36,7 +36,7 @@ from pathlib import Path
 # release tag and the line on the settings screen can never disagree.
 #
 # Bump it whenever behaviour changes. Three parts: break.feature.fix.
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 # Written into the packaged folder by the offline build script. Kept as a
 # constant because two files have to agree on the name.

@@ -202,6 +202,33 @@ input.bare,textarea.bare{border:none;outline:none;background:transparent;padding
 .factrow>:first-child{flex:0 1 auto;min-width:0}
 .factrow>:last-child{flex:1 1 auto;min-width:0;text-align:right;font-weight:700;overflow-wrap:anywhere}
 
+/* ── the information button ──────────────────────────── */
+/* One disclosure control for the whole app. The fact stays on the page; the
+   reasoning opens underneath it, in the normal flow, so it is never clipped by
+   a card with overflow:hidden and needs no positioning maths at any width.
+
+   A real button, never a title= tooltip: a tooltip cannot be opened on a touch
+   screen, cannot be reached from a keyboard, and vanishes while it is being
+   read. Nothing here is downloaded, so it works with no internet. */
+/* Not a flex row. In a flex row a fact that wraps onto two lines pushes the
+   button onto a third line of its own, where it reads as a control that failed
+   to load. As an inline-block it simply follows the last word, at any width. */
+.iwrap{display:block}
+.ifact{display:block}
+button.i{width:19px;height:19px;flex-shrink:0;border-radius:50%;border:1px solid var(--line2);
+  background:#fff;color:var(--mute);font-family:inherit;font-size:11.5px;font-weight:800;
+  line-height:1;cursor:pointer;padding:0;transition:all .13s;
+  display:inline-block;vertical-align:baseline;margin-left:7px;position:relative;top:1px}
+button.i:hover{border-color:var(--blue);color:var(--blued);background:var(--pale)}
+button.i:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+button.i[aria-expanded="true"]{background:var(--navy);border-color:var(--navy);color:#fff}
+.ipanel{margin-top:10px;padding:12px 16px;border-left:3px solid var(--line2);
+  background:var(--tint);border-radius:0 8px 8px 0;font-size:13px;line-height:1.6;
+  color:var(--body);animation:fadeUp .18s ease}
+.ipanel p+p{margin-top:8px}
+/* a card label is a heading; the fact under it needs the same air as any other */
+.lbl+.iwrap{margin-top:8px}
+
 /* ── notes ───────────────────────────────────────────── */
 .note{border-radius:10px;padding:14px 18px;font-size:13.5px;line-height:1.55}
 .note.info{background:#F4F9FE;border:1px solid #C9E0F5;color:var(--body)}
@@ -221,22 +248,22 @@ input.bare,textarea.bare{border:none;outline:none;background:transparent;padding
 .drop b{display:block;font-size:15px;margin-bottom:5px}
 
 /* ── stat cards ──────────────────────────────────────── */
-/* Two rows, and each row has a fixed number of columns that its cards fit
-   exactly. One row of everything wrapped six-and-one as soon as a seventh card
-   appeared, which stranded the honesty numbers on a line of their own looking
-   like an afterthought. */
+/* Every row of stat cards is the same grid, so a card is the same size wherever
+   it sits. Rows with their own column count looked wrong twice over: a row of
+   two cards stretched each one to half the page while the row above held five
+   narrow ones, and a row of one stranded it. Cards now fill from the left and a
+   short row simply leaves the rest of the row empty. */
 .statgroups{margin:22px 0}
-.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:16px;margin:20px 0}
-.stats.five{grid-template-columns:repeat(5,1fr);margin:0}
-.stats.three{grid-template-columns:repeat(3,1fr);margin:0}
-@media (max-width:1499px){
-  .stats,.stats.five{grid-template-columns:repeat(3,1fr)}
-}
-@media (max-width:900px){
-  .stats,.stats.five,.stats.three{grid-template-columns:repeat(2,1fr)}
-}
-/* the four editable fields at the top of step 2 — same card, no reserved label row */
-.metagrid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px}
+.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;align-items:start}
+@media (max-width:1499px){.stats{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}}
+/* the four editable fields at the top of step 2 — same card, no reserved label row.
+   align-items:start is load-bearing: the contact card carries one chip per email
+   address, and without it the other three stretched to match and sat with 250px
+   of white space under a single input. */
+.metagrid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px;
+  align-items:start}
+@media (max-width:1100px){.metagrid{grid-template-columns:repeat(2,1fr)}}
 .metagrid .stat>.lbl{min-height:0}
 .stat{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px;
   box-shadow:0 1px 2px rgba(16,36,62,.05);animation:fadeUp .3s ease}
@@ -288,17 +315,40 @@ input.bare,textarea.bare{border:none;outline:none;background:transparent;padding
   color:var(--amber);background:var(--hitpill);padding:2px 10px;border-radius:999px;white-space:nowrap}
 
 /* ── dependency map ──────────────────────────────────── */
-.maprow{display:flex;gap:26px;align-items:stretch}
-.mapsrc{width:250px;flex-shrink:0;display:flex;align-items:center}
+.maprow{display:flex;gap:26px;align-items:flex-start}
+/* The source box sticks to the top of the branches rather than being centred
+   against them. Twenty real branches are several thousand pixels tall, so
+   centred put the one box that says WHAT is being followed halfway down a page
+   nobody had scrolled to, leaving the left of the picture empty. */
+.mapsrc{width:250px;flex-shrink:0;position:sticky;top:12px}
 .mapsrc>div{background:var(--navy);color:#fff;border-radius:10px;padding:16px 18px;width:100%}
 .mapsrc .k{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.55)}
 .mapsrc .tb{font-family:var(--mono);font-size:14px;font-weight:600;margin-top:6px}
 .mapsrc .at{font-family:var(--mono);font-size:13.5px;font-weight:600;color:#8FC6F5;margin-top:10px}
 .mapsrc .ct{font-size:12px;color:rgba(255,255,255,.6);margin-top:8px;line-height:1.5}
 .branches{flex:1;min-width:0;display:flex;flex-direction:column;gap:14px}
-.branch{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 16px;
-  border:1px solid var(--line);border-radius:10px;background:var(--codebg)}
-.node{border-radius:9px;padding:11px 14px;background:#F4F9FE;border:1px solid #9CC4EA}
+/* A chain scrolls sideways inside its own row rather than wrapping. Measured at
+   a 1,180px window: wrapping put every box on a line of its own and left the
+   arrows stranded at the right-hand edge, so a picture of a chain read as a
+   list of unconnected boxes. The page itself still never scrolls sideways. */
+.branch{display:flex;align-items:center;gap:10px;flex-wrap:nowrap;overflow-x:auto;
+  padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--codebg)}
+/* The scrollbar IS the affordance. Left as the browser's overlay it appears
+   only once somebody happens to scroll, so a chain that continues past the edge
+   looks like a chain that was cut off. */
+.branch{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+.branch::-webkit-scrollbar{height:8px}
+.branch::-webkit-scrollbar-thumb{background:var(--line2);border-radius:4px}
+.branch::-webkit-scrollbar-track{background:transparent}
+.node{border-radius:9px;padding:11px 14px;background:#F4F9FE;border:1px solid #9CC4EA;
+  flex-shrink:0;max-width:360px}
+.node .nm{overflow-wrap:anywhere}
+/* Below this the source box takes 250px the chain needs more. It goes above
+   instead, which is the same reading order and gives the branches the width. */
+@media (max-width:1240px){
+  .maprow{flex-direction:column}
+  .mapsrc{width:100%;position:static}
+}
 .node.prod{background:var(--redbg);border-color:var(--redln)}
 .node .top{display:flex;align-items:center;gap:8px}
 .node .k{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;

@@ -368,7 +368,11 @@ def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
     groups = scan.get("groups", [])
     reached = scan.get("reached", [])
     other = scan.get("other", [])
-    rows = [r for g in groups for r in g["rows"]]
+    # The same rows the summary counted. A finding upstream of two published
+    # tables appears in both groups, so counting them raw made the letter say
+    # "9 pipeline objects" one click after the summary said 8 -- two numbers for
+    # the same thing, and the wrong one is the one that leaves the building.
+    rows = _unique(groups)
     elsewhere = _unique(reached) + other
     no_fix = [r for r in rows if r.get("noLocalFix")]
     poc = vals.get("pocName") or "there"

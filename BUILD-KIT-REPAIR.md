@@ -118,6 +118,7 @@ Find your row. Open that one file. Nothing else.
 | Wording in the reply letter or the summary | `ripple/narrative.py` |
 | The email upload getting the tables or the date wrong | `ripple/notification.py` |
 | Wording, layout or a card on any screen | `web/app.js` |
+| Explaining something on screen without lengthening the page | `web/app.js` — the `why()` helper |
 | Colours, spacing, anything visual | `web/styles.css` |
 | A screen showing a blank where a number should be | **two files** — `ripple/scanner/lineage.py` and `web/app.js` |
 | The version number on the settings screen | `ripple/build_info.py` |
@@ -416,6 +417,18 @@ Rules for anything on screen:
 * A card that reports a gap may only appear when there IS one. A warning printed
   on every scan is one nobody reads.
 * A reassuring message may not appear while any gap is known.
+* Say the fact on the page and put the reasoning behind the information button.
+  There is ONE of those, `why(fact, label, ...explanation)`, near the top of this
+  file. Call it. Do not write a second one, and never use a title= tooltip: it
+  cannot be opened on a touch screen, cannot be reached from a keyboard, and
+  disappears while it is being read.
+* Never behind that button: a count, a table name, or a warning that something
+  was not read. Somebody who never presses it must still see everything Ripple
+  knows it missed — they lose the reasoning, never the fact. The test that holds
+  this is `Codebase/tests/test_screen_details.py`, which blanks out every
+  explanation panel and then looks for each count in what is left.
+* A long list is capped in the drawing, never in the analysis, and what was
+  dropped is named with its count.
 
 If the value you need is not in the scan result, STOP and tell me. Do not invent
 it and do not calculate it in the screen. It has to come from the engine.
@@ -423,8 +436,12 @@ it and do not calculate it in the screen. It has to come from the engine.
 This file is shared by both builds of Ripple, so anything you change here shows up
 in both.
 ````
-**Check it worked:** `node --check web/app.js` — then open Ripple and look at the
-screen you changed. This file has no automatic tests; your eyes are the test.
+**Check it worked:** `node --check web/app.js`, then the same check on the
+GENERATED offline bundle — a change that breaks only that one is invisible
+otherwise. Then open Ripple and LOOK at the screen you changed: read it as a
+stranger and look for two things on one page that cannot both be true. That is
+how the last four defects here were found, and no test would have caught any of
+them.
 
 ---
 

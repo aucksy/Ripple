@@ -3868,6 +3868,11 @@ worked out, not written a second time:
 
   "Impact confirmed. <attributes> is consumed by N pipeline objects feeding M
    production tables: <names, capped at ten with 'and N more'>."
+  N is counted the same way the summary counts it — rows across the groups,
+  listed ONCE. A finding upstream of two published tables appears under both, so
+  counting them raw makes the letter say 9 one click after the summary said 8.
+  Two numbers for one thing, and the wrong one is the one that leaves the
+  building.
   then "What we will do before the effective date:" and the summary's first
     four actions, one per line, each indented with a dash
   then, if any usage has no local fix, one ask of the upstream team: at least
@@ -4666,23 +4671,101 @@ Components to define, because the script uses these class names:
   .tag                                  the small upper-case row label
   .chip .chip.mono .chip.alias .chip.pattern .chips .scrollbox
   .note with .info .warn .good .bad     the four kinds of on-screen note
-  .statgroups .stats .stats.five .stats.three .stat  the counted cards
+  .iwrap .ifact button.i .ipanel        the information button and its panel
+  .statgroups .stats .stat              the counted cards
   .groups .group .ghead .rowhead .row .detail        the findings list
   .code .code .f .code .body .code .ln .ln.hit .why  the code snippet
   .maprow .mapsrc .branches .branch .node .arrow .legend   the map
   .factrow .drop .foot .spin .big .hist
 
-Three rules that keep it usable with real data:
+Five rules that keep it usable with real data. Every one of them was measured
+on a repository the size of the one this is built for, not guessed at:
   A real table name runs to forty characters and a real path to a hundred and
   sixty. Give every grid cell min-width:0 and overflow-wrap:anywhere, or one
   long name widens the grid until the page scrolls sideways and the findings
   walk off the right of the screen.
   .scrollbox is a chip container with a max height and its own scrollbar, for
-  the lists that are genuinely hundreds long.
-  The stat cards come in two fixed rows — five columns and three columns —
-  not one row that wraps. One row wrapped six-and-one as soon as a seventh
-  card appeared, which stranded the honesty numbers on a line of their own
-  looking like an afterthought.
+  the lists that are genuinely hundreds long. Use it for every list a real
+  repository makes long, not only the obvious ones: a card that grows without
+  a limit is a card that swallows the page.
+  Every row of stat cards is the SAME grid — five columns, three below 1500px,
+  two below 900px — and a short row simply leaves the rest of the row empty.
+  Give a row its own column count and it goes wrong twice over: a row of two
+  stretches each card to half the page while the row above holds five narrow
+  ones, and a row of one strands it. Order the cards worst first, so when there
+  are more than fit a row it is the mildest one that wraps.
+  A chain on the dependency map scrolls sideways inside its own row rather than
+  wrapping. Wrapping puts every box on a line of its own and leaves the arrows
+  stranded at the right-hand edge, so a picture of a chain reads as a list of
+  unconnected boxes. Style the scrollbar so it is visible: left as the browser's
+  overlay, a chain that carries on past the edge looks like one that was cut off.
+  Long lists are capped in the DRAWING, never in the analysis, and what was
+  dropped is said out loud with its count. Measured: two hundred and twelve
+  files to check by hand, each with a name, a reason and a snippet, made that
+  one card 22,000 pixels tall inside a 40,000-pixel page. Draw forty in full and
+  name the rest as chips in a .scrollbox. Twenty branches on the map, the rest
+  counted out loud. A page nobody scrolls to the end of hides its own ending.
+
+THE INFORMATION BUTTON, AND WHAT MAY GO BEHIND IT
+Every screen here carries more explanation than a person needs while they are
+reading an answer. Build ONE disclosure control in this phase and have every
+screen call it. Two of them drift apart, and then they behave differently on
+screens nobody ever compares side by side.
+
+One helper in app.js:
+
+  why(fact, label, ...explanation)
+
+`fact` is the node that stays visible. `label` names it for a screen reader and
+keys whether the panel is open, so a redraw does not shut a panel somebody is in
+the middle of reading. Everything after that is the explanation — a string
+becomes a paragraph, a node is appended as it is. It returns one block: a line
+holding the fact with a small round i after it, and a hidden panel underneath.
+
+What the control must be:
+  a real <button type="button">, so Tab reaches it and Enter or Space opens it
+  aria-expanded, flipped on every click
+  aria-controls naming the panel, which carries role="note" and hidden
+  aria-label saying what it explains, or it is announced as the letter i
+  Escape closes it and hands the focus back to the button that opened it
+  nothing downloaded at run time — the offline copy refuses outbound
+  connections and a panel built from a library would simply be empty
+
+Never a title= tooltip. One cannot be opened on a touch screen, cannot be
+reached from a keyboard, and vanishes while it is being read.
+
+The panel opens in the normal flow, underneath the fact, never as a floating
+box. Cards clip their own contents, so a positioned panel inside one is cut off
+at the card's edge at some window width nobody tested.
+
+Name the family so it cannot collide: .iwrap, .ifact, button.i, .ipanel. In
+particular do NOT call it .why — that class already names the amber tag riding
+on a matched line inside a code snippet, and a bare .why rule reaches it too.
+
+WHAT MAY GO BEHIND THE BUTTON, AND WHAT MAY NOT
+This is the line the whole product rests on, and getting it wrong breaks the
+tool rather than making it untidy.
+
+  STAYS ON THE PAGE   the fact, the number and the names. "1 file is of a type
+                      Ripple does not open — .ipynb". "4 production tables at
+                      risk". "2 gaps in what Ripple could see."
+  MAY GO BEHIND THE i the explanation of why that fact matters, what Ripple did
+                      about it, and what somebody should do next.
+
+Somebody who never presses the button still sees everything Ripple knows it
+missed. They lose the reasoning, never the fact. If you find yourself moving a
+count, a table name, or a warning that something was not read behind the button,
+stop — that one stays out.
+
+Cut the words on the page down to the fact and the number. A card that reads
+heading, paragraph, finding becomes heading, finding, i. That is the pattern for
+every screen in Phases 10 and 11, and it is not optional: this front end carried
+2,800 words on nine screens, and most of them were the middle paragraph.
+
+The test that holds the line is Codebase/tests/test_screen_details.py. It walks
+every why() call in app.js, blanks out the explanation arguments, and then looks
+for each count and each warning in what is left. If one of them survives only
+inside a panel, it has been hidden, and the test says which.
 ````
 
 **Check it worked.** Start the server and open the address — do not open
@@ -4715,10 +4798,15 @@ Build the first part of web/app.js — plain JavaScript, no framework, no build
 step. I will paste Phase 11 underneath it, so end this part cleanly and do
 not write a closing boot block yet.
 
+Every card on these screens says the fact and puts the reasoning behind the
+information button from Phase 9 — why(fact, label, ...explanation). Read the
+line in Phase 9 about what may go behind it before you write a word of copy: the
+count, the table name and the warning stay on the page, always.
+
 STRUCTURE
 A single state object S: {step, maxStep, view, mode, health, vals,
 emailPreview, scan, summary, reply, savedId, manRows, man, busy, busyWhat,
-openGroup, openRow, graphTab, prod}. A render() that clears the view, clones
+openGroup, openRow, graphTab, prod, why}. A render() that clears the view, clones
 the template for the current step and calls the function for it. Small
 helpers: $, $$, el(tag, props, ...children), x(root, name) for the data-x
 hooks, api(path, opts) that throws with the server's own message — the server
@@ -4928,9 +5016,14 @@ above each section.
   without a word reads as "there were only these".
   Give it a counted card as well — "Published tables that stop refreshing", from
   stats.productionStopsLoading, sub-line "Their columns do not change — their
-  data stops" — in a second row under "What the change reaches". Never add it
+  data stops" — in "What the change reaches", second from the left. Never add it
   into "production tables at risk": one number covering two different kinds of
-  impact is a number that means neither.
+  impact is a number that means neither. Second from the left, not in a row of
+  its own underneath: a grid of its own holding one card strands the most
+  alarming number on the screen on a line by itself, looking like an
+  afterthought. Order that row worst first — production tables at risk,
+  published tables that stop refreshing, deliveries out of the warehouse, then
+  the rest — so the card that wraps to a second line is the mildest one.
 
   There is a second green note on this screen and it has a rule of its own. The
   "Every file was opened and read — nothing was skipped, and nothing was left for
@@ -4958,11 +5051,14 @@ above each section.
     Types Ripple does not open the counts in fileTypesUnopened added up — the
                                extensions
 
-  Lay them out in the five-column row when there are more than three of them and
-  the three-column row otherwise. A trail Ripple gave up on is not a trail that
-  ended, and a table it cannot see inside is not a table it has read. Leave
-  either off this row and a result built on half a picture looks, number for
-  number, exactly like one built on the whole picture.
+  Lay them out in the SAME grid as the row above — five columns, three below
+  1500px, two below 900px — so a card is the same size wherever it sits and a
+  short row leaves the rest of the row empty. A row with its own column count
+  stretches two cards to half the page each while five narrow ones sit directly
+  above them. A trail Ripple gave up on is not a trail that ended, and a table it
+  cannot see inside is not a table it has read. Leave either off this row and a
+  result built on half a picture looks, number for number, exactly like one
+  built on the whole picture.
 
 STEP 5 — the dependency map. A tab per attribute. The upstream source as a
 dark card on the left, and the branches to its right, each a row of boxes
@@ -5165,9 +5261,15 @@ it — and confirm the typo comes back named.
 These sit BESIDE the findings, never on another screen. A caveat one click away
 from the answer it qualifies is a caveat nobody reads.
 
-* **How much of this Ripple could see** — the coverage counts, at the top of
+* **Where Ripple could not see through** — the coverage counts, at the top of
   "how to check this result", plus a second badge next to the risk word reading
-  either "whole trail seen" or "N gaps in what Ripple could see".
+  either "whole trail seen" or "N gaps in what Ripple could see". Put no count
+  in that heading: it would be counting KINDS of gap, above lines that count
+  files and findings, so "1 place ... 3 files" reads as two numbers for one
+  thing. Write every one of those lines twice, for one and for many. Printed
+  plural-only they read "1 findings are on a line" and "1 trails were still
+  going", which is how a careful tool sounds careless on the one screen where
+  care is what it is selling.
 * **Column not found** — when lookupFailed, the headline badge reads "Column not
   found — nothing was checked" instead of a risk word, and the attribute panel
   prints back the columns Ripple DID read on that table.

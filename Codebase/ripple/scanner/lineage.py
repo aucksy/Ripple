@@ -247,6 +247,13 @@ class ScanResult:
     graphs: list[dict] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     unreadable: list[dict] = field(default_factory=list)
+    # How many of those unreadable files actually mention one of the names being
+    # followed. The coverage line used to say "N files mention these names and
+    # could not be read" about every file in the repository the parser choked
+    # on, which on a clean scan printed "3 files mention these names" directly
+    # above a row saying the attribute was named in one file and nowhere else.
+    # Those two cannot both be true.
+    unreadable_on_topic: int = 0
     mentions_only: list[dict] = field(default_factory=list)
     # Files that were never opened at all, which is a different and worse thing
     # than a file that was read and not understood. A scan over a repository
@@ -389,28 +396,48 @@ class ScanResult:
         number on a guess, which is the one thing this tool may not do. The
         files ratio IS real, because both halves are files Ripple listed.
         """
+        # Each line is written twice, for one and for more than one. Printed
+        # plural-only these read "1 findings are on a line" and "1 trails were
+        # still going", which is the sort of thing that makes a careful tool
+        # look careless on the exact screen where care is what it is selling.
+        on_topic = min(self.unreadable_on_topic, len(self.unreadable))
         gaps = [
-            (len(self.unreadable), "files mention these names and could not be read"),
+            (len(self.unreadable),
+             "file could not be read" + (
+                 f", and it mentions these names" if on_topic else ""),
+             "files could not be read" + (
+                 f", and {on_topic} of them mention these names" if on_topic else "")),
             (len(self.held_online) + len(self.too_long),
+             "file was never opened at all",
              "files were never opened at all"),
             (len(self.star_tables),
+             "table on the trail is built with SELECT *, so its column list is "
+             "written down nowhere",
              "tables on the trail are built with SELECT *, so their column list is "
              "written down nowhere"),
             (len(self.cut_short),
+             "trail was still going when Ripple reached its hop limit",
              "trails were still going when Ripple reached its hop limit"),
             (len([f for f in self.findings if f.inferred_hops]),
+             "finding sits past one of those points and is worked out rather than read",
              "findings sit past one of those points and are worked out rather than read"),
             (len(self.merged_names),
+             "name here stands for more than one table, and the SQL does not say which",
              "names here stand for more than one table, and the SQL does not say which"),
             (len([f for f in self.findings if not f.certain]),
+             "finding is on a line that did not say which table the column came from",
              "findings are on a line that did not say which table the column came from"),
             (len(self.skipped_in_folders),
+             "code file was walked past because of the folder it sits in",
              "code files were walked past because of the folder they sit in"),
             (sum(self.file_types_unopened.values()),
+             "file is of a type Ripple does not open, so anything written in "
+             "it was never read",
              "files are of a type Ripple does not open, so anything written in "
              "them was never read"),
         ]
-        found = [{"count": n, "what": what} for n, what in gaps if n]
+        found = [{"count": n, "what": one if n == 1 else many}
+                 for n, one, many in gaps if n]
         return {
             "complete": not found,
             "gaps": found,
@@ -1164,6 +1191,8 @@ def trace(
     # file that was never OPENED is not restricted that way -- nothing can say
     # whether it mentions the name, which is exactly the problem with it.
     opened = {f.path for f in index.files}
+    res.unreadable_on_topic = len([u for u in res.unreadable
+                                   if u.get("file") in matched_files])
     unread_on_topic = (any(u.get("file") in matched_files for u in res.unreadable)
                        or any(u.get("file") not in opened for u in res.unreadable)
                        or bool(res.held_online) or bool(res.too_long)
