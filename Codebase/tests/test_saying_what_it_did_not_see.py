@@ -151,7 +151,12 @@ def test_a_trail_with_an_invisible_table_on_it_says_so(tmp_path):
         "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM mid;"})
     cov = out["coverage"]
     assert cov["complete"] is False, cov
-    assert any("SELECT *" in g["what"] for g in cov["gaps"]), cov
+    # Pinned on the meaning, not on one sentence. This line is written for
+    # somebody reading a scan for the first time, so its wording changes; what
+    # may never change is that the coverage list says a table on the way hides
+    # what its columns are called.
+    assert any("every column at once" in g["what"] or "SELECT *" in g["what"]
+               for g in cov["gaps"]), cov
     assert out["risk"] == "medium", "the risk word itself must not move"
 
 

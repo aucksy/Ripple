@@ -447,9 +447,9 @@ function productionCheck(r) {
           ? `The pattern ${dead[0].given} matches no table in this repository`
           : `${dead.length} of ${mine} match no table here — ${dead.map(d => d.given).join(', ')}` }),
         'patterns that match nothing',
-        (dead.length === 1 ? 'It is' : 'They are') + ' doing nothing at all. If your published '
-        + 'tables are not named that way, every finding will be reported as reaching a table '
-        + 'Ripple cannot call production — and the headline will read far calmer than the truth.')));
+      'A pattern that matches nothing does nothing. If your published tables are named some '
+      + 'other way, Ripple will not count any of them as published, and the result will look '
+      + 'safer than it is. Correct the list above.')));
   }
   const live = (c.patterns || []).filter(x => x.matches);
   if (live.length) {
@@ -592,8 +592,8 @@ function step1(root) {
     confirm.append(why(
       el('b', { textContent: 'Nothing is scanned until you confirm.' }),
       'confirming before a scan',
-      'Whatever is read out of the email is shown to you first, and every field is '
-      + 'editable. The scan runs on what is on that screen, not on the email.'));
+      'Ripple shows you everything it read out of the email first, and every field can be '
+      + 'edited. The scan then uses what is on that screen — not the email.'));
     const drop = $('#drop', root), file = $('#file', root);
     drop.onclick = () => file.click();
     drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
@@ -610,7 +610,7 @@ function step1(root) {
   x(root, 'noAi').append(why(
     el('b', { textContent: 'No AI used in this mode.' }),
     'what happens without AI',
-    'Ripple scans on exactly what you type. Nothing is sent to any model.'));
+      'Ripple searches for exactly the names you type. Nothing is sent anywhere.'));
   const rows = x(root, 'manRows');
   rows.innerHTML = '';
   S.manRows.forEach((r, i) => {
@@ -937,10 +937,10 @@ function step3(root) {
     ready.append(el('div', { className: 'note warn', style: 'margin-top:12px' },
       why(el('b', { textContent: 'Nobody has said which tables you publish.' }),
         'before you scan, what counts as published',
-        `Ripple is guessing from names ending ${h.production}. If your published tables are `
-        + 'not named that way, this scan will report every finding as reaching a table it '
-        + 'cannot call production, and the headline will read far calmer than the truth. '
-        + 'Set the real list on Settings & checks.')));
+      `Ripple treats a table as published only if its name matches this rule, and right now `
+      + `that rule is a guess: ${h.production}. If your published tables are named some other `
+      + 'way, this scan will say nothing published is affected even when something is. Set the '
+      + 'real list on Settings & checks first.')));
   }
   if (h.repo.inSkippedDirs) {
     const box = el('div', { className: 'note warn', style: 'margin-top:12px' });
@@ -948,9 +948,9 @@ function step3(root) {
       el('b', { textContent: `${h.repo.inSkippedDirs} file${h.repo.inSkippedDirs === 1 ? '' : 's'} `
         + 'skipped — in ' + (h.repo.skippedDirNames || []).join(', ') }),
       'folders Ripple skips',
-      'In most repositories those hold generated output, so Ripple walks past them. If '
-      + 'yours holds real pipeline code, none of it has been read, and nothing in it can '
-      + 'appear in a result.'));
+      'Folders with these names usually hold generated copies of code, so Ripple walks past '
+      + 'them. If your real pipeline lives in one, none of it was read and none of it is in '
+      + 'this answer.'));
     ready.append(box);
   }
 
@@ -974,8 +974,9 @@ function step3(root) {
         why(el('span', { textContent: `${h.repo.runsSqlFrom} of these run SQL kept in a `
           + 'separate .sql file' }),
           'files that run SQL from elsewhere',
-          'Those .sql files were read on their own account, so nothing is lost. Any that name '
-          + 'a file which is not in this repository are listed as gaps after a scan.')));
+      'These files hold no SQL of their own — they run a .sql file kept beside them. Ripple '
+      + 'read those .sql files separately, so nothing is lost. If one of them points at a file '
+      + 'that is not in this repository, the result will say so.')));
     }
     // File types Ripple does not open. Nothing recorded these before — the walk
     // had a bare `continue` with no counter — so a repository whose pipeline is
@@ -991,9 +992,9 @@ function step3(root) {
           + `${total === 1 ? 'is' : 'are'} of a type Ripple does not open — `
           + h.repo.unknownExt.map(k => `${k.ext} · ${k.files}`).join(', ') }),
           'file types Ripple does not open',
-          'Ripple opens SQL and the file types that normally hold SQL. It does not look '
-          + 'inside these at all, so nothing written in them can appear in any answer. If one '
-          + 'of them holds your pipeline, it can be added.')));
+      'Ripple opens SQL files and the file types that usually hold SQL. It did not look inside '
+      + 'these at all, so nothing written in them can appear in any answer. If part of your '
+      + 'pipeline lives in one of these types, ask whoever set Ripple up to add it.')));
     }
   }
 
@@ -1027,10 +1028,9 @@ function step3(root) {
         el('b', { textContent: `${cat.gaps.length} table${cat.gaps.length === 1 ? '' : 's'} `
           + `here ${cat.gaps.length === 1 ? 'has' : 'have'} no column list written down` }),
         'tables with no column list',
-        'A scan still follows your attribute through these — a SELECT * carries every column, '
-        + 'so the trail does not stop here. What Ripple cannot do is name the columns inside '
-        + 'them, so every step past one is marked on the result as worked out rather than read. '
-        + 'This is a fact about how the code is written, not a gap in the scan.'));
+      'These tables take every column at once, so the code never writes down what their '
+      + 'columns are called. Your attribute still travels through them and the scan follows '
+      + 'it. What Ripple cannot promise is the name it carries on the other side.'));
       box.append(names);
       g.append(box);
     } else if (!cat.tableCount) {
@@ -1200,11 +1200,11 @@ function gitHubForm(h, live) {
     why(el('b', { textContent: 'The token is never written to disk, and never sent back to '
         + 'this page.' }),
       'where the token goes',
-      'It is sent to GitHub and held in this server’s memory for as long as it is running. '
-      + 'It is never logged.',
+      'Your token is sent to GitHub and held in memory while the server runs. It is never '
+      + 'written to a file, never logged, and never sent back to this page.',
       h.serverless
-        ? 'This copy is running on a serverless host, where the server is replaced often — set '
-          + 'the token as an environment variable there so it lasts.'
+        ? 'This copy runs on a host that replaces its machine often. Ask whoever runs it to '
+          + 'set the token on the server so it lasts.'
         : 'Restart the server and you will need to enter it again.')));
   return card;
 }
@@ -1318,9 +1318,9 @@ function step4(root) {
   done.append(el('div', { className: 'small muted', style: 'margin-top:10px' },
     why(el('span', { textContent: `Ripple read these ${sc.filesScanned} files and nothing else.` }),
       'what "nothing found" covers',
-      'Anything below means "nothing in this repository" — not "nothing anywhere". A job in '
-      + 'another repository, a scheduled query, or a dashboard built straight on the table is '
-      + 'outside what Ripple can see.')));
+      'Ripple only read this repository. Something it did not find here could still exist in '
+      + 'another repository, in a scheduled query, or in a dashboard built straight on the '
+      + 'table.')));
   x(root, 'progress').append(done);
 
   const st = sc.stats;
@@ -1472,13 +1472,13 @@ function step4(root) {
       why(el('b', { textContent: clear
           ? 'Nothing in this repository uses these attributes'
           : `Nothing Ripple could read uses these attributes — ${gaps} gap${gaps === 1 ? '' : 's'} below` }),
-        'what a clean result rests on',
-        clear
-          ? 'No table is built from them, and no code reads them. Check the list below to '
-            + 'confirm the names were the right ones.'
-          : 'No table Ripple could read is built from them, and no code it could read uses '
-            + 'them. The gaps listed below are places it could not see through, so this is '
-            + 'not the same as "nothing uses them". Check the names, then check the gaps.')));
+        'what a clean result means',
+      clear
+        ? 'Nothing here builds a table from these attributes, and nothing here reads them. '
+          + 'Worth checking that the names below are the ones you meant.'
+        : 'Nothing that Ripple could read uses these attributes. But there are places it could '
+          + 'not see into, listed below, so this is not the same as "nothing uses them". Check '
+          + 'the names first, then check those gaps.')));
   }
   // With nothing on the production list, the first table the change reaches is
   // the most important thing on the screen, so it opens rather than sitting
@@ -1494,10 +1494,9 @@ function step4(root) {
       why(el('b', { textContent: `The change reaches ${reached.length} more table${reached.length === 1 ? '' : 's'}, `
           + `${sc.groups.length ? 'beyond the ones above' : 'none of them on your published list'}` }),
         'why these are not called production',
-        `Ripple only calls a table production when it is on the published-table list — `
-        + `currently ${S.health?.production || 'not set'}. Nothing below is on it, so Ripple `
-        + 'cannot tell you whether anyone outside your team reads these. If they are your '
-        + 'published tables, add them on the settings screen and run the scan again.')));
+      'Ripple calls a table published only when its name is on your published-table list. '
+      + 'These are not on it, so Ripple cannot tell you whether anyone outside your team reads '
+      + 'them. If they are yours, add them on Settings & checks and scan again.')));
     drawGroups(groups, reached, 'r', 'Chain ends here', 'background:var(--amber);color:#fff',
                'table the chain ends at', 'tables the chain ends at');
   }
@@ -1520,11 +1519,12 @@ function step4(root) {
         ? 'A real usage, in code that builds no table.'
         : 'Real usages, in code that builds no table.' }),
       'usages that build no table',
-      'The attribute is read here, but this code writes no table Ripple can name — a bare '
-      + 'query, or a job whose destination is set somewhere it cannot see.',
+      'The attribute is read here, but this code creates no table Ripple can name — it is a '
+      + 'plain query, or the destination is set somewhere Ripple cannot see. These are real '
+      + 'usages all the same.',
       exports
-        ? `${exports === 1 ? 'One of these delivers' : `${exports} of these deliver`} a file out `
-          + 'of the warehouse instead; the destination is named on the row and again below.'
+        ? `${exports === 1 ? 'One of these writes' : `${exports} of these write`} a file out of `
+          + 'the warehouse instead. The destination is on the row, and again further down.'
         : null));
     other.forEach((r, ri) => {
       const key = `o${ri}`, ro = S.openRow === key;
@@ -1576,9 +1576,8 @@ function drawGroups(box, list, prefix, tag, tagStyle, one, many) {
     el('span', { className: 'lbl', textContent:
       `${rest.length} more ${rest.length === 1 ? one : many}` }),
     'why only ' + GROUPS_DRAWN + ' are drawn as cards',
-    `The ${GROUPS_DRAWN} with the most impacts are shown above, opened one at a time. The rest `
-    + 'are named here with their counts — nothing has been left out of the analysis, only out '
-    + 'of the cards.'));
+      `Every table is still counted in the analysis. Only the ${GROUPS_DRAWN} with the most `
+      + 'impacts get a card of their own; the rest are named here with their counts.'));
   const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
   rest.forEach(g => chips.append(el('span', { className: 'chip mono',
     textContent: `${g.prod} · ${g.rows.length}` })));
@@ -1674,10 +1673,9 @@ function renderCoverage(box, sc) {
     card.append(why(
       el('b', { textContent: 'Every step of every trail above was read out of the SQL' }),
       'what "every step was read" means',
-      'No file that mentions these names went unread, no table on the way was built with a '
-      + 'SELECT *, no trail was still going when Ripple stopped, and nothing above is worked '
-      + `out rather than read. That is true of these ${sc.filesScanned} files and of nothing `
-      + 'outside them.'));
+      'Ripple read the real SQL for every step of every trail above. Nothing was skipped, '
+      + 'guessed at, or cut short. That is true of the files it read, and of nothing outside '
+      + 'them.'));
     box.append(card);
     return;
   }
@@ -1692,9 +1690,9 @@ function renderCoverage(box, sc) {
   card.append(why(
     el('span', { className: 'lbl', textContent: 'Where Ripple could not see through' }),
     'why these are counts and not a score',
-    'The answer above rests on these. They are listed as counts rather than as a score, '
-    + 'because there is no honest way to say what share of the whole trail they are — and a '
-    + 'made-up share would put a precise number on a guess.'));
+      'Each of these is somewhere Ripple could not see through. They are given as counts, not '
+      + 'as a percentage: nobody knows how big the whole picture is, so a percentage would be '
+      + 'made up.'));
   card.append(list);
   box.append(card);
 }
@@ -1706,9 +1704,8 @@ function renderChecks(box, sc) {
   card.append(el('div', { className: 'chead' },
     why(el('b', { textContent: 'Every attribute you asked about' }),
       'how to check a scan',
-      `Searched ${sc.filesScanned} file${sc.filesScanned === 1 ? '' : 's'}. An attribute nobody `
-      + 'writes down anywhere is the usual reason a scan comes back clean, so this is the first '
-      + 'place to look when a result seems too quiet.')));
+      'If a result looks too quiet, start here. An attribute that is not written down anywhere '
+      + 'in your code is the usual reason a scan comes back clean.')));
   const p = el('div', { className: 'pad lg' });
   rows.forEach(a => {
     const used = a.found > 0;
@@ -1750,15 +1747,14 @@ function renderChecks(box, sc) {
       box.append(why(
         el('b', { textContent: `Nothing was checked for ${a.attr}.` }),
         'nothing was checked for ' + a.attr,
-        cols.length
-          ? `Ripple read ${a.table} and never met a column called ${a.attr} on it, or on `
-            + 'anything else here. If one of the columns listed is the one you meant, scan '
-            + 'again for that name — everything below is about a name that is not in this '
-            + 'repository.'
-          : `Ripple never met a column called ${a.attr} anywhere here — and it has no column `
-            + `list for ${a.table} either, because nothing in this repository writes one down. `
-            + 'So this is not "the column has no impact"; it is "Ripple could not check". '
-            + 'Check the spelling, and check that the table is built in this repository at all.'));
+      cols.length
+        ? `Ripple read ${a.table} and never found a column called ${a.attr} — on it, or on `
+          + 'anything else here. The columns it did find are listed below. If one of those is '
+          + 'the one you meant, scan again for that name.'
+        : `Ripple never found a column called ${a.attr} anywhere here, and nothing in your code `
+          + `writes down what the columns of ${a.table} are. So this is not "that column is `
+          + 'safe" — it is "Ripple could not check". Check the spelling, and check that this '
+          + 'table is built in this repository at all.'));
       if (cols.length) {
         box.append(el('div', { className: 'small', style: 'margin-top:8px;line-height:1.55' },
           `What Ripple did read on ${a.table}: `, el('span', { className: 'mono', textContent: cols.join(', ') })));
@@ -1770,8 +1766,8 @@ function renderChecks(box, sc) {
         why(el('span', { textContent: `Ripple stopped at ${sc.maxHops} renames — the trail had `
           + 'not finished.' }),
           'a trail that was cut short',
-          'Whether it reaches a published table is not something this scan can tell you. '
-          + 'There is a button above to follow it further.')));
+      'Whether it ends at a published table is not something this scan can tell you. Use the '
+      + 'button above to follow it further.')));
     }
     if ((a.notVisible || []).length) {
       // Both counts stay on the page. Only the "why" moved.
@@ -1798,8 +1794,8 @@ function renderChecks(box, sc) {
           why(el('span', { textContent: `"${a.attr}" is a column name in ${a.nameInTables} of the `
             + `${a.tablesRead} tables Ripple could read.` }),
             'a column name that is everywhere',
-            `The findings below follow it out of ${a.table} only, so a long list here is the `
-            + 'name being common rather than the change being bigger.')));
+      `Plenty of tables use this column name. The findings only follow it out of ${a.table}, so `
+      + 'a long list here means the name is common — not that the change is bigger.')));
       }
     }
     if (a.uncertain) {
@@ -1807,8 +1803,9 @@ function renderChecks(box, sc) {
         why(el('span', { textContent: `${a.uncertain} of these `
           + `${a.uncertain === 1 ? 'is' : 'are'} marked "table not stated".` }),
           'rows where the table is inferred',
-          `The SQL did not say which table the ${a.attr} came from, and more than one table in `
-          + 'that statement has one. They are real usages on that line, with the table worked out.')));
+      `On these lines the SQL does not say which table the ${a.attr} came from, and more than `
+      + 'one table in the same statement has a column of that name. The usage is real; which '
+      + 'table it belongs to is Ripple\u2019s best guess.')));
     }
   });
   card.append(p);
@@ -1922,16 +1919,17 @@ function neverOpenedNote(heldOnline, tooLong) {
       textContent: `${total} file${total === 1 ? '' : 's'} here ${total === 1 ? 'was' : 'were'} `
         + 'never opened — ' + reasons.join(', ') }),
     'files that were never opened',
-    'Nothing in them was read, so nothing in them can appear in a result.',
-    heldOnline
-      ? 'To fix the OneDrive ones: in File Explorer, right-click the repository folder and '
-        + 'choose "Always keep on this device", wait for OneDrive to finish, then read the '
-        + 'repository again.'
-      : null,
-    tooLong
-      ? 'To fix the long paths: move the repository nearer the top of the drive — C:\\repo '
-        + 'rather than a deep folder inside Documents — then read it again.'
-      : null));
+      'Nothing in these files was read, so nothing in them can appear in this answer.',
+      heldOnline
+        ? 'OneDrive is keeping them in the cloud rather than on this machine. To fix it: '
+          + 'right-click the repository folder in File Explorer, choose "Always keep on this '
+          + 'device", wait for OneDrive to finish, then read the repository again.'
+        : null,
+      tooLong
+        ? 'Windows cannot open a file whose path is this long. To fix it: move the repository '
+          + 'nearer the top of the drive — C:\\repo rather than a deep folder inside '
+          + 'Documents — then read it again.'
+        : null));
   return note;
 }
 
@@ -1969,9 +1967,9 @@ function renderNeverOpened(box, sc) {
             + `${skipped === 1 ? 'was' : 'were'} skipped — in `
             + (S.health.repo.skippedDirNames || []).join(', ') }),
         'files skipped for the folder they are in',
-        'In most repositories those folders hold generated output, so Ripple walks past them. '
-        + 'If yours holds real pipeline code, nothing in it has been read and nothing in it can '
-        + 'appear in a result.')));
+      'Folders with these names usually hold generated copies of code, so Ripple walks past '
+      + 'them. If your real pipeline lives in one, nothing in it was read and nothing in it can '
+      + 'appear in this answer.')));
   }
 }
 
@@ -1994,9 +1992,9 @@ function renderTrailGaps(box, sc) {
         + 'stopped because of a setting, not because the code ran out' }),
       'trails cut short',
       `Ripple follows a column through ${sc.maxHops} renames and then stops. `
-      + `${sc.cutShort.length === 1 ? 'This trail was' : 'These trails were'} still going. `
-      + 'Anything past this point has not been looked at, so "does not reach a published '
-      + 'table" is not something this result can tell you about them.'));
+      + `${sc.cutShort.length === 1 ? 'This one had' : 'These had'} not finished. Anything past `
+      + 'that point was never looked at, so this result cannot tell you whether they reach a '
+      + 'published table.'));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
     sc.cutShort.forEach(c => chips.append(el('span', { className: 'chip mono',
       textContent: `${c.table} · ${c.attr}` })));
@@ -2007,8 +2005,8 @@ function renderTrailGaps(box, sc) {
       again.onclick = () => runScan(deeper);
       card.append(el('div', { style: 'margin-top:14px' },
         why(again, 'what following them deeper costs',
-          'This runs the same scan again on the code already read — no files are read a second '
-          + 'time. It changes nothing on the settings screen.')));
+      'This runs the scan again on code Ripple has already read. No file is opened a second '
+      + 'time, and nothing on the settings screen changes.')));
     }
     box.append(card);
   }
@@ -2031,19 +2029,19 @@ function renderTrailGaps(box, sc) {
       el('b', { style: 'font-size:14px', textContent:
         `${n} table${n === 1 ? '' : 's'} on this trail ${n === 1 ? 'has' : 'have'} no column list to read` }),
       'tables with no column list on the trail',
-      (stars && copies.length
-        ? 'Some are built with SELECT *, and some are a whole table copied or renamed into another. '
+      (copies.length && stars
+        ? 'Some of these take every column at once with a SELECT *; the rest are a whole table '
+          + 'copied or renamed into another. '
         : copies.length
-        ? `${n === 1 ? 'It is' : 'They are'} a whole table copied or renamed into another. `
-        : `${n === 1 ? 'It is' : 'They are'} built with SELECT *. `)
-      + 'Either way every column travels and none of them is written down. The attribute really '
-      + 'does go through — so Ripple follows it, and marks every step past that point as worked '
-      + 'out rather than read. What it cannot promise is that the column is still called the '
-      + 'same thing on the far side.',
+        ? 'These are a whole table copied or renamed into another. '
+        : 'These take every column at once with a SELECT *. ')
+      + 'Either way the code never writes down what their columns are called. Your attribute '
+      + 'really does travel through — what Ripple cannot promise is the name it carries on the '
+      + 'other side.',
       holes.length
-        ? 'Some of these do not say SELECT * at all. The file writes a placeholder where the '
-          + 'column list goes and the job fills it in when it runs, so the list is never in the '
-          + 'file to read.'
+        ? 'Some of these do not say SELECT * at all. The file leaves a gap where the column '
+          + 'list goes and the job fills it in when it runs, so the list is never in the file '
+          + 'to read.'
         : null));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
     sc.starTables.forEach(s => chips.append(el('span', { className: 'chip mono',
@@ -2064,13 +2062,12 @@ function renderTrailGaps(box, sc) {
       el('span', { className: 'lbl', textContent:
         `${n} table name${n === 1 ? '' : 's'} here may stand for more than one table` }),
       'one name, more than one table',
-      'Ripple followed all of them, because missing a chain is worse than showing a row you '
-      + 'can dismiss by opening the file. Findings under these names may be about either '
-      + 'table, so check before acting on one.',
+      'Two different tables here share a name. Ripple followed both, so nothing is missed — but '
+      + 'a finding under this name could be about either one. Open the file to check before '
+      + 'you act on it.',
       sc.mergedNames.some(m => m.reason === 'capitals')
-        ? 'BigQuery treats capitals as significant, so two names differing only by case really '
-          + 'are two tables there. Ripple cannot tell whether that is what your code means or '
-          + 'just how it was typed.'
+        ? 'BigQuery treats capital letters as significant, so two names that differ only in '
+          + 'case really are two different tables there.'
         : null));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
     sc.mergedNames.forEach(m => chips.append(el('span', { className: 'chip mono',
@@ -2093,9 +2090,9 @@ function renderTrailGaps(box, sc) {
       el('span', { className: 'lbl', textContent:
         `${n} table${n === 1 ? '' : 's'} here ${n === 1 ? 'is' : 'are'} read through a wildcard, not by name` }),
       'tables read through a wildcard',
-      'The SQL asks for a whole family of date-sharded tables at once. The table you scanned '
-      + 'falls inside that family, so the usages below are real — but the file never says which '
-      + 'shard, and the same query reads the others too. A fix has to cover all of them.'));
+      'The query asks for a whole family of dated tables at once instead of naming one. The '
+      + 'table you scanned is inside that family, so these usages are real — but the same '
+      + 'query reads the others too, so a fix has to cover all of them.'));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
     sc.wildcardNames.forEach(w => chips.append(el('span', { className: 'chip mono',
       textContent: `${w.table} — matched by ${w.patterns.join(', ')}` })));
@@ -2111,11 +2108,10 @@ function renderTrailGaps(box, sc) {
         why(el('b', { textContent: 'Some of these are the family name, not a shard — '
             + loose.map(w => `${w.table} vs ${w.shorthand.join(', ')}`).join('; ') }),
           'the family name, not a shard',
-          'BigQuery would not match those — the separator before the asterisk is required, so '
-          + 'no real query reads a table by that exact name. Ripple matched it because you most '
-          + 'likely meant the family, and the alternative is a clean "no impact" on a name that '
-          + 'is genuinely used. Every row from it is marked "table not stated". If you meant one '
-          + 'shard, scan for its full name.')));
+      'You scanned the family name rather than one dated table. A real query cannot read a '
+      + 'table by that exact name, so Ripple matched the whole family instead — which is a '
+      + 'guess about what you meant. Every row from it is marked "table not stated". To be '
+      + 'exact, scan for the full name of one table.')));
     }
     box.append(card);
   }
@@ -2132,9 +2128,9 @@ function renderTrailGaps(box, sc) {
       el('span', { className: 'lbl', textContent:
         `${n} table${n === 1 ? '' : 's'} here ${n === 1 ? 'is' : 'are'} built from scratch in more than one file` }),
       'a table built in two files',
-      'Each of those files replaces the whole table, so only one of them can be the one that '
-      + 'runs — and nothing in the code says which. Ripple followed all of them. Check which '
-      + 'file your scheduler actually runs before acting on a finding from one of these.'));
+      'Two files each build this table from scratch, so only one of them can be the one that '
+      + 'really runs — and the code does not say which. Ripple followed both. Check what your '
+      + 'scheduler actually runs before acting on a finding from one of them.'));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
     sc.twoDefinitions.forEach(t => chips.append(el('span', { className: 'chip mono',
       textContent: `${t.table} — ${t.files.join('  and  ')}` })));
@@ -2154,10 +2150,9 @@ function renderTrailGaps(box, sc) {
       el('b', { style: 'font-size:14px', textContent:
         `${n} code file${n === 1 ? '' : 's'} ${n === 1 ? 'was' : 'were'} not read — in ${where}` }),
       'code in a skipped folder',
-      `Ripple skips ${where} because ${(sc.skippedFolderNames || []).length === 1 ? 'it usually holds' : 'they usually hold'} `
-      + 'build output. Nothing in there has been read, so nothing in there is in this answer. '
-      + "If your pipeline really runs from one of those folders — dbt's target/ holds the SQL "
-      + 'that actually runs — change the skip list on the settings screen and scan again.'));
+      `Folders called ${where} usually hold generated copies of code, so Ripple walks past `
+      + 'them. Nothing in there was read. If your pipeline really runs from one of them — '
+      + "dbt's target folder does — change the skip list on Settings & checks and scan again."));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
     sc.skippedInFolders.slice(0, 200).forEach(f => chips.append(
       el('span', { className: 'chip mono', textContent: f })));
@@ -2182,9 +2177,9 @@ function renderTrailGaps(box, sc) {
       el('b', { style: 'font-size:14px', textContent:
         `${total} file${total === 1 ? '' : 's'} ${total === 1 ? 'is' : 'are'} of a type Ripple does not open` }),
       'file types not opened by this scan',
-      'Ripple opens SQL, and the file types that normally hold SQL. It did not look inside these '
-      + 'at all, so if the chain passes through one of them this answer stops there and does not '
-      + 'say so anywhere else. Notebooks and Terraform files are the usual ones to check.'));
+      'Ripple opens SQL files and the file types that usually hold SQL. It did not look inside '
+      + 'these at all. If part of your chain sits in one of them, the answer stops there. '
+      + 'Notebooks and Terraform files are the usual ones to check.'));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
     sc.fileTypesUnopened.slice(0, 40).forEach(t => chips.append(
       el('span', { className: 'chip mono', textContent: `${t.ext || 'no extension'} — ${t.count}` })));
@@ -2210,11 +2205,14 @@ function renderTrailGaps(box, sc) {
         `${n} table${n === 1 ? '' : 's'} here ${n === 1 ? 'is' : 'are'} named after ${n === 1 ? 'its' : 'their'} file, not by the SQL` }),
       'tables named after their file',
       (dbt === n
-        ? `These files are ${tools} models. Such a model is a query with no CREATE in front of it, and the tool that runs it names the table after the file. `
+        ? `These are ${tools} models. A model is a query with no CREATE in front of it, and the `
+          + 'tool that runs it names the table after the file. '
         : dbt
-        ? `Some are ${tools} models; the rest are files holding one query and no CREATE. Whatever runs them puts the rows somewhere named after the file. `
-        : 'Each file holds one query and no CREATE. Whatever runs it puts the rows somewhere, and every tool that works this way names it after the file. ')
-      + 'So the table name is not written in the file. Open it and you will see the query, not the name.'));
+        ? `Some are ${tools} models; the rest hold one query and no CREATE. Whatever runs them `
+          + 'puts the rows in a table named after the file. '
+        : 'Each of these files holds one query and no CREATE. Whatever runs it puts the rows in '
+          + 'a table named after the file. ')
+      + 'So you will not find the table name written inside the file — only the query.'));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
     sc.namedByFile.forEach(t => chips.append(el('span', { className: 'chip mono',
       textContent: `${t.table} — from ${t.file}` })));
@@ -2235,10 +2233,10 @@ function renderTrailGaps(box, sc) {
       el('span', { className: 'lbl', textContent:
         `${n} statement${n === 1 ? '' : 's'} here ${n === 1 ? 'is' : 'are'} written as text and run, not written as SQL` }),
       'SQL written as text and run',
-      'The file puts the whole statement in quotes and hands it to the warehouse to run. '
-      + 'Ripple read what is inside the quotes, so the trail carries on through it — but the '
-      + 'line below is a quoted string. Open it and you will see the text, not the statement '
-      + 'the row describes. Anything added to that text when the job runs is not covered here.'));
+      'The file keeps the whole statement inside quotes and hands that text to the warehouse to '
+      + 'run. Ripple read what is inside the quotes, so the trail carries on. But open that '
+      + 'line and you will see a quoted string, not the statement — and anything added to the '
+      + 'text while the job runs is not covered here.'));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
     sc.builtAsText.forEach(t => chips.append(el('span', { className: 'chip mono',
       textContent: `${t.file}:${t.line} — ${t.how} → ${t.table}` })));
@@ -2265,11 +2263,10 @@ function renderTrailGaps(box, sc) {
         + (named.length ? ` — ${named.length} name${named.length === 1 ? 's' : ''} the column itself` : '') }),
       'named here, but carried nowhere',
       (named.length
-        ? `The ${named.length} that name the column itself stop working on the day it changes. `
+        ? `The ${named.length} that name the column itself stop working the day it changes. `
         : '')
-      + 'None of them carries the column to another table, so none of them is on a chain '
-      + 'above. They are listed here because nothing else on this screen would have '
-      + 'mentioned them at all.'));
+      + 'None of these passes the column on to another table, so none of them is on a chain '
+      + 'above. They are listed because nothing else on this screen would mention them.'));
     const list = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
     rows.forEach(r => list.append(el('span', { className: 'chip mono', textContent:
       `${r.verb} ${r.kind} on ${r.table}`
@@ -2300,10 +2297,9 @@ function renderStopsLoading(box, sc) {
   card.append(why(
     el('b', { textContent: 'Not because a column of these changes.' }),
     'tables that stop being refreshed',
-    'The change stops the statement that fills them from running at all, so they '
-    + 'go on holding whatever they held yesterday. Nothing fails on the screen of '
-    + 'whoever reads them — the numbers are simply out of date, and stay out of '
-    + 'date until somebody fixes the job.'));
+      'The change stops the job that fills these tables from running at all, so they keep '
+      + 'whatever data they already held. Nobody sees an error — the numbers simply stop being '
+      + 'current, and stay that way until somebody fixes the job.'));
   rows.forEach(r => {
     const line = el('div', { style: 'margin-top:14px' });
     line.append(el('div', {},
@@ -2321,8 +2317,7 @@ function renderStopsLoading(box, sc) {
     card.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
       why(el('b', { textContent: 'This list was cut short — there may be more than these.' }),
         'why this list was cut short',
-        'Ripple stopped after looking at 400 tables downstream. It is saying so rather than '
-        + 'letting the list read as complete.')));
+      'Ripple stopped after looking 400 tables downstream, so there may be more than these.')));
   }
   box.append(card);
 }
@@ -2345,9 +2340,9 @@ function renderFeeds(box, sc) {
   card.append(why(
     el('b', { textContent: 'These are not tables — tell whoever reads them.' }),
     'deliveries out of the warehouse',
-    'The statement writes a file to a bucket, and whoever reads that file is '
-    + 'outside this repository — so nothing Ripple can scan will tell you who they '
-    + 'are. Tell them before the change ships.'));
+      'This writes a file to a bucket rather than a table. Whoever picks that file up is '
+      + 'outside this repository, so no scan can tell you who they are. Tell them before the '
+      + 'change goes live.'));
   rows.forEach(r => {
     const line = el('div', { style: 'margin-top:14px' });
     line.append(el('div', {},
@@ -2377,10 +2372,10 @@ function renderGaps(box, sc) {
     const p = el('div', { className: 'pad lg' });
     p.append(why(
       el('span', { className: 'prose', textContent: 'Not covered by the findings above.' }),
-      'why these need a person',
-      'Ripple either could not read these, or found your name in them somewhere it cannot '
-      + 'follow — inside a procedure call, a loop, or written as text. A clean result is only '
-      + 'as good as what could be followed.'));
+      'why a person has to read these',
+      'Ripple could not read these files, or found your column somewhere it cannot follow — '
+      + 'inside a procedure call, a loop, or written as text. Nothing in them is covered by the '
+      + 'findings above, so somebody has to open them.'));
     // The advice is usually the same sentence on every entry — "this repository
     // is being read as generic SQL", on sixty-eight files. Printed sixty-eight
     // times it stops being advice and becomes wallpaper the eye skips, taking
@@ -2426,8 +2421,8 @@ function renderGaps(box, sc) {
         el('span', { className: 'lbl', style: 'display:block;margin-top:20px',
           textContent: `${rest.length} more file${rest.length === 1 ? '' : 's'} to check by hand` }),
         'the rest of the check-by-hand list',
-        `The ${SHOWN} most likely to be SQL are given above with the line to open at. Every `
-        + 'remaining file is named here. None of them is covered by the findings.'));
+      `The ${SHOWN} most likely to hold SQL are shown above, each with the line to open. The `
+      + 'rest are named here. None of them is covered by the findings.'));
       const more = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
       rest.forEach(u => more.append(el('span', { className: 'chip mono', textContent: u.file })));
       p.append(more);
@@ -2477,12 +2472,12 @@ function step5(root) {
       why(el('b', { style: 'font-size:15px', textContent: clear
           ? 'No downstream lineage found'
           : `No downstream lineage found — ${gaps} gap${gaps === 1 ? '' : 's'} on the previous step` }),
-        'no lineage found',
-        clear
-          ? 'These attributes do not feed any table this team publishes.'
-          : 'These attributes do not feed any table this team publishes, out of what Ripple '
-            + 'could read. The gaps listed on the impact screen are places it could not see '
-            + 'through, so this picture is not the whole picture.')));
+        'what no lineage means',
+      clear
+        ? 'These attributes do not feed any table on your published-table list.'
+        : 'These attributes do not feed any table on your published-table list, out of what '
+          + 'Ripple could read. There are places it could not see into, listed on the impact '
+          + 'analysis step — so this picture may not be the whole picture.')));
     // The summary is written here, not on the summary step. Sending someone
     // straight on to step 6 left that screen with nothing to draw and two
     // buttons that did nothing -- which only ever happened on a clean result,
@@ -2538,9 +2533,8 @@ function step5(root) {
     card.append(el('div', { className: 'note info', style: 'margin-top:14px' },
       why(el('b', { textContent: `${all.length - DRAWN} of the ${all.length} branches are not drawn here.` }),
         'branches not drawn',
-        'Every one of them is in the findings on the previous step, grouped by published table. '
-        + 'The ones drawn above are those that reach a published table, longest first — drawing '
-        + 'all of them makes a picture nobody can read.')));
+      'Every branch is still in the findings on the previous step, grouped by published table. '
+      + 'The ones drawn here are the ones that reach a published table, longest first.')));
   }
   map.append(card);
   if (ends.length) {
@@ -2549,8 +2543,8 @@ function step5(root) {
           ? 'One of these branches ends at a table that is not on your published list.'
           : `${ends.length} of these branches end at a table that is not on your published list.` }),
         'branches that end off the published list',
-        'They are drawn because the change reaches them either way — Ripple simply cannot say '
-        + 'whether anyone outside your team reads them.')));
+      'The change reaches them either way. Ripple simply cannot tell you whether anyone outside '
+      + 'your team reads them, because they are not on your published-table list.')));
   }
 
   const legend = el('div', { className: 'legend' });
@@ -2562,8 +2556,8 @@ function step5(root) {
   map.append(el('div', { className: 'small muted', style: 'margin-top:12px' },
     why(el('span', { textContent: 'Each box is a table.' }),
       'reading this map',
-      'The alias is what the column is called at that point — that is the rename a word search '
-      + 'would miss.')));
+      'The alias is what your column is called at that point. That rename is exactly what a '
+      + 'plain search of the code would miss.')));
   x(root, 'next').onclick = () => makeSummary();
 }
 
@@ -2694,9 +2688,9 @@ function step6(root) {
     card.append(why(
       el('b', { style: 'font-size:14px', textContent: `${n} file${n === 1 ? '' : 's'} to check by hand` }),
       'the files a person still has to read',
-      'Ripple either could not read these, or found your name in them somewhere it cannot '
-      + 'follow. They are not covered by the findings above. Every line and reason is on the '
-      + 'impact analysis step.'));
+      'Ripple could not read these, or found your column somewhere it cannot follow. They are '
+      + 'not covered by the findings above. The line to open in each one is on the impact '
+      + 'analysis step.'));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
     S.scan.unreadable.forEach(u => chips.append(el('span', { className: 'chip mono',
       textContent: u.file })));
@@ -2797,11 +2791,10 @@ function historyView(root) {
       why(el('b', { textContent: 'Saved analyses do not survive here — copy out anything you '
           + 'need to keep.' }),
         'why saved analyses do not last here',
-        'This copy of Ripple runs on a serverless host, which replaces the machine behind '
-        + 'the site constantly and wipes anything saved on it. An analysis can vanish within '
-        + 'minutes, and the list can look different from one refresh to the next. Nothing is '
-        + 'broken and nothing is being deleted on purpose — there is simply nowhere permanent '
-        + 'to write.')));
+      'This copy runs on a shared host that replaces its machine constantly and wipes anything '
+      + 'saved on it. An analysis can disappear within minutes, and the list can look different '
+      + 'from one refresh to the next. Nothing is broken — there is simply nowhere permanent '
+      + 'to save.')));
   }
   const card = el('div', { className: 'card clip' });
   root.append(card);
@@ -2868,10 +2861,10 @@ function settingsView(root) {
     root.append(el('div', { className: 'note warn', style: 'margin:14px 0 24px' },
       why(el('b', { textContent: 'Nobody has said which tables you publish — Ripple is '
           + 'guessing from names ending _PROD, _PRD or _PUBLISHED.' }),
-        'what happens while nobody has said',
-        'If your published tables are not named that way, every finding will be reported as '
-        + 'reaching a table Ripple cannot call production, and the headline will read far '
-        + 'calmer than the truth.')));
+        'what happens until you set the list',
+      'If your published tables are named some other way, Ripple will not count any of them as '
+      + 'published. Every finding will be reported as reaching a table it cannot call '
+      + 'production, and the result will look safer than it is.')));
   } else {
     root.append(el('div', { style: 'height:24px' }));
   }
@@ -2942,11 +2935,11 @@ function aiCard(h) {
       on ? 'what is sent to the model' : 'what runs without a key',
       on
         ? (fromEnv
-          ? 'The key came from this server’s settings, so it survives restarts. Only the '
-            + 'notification text and the findings are sent — never your source code.'
-          : 'The key was typed in here. Only the notification text and the findings are sent — '
-            + 'never your source code.')
-        : 'Everything works; the wording is just plainer.')));
+          ? 'The key is set on the server, so it survives a restart. Only the notification text '
+            + 'and the findings are sent to the model — never your code.'
+          : 'Only the notification text and the findings are sent to the model — never your '
+            + 'code.')
+        : 'Ripple works exactly the same without a key. The wording it writes is just plainer.')));
 
   // ── the key ─────────────────────────────────────────────────────────────
   card.append(el('label', { className: 'lbl', style: 'display:block;margin:18px 0 7px',
@@ -3049,11 +3042,11 @@ function aiCard(h) {
     card.append(el('div', { className: 'note warn', style: 'margin-top:18px' },
       why(el('b', { textContent: 'A key typed in here is shared, and temporary.' }),
         'a key typed into a public copy',
-        'This copy of Ripple runs on a serverless host that anyone with the address can open. '
-        + 'While your key is loaded, other people using this site will be spending it, and it '
-        + 'disappears whenever the machine behind the site is replaced — often within minutes.',
-        'For anything beyond a demonstration, run Ripple on your own machine, or set the key '
-        + 'as an environment variable on the host so it is at least not typed into a public page.')));
+      'Anyone with this address can open this copy. While your key is loaded, other people '
+      + 'using the site are spending it — and it disappears whenever the host replaces the '
+      + 'machine, often within minutes.',
+      'For anything more than a demonstration, run Ripple on your own machine, or ask whoever '
+      + 'hosts this to set the key on the server.')));
   }
   return card;
 }

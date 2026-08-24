@@ -410,17 +410,23 @@ class ScanResult:
             (len(self.held_online) + len(self.too_long),
              "file was never opened at all",
              "files were never opened at all"),
+            # Written for somebody reading a scan for the first time. "On the
+            # trail", "hop limit" and "worked out rather than read" are Ripple's
+            # own vocabulary, and this is the list a person reads to decide
+            # whether to believe the answer above it.
             (len(self.star_tables),
-             "table on the trail is built with SELECT *, so its column list is "
-             "written down nowhere",
-             "tables on the trail are built with SELECT *, so their column list is "
-             "written down nowhere"),
+             "table the column passes through takes every column at once, so your "
+             "code never lists what its columns are called",
+             "tables the column passes through take every column at once, so your "
+             "code never lists what their columns are called"),
             (len(self.cut_short),
-             "trail was still going when Ripple reached its hop limit",
-             "trails were still going when Ripple reached its hop limit"),
+             "trail was still going when Ripple stopped following it",
+             "trails were still going when Ripple stopped following them"),
             (len([f for f in self.findings if f.inferred_hops]),
-             "finding sits past one of those points and is worked out rather than read",
-             "findings sit past one of those points and are worked out rather than read"),
+             "finding comes after one of those tables, so Ripple worked the column "
+             "name out rather than reading it",
+             "findings come after one of those tables, so Ripple worked the column "
+             "names out rather than reading them"),
             (len(self.merged_names),
              "name here stands for more than one table, and the SQL does not say which",
              "names here stand for more than one table, and the SQL does not say which"),

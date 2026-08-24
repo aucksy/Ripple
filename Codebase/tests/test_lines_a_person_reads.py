@@ -48,8 +48,11 @@ def test_a_count_of_one_reads_as_one(tmp_path):
         line = f"{gap['count']} {gap['what']}"
         # "1 files", "1 tables", "1 findings", "1 trails" -- the whole family.
         assert not re.match(r"^1 \w+s\b", line), line
-        # ... and the verb has to follow the noun.
-        assert " are " not in line and " were " not in line, line
+        # ... and the verb straight after the noun agrees with it. Only that
+        # verb: "so your code never lists what its columns are called" is a
+        # perfectly good sentence, and an "are" anywhere in the line is not a
+        # bug -- checking for one was.
+        assert not re.match(r"^1 \w+ (are|were)\b", line), line
 
 
 def test_a_count_of_more_than_one_still_reads_as_many(tmp_path):

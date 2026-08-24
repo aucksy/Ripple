@@ -56,9 +56,16 @@ def test_the_repository_screen_no_longer_calls_a_select_star_table_a_dead_end():
     # is allowed to quote it, and only what reaches the screen is being checked.
     card = "\n".join(line for line in js[at:at + 2400].splitlines()
                      if not line.strip().startswith("//"))
-    assert "could not fully read" not in card
+    # The negative is the load-bearing half: nothing here may read as a dead end.
+    for dead_end in ("could not fully read", "stops here", "dead end", "goes no further"):
+        assert dead_end not in card, dead_end
     assert "no column list written down" in card
-    assert "does not stop here" in card
+    # And it has to say the scan carries on through. Pinned as any of the ways
+    # that has been put rather than one exact sentence -- this copy is written
+    # for somebody reading it for the first time, and it gets reworded.
+    carries_on = ("does not stop here", "still travels through", "still follows",
+                  "the scan follows it", "carries on")
+    assert any(p in card for p in carries_on), card[:400]
 
 
 # ── several contact addresses, in BOTH ways in ─────────────────────────────
