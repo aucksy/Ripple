@@ -116,8 +116,15 @@ run = BigQueryInsertJobOperator(
 
 def test_sql_glued_together_from_short_strings_is_reported(tmp_path):
     """No single piece is long enough to recognise and the statement never
-    exists as one thing to read. Nothing can be followed -- so it is listed to
-    be checked by hand rather than counted as an empty file."""
+    exists as one thing to read -- so it is listed to be checked by hand rather
+    than counted as an empty file.
+
+    Pieces separated only by whitespace ARE welded back together now, so part of
+    this one is read: the run after ``+ SRC +`` joins up on its own. A variable
+    in the middle is what nothing can weld across, which is why the file is
+    still on the list -- and the wording has to say SOME of it, because saying
+    none of it was read when some of it was sends somebody looking for the
+    wrong thing."""
     _, parsed = _repo(tmp_path, {"src/dag/job.py": '''
 sql = (
     "CREATE OR REPLACE TABLE `" + TGT + ".stage.merchant_umdl` AS "
@@ -126,7 +133,8 @@ sql = (
 )
 '''})
     gap = next(u for u in parsed.unreadable if u["file"] == "src/dag/job.py")
-    assert "could not take out of it" in gap["reason"]
+    assert "could not be taken out of it" in gap["reason"], gap["reason"]
+    assert "some of" in gap["reason"], gap["reason"]
 
 
 def test_an_ordinary_python_file_is_left_alone(tmp_path):

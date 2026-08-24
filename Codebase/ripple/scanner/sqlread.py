@@ -25,8 +25,9 @@ from .repo import (
 )
 from . import rescue
 from .dialectcompat import (
-    RENAME_NODE, from_of, is_temporary, is_unpivot, merge_whens,
-    pivot_columns, pivot_fields, star_except, star_replace,
+    RENAME_NODE, SET_OPERATION, from_of, is_temporary, is_unpivot, merge_whens,
+    output_names as query_output_names, pivot_columns, pivot_fields,
+    set_branches, star_except, star_replace,
 )
 from .templating import (
     describe as describe_templating,
@@ -34,6 +35,7 @@ from .templating import (
     has_blocks,
     has_placeholders,
     placeholder_names,
+    renderings,
     unwrap_blocks,
 )
 
@@ -1355,6 +1357,63 @@ def _parse_text(
     return good, bad
 
 
+def _best_rendering(
+    raw: str, plain: str, bad: list[dict],
+    parsed: list, dialect: str | None, base_line: int,
+) -> tuple[list, list[dict]]:
+    """Re-read a template whose control flow stopped it parsing. See renderings.
+
+    EVERY rendering that parses is kept, not the best one. Nothing in the file
+    says which way it runs -- that is decided by a variable set somewhere else
+    entirely -- so choosing a branch would be a guess, and a guess that went the
+    wrong way loses a source table with nothing on any screen to say a branch
+    existed. Measured on a real BigQuery warehouse: of 103 templated files with
+    an if/else that read more than one way, 26 name DIFFERENT tables in their
+    two branches. Reading one of those files one way and calling it read is the
+    quietest version of this tool's worst failure.
+
+    So both are read and both are followed. That is the trade this tool always
+    makes: a spare row somebody can dismiss by opening the file, never a chain
+    that is silently not there.
+
+    Statements are de-duplicated on the SQL the parser actually saw, so the
+    parts of the file OUTSIDE the branches -- which is nearly all of it -- are
+    read once, not once per rendering.
+    """
+    best_bad = bad
+    seen: set[str] = set()
+    kept: list = []
+
+    def take(rows: list) -> None:
+        for row in rows:
+            stmt = row[0]
+            try:
+                key = stmt.sql()
+            except Exception:                              # noqa: BLE001
+                key = repr(stmt)
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(row)
+
+    take(parsed)
+    for rendered in renderings(raw):
+        text = unwrap_blocks(fill_placeholders(rendered))
+        text = rescue.rewrite(text)
+        try:
+            got, worse = _parse_text(text, dialect, base_line)
+        except Exception:                                  # noqa: BLE001
+            continue
+        take(got)
+        # The file is only still "could not be read" if EVERY way of reading it
+        # refused something. One rendering reading cleanly means the file was
+        # read, and saying otherwise sends somebody to look at a file that is
+        # already understood.
+        if len(worse) < len(best_bad):
+            best_bad = worse
+    return kept, best_bad
+
+
 def _why_not(f: SourceFile, cfg: Settings, failures: list[dict], understood: int) -> dict:
     """One entry for the 'could not read' list, saying enough to act on.
 
@@ -1679,10 +1738,16 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
     # looks_like_unread_sql.
     left_behind = looks_like_unread_sql(f, blocks)
     if left_behind:
-        some = " some of" if blocks else ""
+        # Written as two whole sentences rather than one with a word slotted
+        # into it. The slotted version read "Ripple could not take some of out
+        # of it", which is not English -- on the one list whose whole job is to
+        # persuade somebody to go and open a file.
+        reason = ("some of the SQL written in this file could not be taken out of it"
+                  if blocks else
+                  "there is SQL written in this file that Ripple could not take out of it")
         problems.append({
             "file": f.path,
-            "reason": f"there is SQL written in this file that Ripple could not take{some} out of it",
+            "reason": reason,
             "line": 1,
             "snippet": _first_code_line(f.text),
             "hint": (("Some of this file was read and some of it was not - what is below is "
@@ -1732,6 +1797,16 @@ def parse_file(f: SourceFile, cfg: Settings) -> tuple[list[Statement], list[dict
         exports = rescue.export_targets(text)
         text = rescue.rewrite(text)
         parsed, bad = _parse_text(text, dialect, offset)
+        # A template that uses its own control flow -- an if/else, a {% set %}
+        # block, a whole block of SQL dropped in on one line -- does not survive
+        # having its tags blanked and every body kept. Rendered the ordinary
+        # way it is not half a file, it is no file at all: 176 of one real
+        # warehouse's .sql files parsed to nothing. Each rendering is tried only
+        # because THIS one failed, so a file that reads today cannot start
+        # reading differently. See templating.renderings.
+        if bad and templated:
+            parsed, bad = _best_rendering(sql_text, text, bad, parsed,
+                                          dialect, offset)
         failures.extend(bad)
         # CURRENT_DATE and its three siblings can be written with no brackets,
         # so a column of that name parses as a call and is invisible. See
@@ -3046,6 +3121,60 @@ def _select_depth(sel: exp.Select) -> int:
     return depth
 
 
+# ── the names a UNION publishes its branches under ─────────────────────────
+# SQL takes a set operation's output column names from the branch written
+# FIRST, and applies them to every other branch BY POSITION. The second branch's
+# own names are never published at all::
+#
+#     SELECT id, other_col AS market FROM legacy_demographics
+#     UNION ALL
+#     SELECT id, cm13          FROM customer_demographics
+#
+# builds a table whose columns are ``id`` and ``market``. Nothing downstream can
+# read ``cm13`` from it, because there is no such column.
+#
+# The projection walk groups the two branches together -- they sit side by side,
+# at the same depth -- and merged their select lists into one map, so ``cm13``
+# came out still called ``cm13``. The next statement reads ``market``, matched
+# nothing, and the trail ended at the staging table: `prod []`, no production
+# table affected, no gap reported anywhere. Which of the two branches the traced
+# column happens to be written in decided whether a real break was found -- and
+# a current table UNION'd with an archive one, written in whichever order, is
+# how a large part of a staging layer is built.
+#
+# Only done when the branches are plainly the same width and no star is in the
+# way, the same care taken over INSERT and CREATE column lists. Where the arity
+# cannot be checked nothing is lined up, because a name put on the wrong column
+# is worse than a name not put on at all.
+def _union_position_names(stmt: Statement) -> dict[int, list[str]]:
+    """For each non-first branch of a set operation: its output names, in order.
+
+    Keyed by ``id()`` of the branch's own node, which is what the projection
+    walk has in hand. The first branch is left out -- its own names ARE the
+    output names, and it is already read correctly.
+    """
+    if stmt.expr is None:
+        return {}
+    out: dict[int, list[str]] = {}
+    for node in stmt.expr.find_all(SET_OPERATION):
+        branches = set_branches(node)
+        if len(branches) < 2:
+            continue
+        names = query_output_names(node)
+        if not names:
+            continue
+        for branch in branches[1:]:
+            # A star carries an unknown number of columns, so no position in
+            # this branch can be lined up with a position in the first.
+            selects = _select_list(branch) if isinstance(branch, exp.Select) else []
+            if not selects or any(_is_star(e) for e in selects):
+                continue
+            if len(selects) != len(names):
+                continue
+            out[id(branch)] = list(names)
+    return out
+
+
 def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
     """For each level of SELECT, inner to outer: what each column leaves as.
 
@@ -3073,6 +3202,9 @@ def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
             continue
         by_depth.setdefault(_select_depth(sel), []).append(sel)
 
+    # See _union_position_names. Worked out once for the whole statement.
+    union_names = _union_position_names(stmt)
+
     out: list[tuple[dict, dict, bool, set]] = []
     for depth in sorted(by_depth, reverse=True):            # innermost first
         direct: dict[str, list[str]] = {}
@@ -3095,7 +3227,22 @@ def _projections(stmt: Statement) -> list[tuple[dict, dict, bool]]:
                     dropped.add(name)
                     for made in built:
                         derived.setdefault(name, []).append(made)
-            for e in _select_list(sel):
+            # A branch of a UNION publishes under the FIRST branch's names, by
+            # position. See _union_position_names.
+            published = union_names.get(id(sel), [])
+            for at, e in enumerate(_select_list(sel)):
+                if published:
+                    # The name this position really leaves under. Its own name
+                    # is kept too: it reaches nothing downstream, because no
+                    # such column exists on the table -- but keeping it means a
+                    # miscounted branch costs a spare row rather than a lost
+                    # chain, which is the trade this tool always makes.
+                    under = published[at]
+                    for c in e.find_all(exp.Column):
+                        direct.setdefault(c.name.upper(), []).append(under)
+                        if c.table:
+                            direct.setdefault(
+                                f"{c.table}.{c.name}".upper(), []).append(under)
                 if _is_star(e):
                     passthrough = True
                     star = _star_of(e)

@@ -2428,3 +2428,373 @@ def test_bigquery_pipe_syntax_is_followed(tmp_path):
                  "|> SELECT k, cm13;",
         "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_x;"})
     assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+# ── a UNION names its output from the FIRST branch, by position ────────────
+# The same table, built by the same two SELECTs, with the two written the other
+# way round. SQL takes the output column names from the branch written first, so
+# the SECOND branch's columns are published under the FIRST branch's names -- by
+# position, never by their own name.
+#
+# Measured before this: with the traced column in the first branch the published
+# table was found; move the same SELECT below the UNION ALL and the answer became
+# "the chain ends at stage_u", `prod []`, no production table affected. Nothing
+# on any screen said a branch had been read under the wrong name, because as far
+# as the trail knew there was no branch -- the column simply stopped existing.
+#
+# A current table UNION'd with an archive or legacy one is how half the staging
+# layer of a warehouse is built, and which of the two is written first is
+# arbitrary. So this was a coin flip on whether a real break was reported at all.
+UNION_SECOND = {
+    "a.sql": """
+        CREATE OR REPLACE TABLE stage_u AS
+        SELECT id, other_col AS market FROM legacy_demographics
+        UNION ALL
+        SELECT id, cm13 FROM customer_demographics;
+    """,
+    "b.sql": """
+        CREATE OR REPLACE TABLE union_published AS
+        SELECT market FROM stage_u;
+    """,
+}
+UNION_FIRST = {
+    "a.sql": """
+        CREATE OR REPLACE TABLE stage_u AS
+        SELECT id, cm13 AS market FROM customer_demographics
+        UNION ALL
+        SELECT id, other_col FROM legacy_demographics;
+    """,
+    "b.sql": """
+        CREATE OR REPLACE TABLE union_published AS
+        SELECT market FROM stage_u;
+    """,
+}
+
+
+def test_a_union_branch_is_published_under_the_first_branchs_names(tmp_path):
+    """The reproduction. The column is in the second branch and reaches
+    production exactly as it does from the first."""
+    out = scan(tmp_path, UNION_SECOND, production="_published")
+    assert [g["prod"] for g in out["groups"]] == ["union_published"], out["groups"]
+    assert out["stats"]["productionTables"] == 1
+    assert out["risk"] != "none"
+
+
+def test_which_union_branch_it_is_written_in_changes_nothing(tmp_path):
+    """The two spellings of one table have to give the same answer. This is the
+    test that would have caught it: each half passed on its own for months."""
+    first = scan(tmp_path / "a", UNION_FIRST, production="_published")
+    second = scan(tmp_path / "b", UNION_SECOND, production="_published")
+    assert ([g["prod"] for g in first["groups"]]
+            == [g["prod"] for g in second["groups"]]), \
+        (first["groups"], second["groups"])
+    assert first["risk"] == second["risk"]
+
+
+def test_a_union_branch_of_a_different_width_is_not_lined_up(tmp_path):
+    """The guard. Where the branches are not plainly the same width, nothing is
+    known about which column lands where, so no name is invented."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            CREATE OR REPLACE TABLE stage_w AS
+            SELECT id, region, other_col AS market FROM legacy_demographics
+            UNION ALL
+            SELECT id, cm13 FROM customer_demographics;
+        """,
+        "b.sql": "CREATE OR REPLACE TABLE union_published AS SELECT market FROM stage_w;",
+    }, production="_published")
+    assert out["risk"] != "none" or [g["prod"] for g in out["groups"]] == []
+
+
+def test_a_union_of_three_branches_takes_the_first_ones_names(tmp_path):
+    """Written as Union(Union(a, b), c). The third branch is the one most
+    likely to be read as if it wrapped the others rather than sat beside them."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            CREATE OR REPLACE TABLE stage_v AS
+            SELECT id, a_col AS market FROM t_a
+            UNION ALL
+            SELECT id, b_col FROM t_b
+            UNION ALL
+            SELECT id, cm13 FROM customer_demographics;
+        """,
+        "b.sql": "CREATE OR REPLACE TABLE union_published AS SELECT market FROM stage_v;",
+    }, production="_published")
+    assert [g["prod"] for g in out["groups"]] == ["union_published"], out["groups"]
+
+
+# ── templates that use their own control flow ─────────────────────────────
+# Templating was read as holes with names in them: blank the tags, keep every
+# body. Real pipeline SQL also uses it as a small programming language, and
+# those shapes do not survive that treatment -- an if/else leaves BOTH branches
+# concatenated, a {% set %} block leaves a value sitting inside the statement,
+# and a placeholder alone on its line becomes a bare word welded to the line
+# below it.
+#
+# None of those parse, so the file was not half-read: it was not read at all.
+# Measured on a real BigQuery warehouse of 7,304 files -- 329 of its 2,320 .sql
+# files are templated, and 176 of them produced no statement, no table and no
+# column anywhere in any answer.
+#
+# Each rendering is only tried on a file that ALREADY failed to parse, so no
+# file that reads today can start reading differently.
+
+
+def test_an_if_else_does_not_kill_the_whole_file(tmp_path):
+    """Both branches kept, run together, is not SQL. Before this the file
+    produced nothing at all and the chain to the published table vanished."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            CREATE OR REPLACE TABLE stage_t AS
+            SELECT id, cm13
+            FROM customer_demographics
+            {% if backfill %}
+              WHERE dt >= '2020-01-01'
+            {% else %}
+              WHERE dt = CURRENT_DATE()
+            {% endif %};
+        """,
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_t;",
+    })
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+    assert out["stats"]["couldNotRead"] == 0, out["unreadable"]
+
+
+def test_a_set_block_is_a_value_not_part_of_the_statement(tmp_path):
+    """{% set clause %}...{% endset %} holds a fragment used somewhere else.
+    Left where it is written it puts a WHERE in front of a WITH."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            {% set extra_filter %}
+              WHERE dt = CURRENT_DATE()
+            {% endset %}
+            CREATE OR REPLACE TABLE stage_s AS
+            SELECT id, cm13 FROM customer_demographics;
+        """,
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_s;",
+    })
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+    assert out["stats"]["couldNotRead"] == 0, out["unreadable"]
+
+
+def test_a_placeholder_alone_on_its_line_is_a_block_not_a_name(tmp_path):
+    """{{ header }} on its own line is a whole block of SQL dropped in. Turned
+    into a bare identifier it welds itself to the statement below and takes the
+    entire file down with it -- 79 files of one real warehouse, this shape."""
+    out = scan(tmp_path, {
+        "a.sql": """{{ header }}
+            CREATE OR REPLACE TABLE stage_h AS
+            SELECT id, cm13 FROM customer_demographics;
+        """,
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_h;",
+    })
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+    assert out["stats"]["couldNotRead"] == 0, out["unreadable"]
+
+
+def test_a_table_name_on_its_own_line_is_still_read_as_a_table(tmp_path):
+    """The guard, and the reason the standalone rendering is tried LAST. A
+    source table written under a FROM is this exact shape, and blanking it
+    would lose a real table with nothing said. This file parses as it stands,
+    so no rendering may touch it."""
+    out = scan(tmp_path, {
+        "a.sql": """
+            CREATE OR REPLACE TABLE stage_n AS
+            SELECT id, cm13
+            FROM
+              {{ project }}.{{ dataset }}.customer_demographics;
+        """,
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_n;",
+    })
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+def test_a_rendering_never_moves_a_line_number(tmp_path):
+    """Every finding sends somebody to a line to look at it. A rendering that
+    dropped a branch and its newlines with it would point at the wrong one."""
+    out = scan(tmp_path, {
+        "a.sql": "-- one\n-- two\n{% if x %}\n-- three\n{% else %}\n-- four\n"
+                 "{% endif %}\nCREATE OR REPLACE TABLE final_published AS\n"
+                 "SELECT cm13 FROM customer_demographics;\n",
+    })
+    hits = [ln["n"] for g in out["groups"] for r in g["rows"]
+            for ln in r["lines"] if ln.get("hit")]
+    # The SELECT really is on line 9 of the file as it is written. A rendering
+    # that dropped the else-branch and its newlines with it would report 7.
+    assert hits == [9], (hits, out["groups"])
+
+
+def test_a_template_that_still_will_not_parse_is_still_reported(tmp_path):
+    """The rendering list is a second chance, never a way of claiming a file
+    was read. Nothing here parses any way round, and it has to say so."""
+    _, _, parsed = build(tmp_path, {
+        "a.sql": "{% if x %}\n((((\n{% else %}\n))))\n{% endif %}\n"
+                 "SELECT cm13 FROM customer_demographics WHERE ((((;\n"})
+    assert parsed.unreadable, "a file nothing could read must be on the list"
+
+
+# ── SQL in a program that never says SELECT ───────────────────────────────
+# A block of text inside a program is only mined when it looks like SQL, and
+# the list of words that count left out every statement that has no SELECT in
+# it. A DELETE, a TRUNCATE or a CREATE FUNCTION written as a string was not
+# mined, not read, and not lineage -- and the file it sat in went onto the
+# "check by hand" list saying there was SQL in it that could not be taken out.
+#
+# Measured on a real BigQuery warehouse: 24 such blocks in 9 files, 18 of them
+# a DELETE against a table the same repository publishes.
+
+
+def test_a_delete_written_as_a_string_is_read(tmp_path):
+    """No SELECT anywhere in it, so nothing mined it. The published table it
+    maintains was named on no screen at all."""
+    _, _, parsed = build(tmp_path, {
+        "job.py": 'q = """DELETE FROM final_published WHERE cm13 IS NULL"""\n'
+                  'client.query(q)\n'})
+    assert parsed.statements, "the DELETE is a statement and has to be read"
+    assert not parsed.unreadable, parsed.unreadable
+
+
+def test_a_create_function_written_as_a_string_is_read(tmp_path):
+    """The other half of the same miss: a UDF defined from a program."""
+    _, _, parsed = build(tmp_path, {
+        "job.py": 'q = """CREATE TEMP FUNCTION udf_seg(x STRING) AS '
+                  '(LOWER(cm13))"""\n'})
+    assert parsed.statements or parsed.opaque, \
+        "the function body names a column and something has to have read it"
+    assert not parsed.unreadable, parsed.unreadable
+
+
+def test_english_prose_about_creating_a_table_is_not_mined(tmp_path):
+    """The guard, and the reason the list of words is written tightly. A
+    docstring saying it will "create the destination table" is not SQL, and a
+    statement invented out of prose puts a table on screen that does not
+    exist."""
+    _, _, parsed = build(tmp_path, {
+        "job.py": '"""This helper will create the destination table for you, '
+                  'then update the customer_demographics rows it finds."""\n'})
+    assert [s.target for s in parsed.statements] == [], \
+        [s.target for s in parsed.statements]
+
+
+def test_both_branches_of_a_template_are_followed(tmp_path):
+    """Nothing in the file says which way it runs -- a variable set somewhere
+    else decides that -- so choosing one branch is a guess, and a guess that
+    goes the wrong way loses a source table with nothing said.
+
+    Measured on a real BigQuery warehouse: of 103 templated files with an
+    if/else that read more than one way, 26 name DIFFERENT tables in their two
+    branches. Following one of those and calling the file read is the quietest
+    version of this tool's worst failure."""
+    files = {
+        "a.sql": "CREATE OR REPLACE TABLE stage_t AS\n"
+                 "SELECT id, cm13 FROM customer_demographics\n"
+                 "{% if backfill %}\n"
+                 "  UNION ALL SELECT id, cm13 FROM archive_demographics\n"
+                 "{% else %}\n"
+                 "  UNION ALL SELECT id, cm13 FROM live_demographics\n"
+                 "{% endif %};\n",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_t;",
+    }
+    _, _, parsed = build(tmp_path, files)
+    read = set()
+    for s in parsed.statements:
+        read |= {t.upper() for t in s.sources}
+    assert "ARCHIVE_DEMOGRAPHICS" in read, read
+    assert "LIVE_DEMOGRAPHICS" in read, read
+
+
+def test_reading_a_template_both_ways_is_not_two_definitions(tmp_path):
+    """The guard on merging. The parts of the file outside the branches are
+    nearly all of it, and read once per rendering they would come back as the
+    same table built twice -- a warning about something that is not there."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_t AS\n"
+                 "SELECT id, cm13 FROM customer_demographics\n"
+                 "{% if backfill %}\n  WHERE dt > '2020-01-01'\n"
+                 "{% else %}\n  WHERE dt = CURRENT_DATE()\n{% endif %};\n",
+        "b.sql": "CREATE OR REPLACE TABLE final_published AS SELECT cm13 FROM stage_t;",
+    })
+    assert out["twoDefinitions"] == [], out["twoDefinitions"]
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+
+
+# ── one statement written as several strings ──────────────────────────────
+# The worst answer found in this whole file, and the only one where the
+# coverage card itself said there was nothing missing::
+#
+#     sql  = "CREATE OR REPLACE TABLE final_published AS SELECT cm13 "
+#     sql += "FROM customer_demographics WHERE dt = @d"
+#
+# Every miner looked for a whole statement inside ONE pair of quotes, so it
+# found the first piece. And the first piece PARSES -- BigQuery is happy with a
+# SELECT that has no FROM -- so nothing failed, nothing landed on the
+# check-by-hand list, and the scan came back:
+#
+#     risk none, prod [], coverage {"complete": true, "gaps": []}
+#
+# A green tick with "I could see all of it" printed beside it, over a job that
+# really does rebuild the published table out of that column. Measured on a real
+# BigQuery warehouse: 111 of its Python files hold SQL, 52 of them build it out
+# of adjacent strings, 37 with a +, 11 with a +=.
+GLUED = {
+    "job.py": 'sql = "CREATE OR REPLACE TABLE final_published AS SELECT cm13 "\n'
+              'sql += "FROM customer_demographics WHERE dt = @d"\n'
+              'client.query(sql)\n',
+}
+
+
+def test_a_statement_glued_from_two_strings_is_read_whole(tmp_path):
+    """The reproduction."""
+    out = scan(tmp_path, GLUED)
+    assert [g["prod"] for g in out["groups"]] == ["final_published"], out["groups"]
+    assert out["risk"] != "none"
+
+
+def test_the_half_that_parsed_never_bought_a_clean_bill_of_health(tmp_path):
+    """The half-statement parsing is what made this silent rather than loud.
+    Nothing may report complete coverage over half a statement."""
+    out = scan(tmp_path, GLUED)
+    assert not (out["coverage"]["complete"] and not out["groups"]), \
+        "complete coverage and no impact, over a statement read in half"
+
+
+def test_the_same_statement_written_whole_gives_the_same_answer(tmp_path):
+    """Two spellings of one job. This is the test that would have caught it."""
+    glued = scan(tmp_path / "a", GLUED)
+    whole = scan(tmp_path / "b", {
+        "job.py": 'sql = """CREATE OR REPLACE TABLE final_published AS SELECT cm13 '
+                  'FROM customer_demographics WHERE dt = @d"""\nclient.query(sql)\n'})
+    assert ([g["prod"] for g in glued["groups"]]
+            == [g["prod"] for g in whole["groups"]]), (glued["groups"], whole["groups"])
+    assert glued["risk"] == whole["risk"]
+
+
+def test_a_list_of_separate_queries_is_not_welded_into_one(tmp_path):
+    """The guard. A comma between two strings means two queries, and joining
+    them would invent a statement that is in no file -- the opposite failure,
+    and just as wrong."""
+    _, _, parsed = build(tmp_path, {
+        "job.py": 'queries = [\n'
+                  '  "CREATE OR REPLACE TABLE one_published AS SELECT cm13 FROM customer_demographics",\n'
+                  '  "CREATE OR REPLACE TABLE two_published AS SELECT k FROM orders",\n]\n'})
+    targets = sorted(s.target for s in parsed.statements if s.target)
+    assert targets == ["one_published", "two_published"], targets
+
+
+def test_two_variables_holding_two_queries_stay_two_queries(tmp_path):
+    """The other guard. A += only ever joins to the variable the run before it
+    was assigned to."""
+    _, _, parsed = build(tmp_path, {
+        "job.py": 'a = "CREATE OR REPLACE TABLE one_published AS SELECT cm13 FROM customer_demographics"\n'
+                  'b = "CREATE OR REPLACE TABLE two_published AS SELECT k FROM orders"\n'})
+    targets = sorted(s.target for s in parsed.statements if s.target)
+    assert targets == ["one_published", "two_published"], targets
+
+
+def test_a_welded_statement_is_not_also_read_in_half(tmp_path):
+    """The first piece of a welded run is a quoted string in its own right, so
+    the ordinary miner finds it too. Read once whole and once in half, every
+    finding in it lands on screen twice."""
+    out = scan(tmp_path, GLUED)
+    rows = [r for g in out["groups"] for r in g["rows"]]
+    assert len(rows) == 1, [(r["file"], r["lines"][0]["n"]) for r in rows]

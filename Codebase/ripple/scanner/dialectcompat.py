@@ -96,3 +96,43 @@ def merge_whens(merge: exp.Expression) -> list:
     if whens is not None:
         return list(getattr(whens, "expressions", whens) or [])
     return list(merge.args.get("expressions") or [])
+
+
+# ── set operations: UNION, INTERSECT, EXCEPT ───────────────────────────────
+# sqlglot 25 had only ``exp.Union`` and made INTERSECT and EXCEPT subclasses of
+# it. sqlglot 30 introduced ``exp.SetOperation`` as the shared parent. Naming
+# either one directly is the same trap as the renamed keys above: on the other
+# version the ``find_all`` matches nothing, every branch of every union goes
+# unnoticed, and no test fails.
+SET_OPERATION = getattr(exp, "SetOperation", None) or exp.Union
+
+
+def set_branches(node: exp.Expression) -> list[exp.Expression]:
+    """The branches of a set operation, in the order they are written.
+
+    A three-way union is nested to the left -- ``Union(Union(a, b), c)`` -- so
+    the branches have to be flattened, not read off two keys. Written in the
+    file's order because SQL takes the output column names from the FIRST
+    branch, and a list in any other order silently renames the wrong one.
+    """
+    if not isinstance(node, SET_OPERATION):
+        return []
+    left, right = node.this, node.args.get("expression")
+    branches = set_branches(left) if isinstance(left, SET_OPERATION) else [left]
+    if right is not None:
+        branches += (set_branches(right) if isinstance(right, SET_OPERATION)
+                     else [right])
+    return [b for b in branches if b is not None]
+
+
+def output_names(query: exp.Expression) -> list[str]:
+    """The names a query publishes its columns under, in order.
+
+    sqlglot works this out itself and gets a union right -- the names come from
+    the leftmost branch. Empty means it could not, and the caller must not
+    pretend to know them.
+    """
+    try:
+        return list(query.named_selects or [])
+    except Exception:                                   # noqa: BLE001
+        return []

@@ -1209,6 +1209,167 @@ twice counts every finding in it twice.
                                   statement is built by adding short strings
                                   together and never exists as one thing.
 
+A UNION TAKES ITS OUTPUT NAMES FROM ITS FIRST BRANCH, BY POSITION.
+
+  SQL names a set operation's output columns from the branch written FIRST, and
+  applies those names to every other branch by position. The other branches'
+  own names are never published at all:
+
+      CREATE OR REPLACE TABLE stage_u AS
+      SELECT id, other_col AS market FROM legacy_demographics
+      UNION ALL
+      SELECT id, cm13          FROM customer_demographics
+
+  builds a table whose columns are id and market. Nothing downstream can read
+  cm13 from it, because there is no such column.
+
+  The projection walk groups a union's branches together, because they sit side
+  by side at the same depth rather than one inside the other. Merge their select
+  lists without lining up positions and cm13 leaves under its own name, the next
+  statement reads market, the two never meet, and the trail ends at the staging
+  table: prod empty, no production table affected, and no gap reported anywhere
+  because as far as the trail knows there was no branch. Which of the two
+  branches the traced column happens to be written in then decides whether a
+  real break is found at all. A current table UNION ALL an archive one, written
+  in whichever order somebody typed them, is how a large part of a staging layer
+  is built, so this is a coin toss over the answer this tool exists to give.
+
+  So: for every set operation, take the output names off the whole node, and for
+  every branch after the first map position i of that branch to name i. Read the
+  set-operation class through the small parse-tree module, never by naming
+  exp.Union directly -- one sqlglot major has only Union and the next has
+  SetOperation above it, and the wrong name matches nothing while raising
+  nothing. Flatten the branches: a three-way union is nested to the left, so
+  Union(Union(a, b), c) has to come out as a, b, c in written order.
+
+  Only line the positions up when the branch has the same number of select-list
+  items as there are output names and no star is in the way. Where the count
+  cannot be checked, leave the names alone: a name put on the wrong column is
+  worse than a name not put on at all. Keep each column's own name as well as
+  the position name -- it reaches nothing downstream, because no such column
+  exists on the table, so a miscount costs a spare row rather than a lost chain.
+
+READ A TEMPLATE THAT USES CONTROL FLOW EVERY WAY IT RUNS, NOT ONE WAY.
+
+  Filling in placeholders treats templating as holes with names in them. Real
+  pipeline SQL also uses it as a small programming language, and three shapes do
+  not survive having their tags blanked and every body kept:
+
+      an if with an else       both branches kept, run on, and no parser takes it
+      set ... endset           a value, left sitting inside the statement
+      a placeholder alone      a whole block of SQL, turned into a bare word that
+        on its own line          welds itself to the statement below
+
+  None of those parse, so the file is not half-read: it is not read at all.
+  Measured on a real BigQuery warehouse of 7,304 files, 329 of its 2,320 .sql
+  files are templated and 176 of them produced no statement, no table and no
+  column anywhere in any answer -- while every one sat on the check-by-hand list
+  saying only that it would not parse.
+
+  So render the file again with its control flow resolved. Walk the tags,
+  keeping a stack of which blocks are open: an if keeps one side and blanks the
+  other, a set or macro block keeps nothing because its body is a value, a for
+  body is kept once. Blank every tag itself. Render it TWICE, once taking every
+  condition and once taking none, and read BOTH -- nothing in the file says
+  which way it runs, that is decided by a variable set somewhere else entirely,
+  and of 103 such files that read more than one way, 26 name DIFFERENT tables in
+  their two branches. Choosing one of those and calling the file read loses a
+  source table with nothing anywhere saying a branch existed.
+
+  De-duplicate the statements on the SQL the parser actually saw. Nearly all of
+  a file is outside its branches, and read once per rendering it comes back as
+  the same table built twice -- which reads on screen as "this table is built in
+  two places", a warning about something that is not there.
+
+  Try a rendering only on a file that did NOT parse as it stands. That is what
+  makes this safe: a file that reads today cannot start reading differently.
+  Order matters for the same reason. A placeholder alone on its line is blanked
+  LAST, because a source table written on its own line under a FROM is exactly
+  that shape, and blanking it on a file that already parses throws a real table
+  away with nothing said.
+
+  Keep the line count. Every replacement puts back the newlines it swallowed, so
+  a finding still points at the real line of the real file -- the only line
+  anybody can go and open. And allow a carriage return before the end of a line
+  when matching a placeholder that stands alone: a repository cloned on Windows
+  has CRLF endings, and a pattern that ends at the newline leaves the CR sitting
+  there, so the same file reads one way on one machine and another way on the
+  next with nothing saying so.
+
+  A file that still will not parse any way round stays on the check-by-hand
+  list. The renderings are a second chance, never a way of claiming a file was
+  read.
+
+ONE STATEMENT WRITTEN AS SEVERAL STRINGS IS STILL ONE STATEMENT.
+
+  A program that has to fill something in writes its SQL in pieces:
+
+      sql  = "CREATE OR REPLACE TABLE final_published AS SELECT cm13 "
+      sql += "FROM customer_demographics WHERE dt = @d"
+
+  Every miner looks for a whole statement inside ONE pair of quotes, so what it
+  finds is the first piece. And the first piece PARSES, because BigQuery is
+  happy with a SELECT that has no FROM. Nothing fails, nothing reaches the
+  check-by-hand list, and the scan comes back risk none, prod empty, coverage
+  complete -- a green tick with "I could see all of it" printed beside it, over
+  a job that really does rebuild the published table out of that column. It is
+  the worst answer this tool is capable of giving, and the only one where the
+  coverage card itself says there is nothing missing.
+
+  So weld the pieces back together before mining. Find each quoted piece that
+  sits on one line, then join a run of them wherever what lies between is
+  plainly still one string: whitespace, a line continuation, a plus, or the same
+  variable being added to with a plus-equals. Give back the joined body with the
+  line the FIRST piece starts on.
+
+  Three things this must not do. It must never join across a comma -- that is a
+  LIST of separate queries, and welding those together invents a statement that
+  is in no file, which is the opposite failure and just as wrong. A plus-equals
+  must only join to the variable the run before it was assigned to, or two
+  variables holding two different queries become one. And a run of two or more
+  pieces must SUPPRESS the ordinary miner over the same characters: the first
+  piece is a quoted string in its own right, so a statement read once whole and
+  once in half puts every finding in it on screen twice.
+
+  Blank the triple-quoted regions before looking for pieces. Three quote
+  characters in a row read as two empty pieces, and the docstring then welds
+  itself onto whatever follows it. Replace them with spaces of the same length,
+  never remove them, so every offset is still an offset into the real file. What
+  is inside them is already mined as a block of its own.
+
+  Measured on a real BigQuery warehouse: 111 of its Python files hold SQL, 52 of
+  them build it out of adjacent strings, 37 with a plus, and 11 with a
+  plus-equals.
+
+WHAT COUNTS AS SQL INSIDE A PROGRAM INCLUDES THE STATEMENTS WITH NO SELECT.
+
+  The test that decides whether a block of text is worth handing to the parser
+  is matched against ordinary prose as well as against code, so it is written
+  tightly -- and written too tightly it leaves out every statement that has no
+  SELECT in it. A DELETE that clears a published table before a reload, a
+  TRUNCATE, a CREATE FUNCTION: mined by nothing, read by nothing, lineage
+  nowhere. The file then lands on the check-by-hand list saying there is SQL in
+  it that could not be taken out, which names neither the table nor the column.
+
+  Include SELECT, INSERT INTO, INSERT OVERWRITE, MERGE INTO, UPDATE, DELETE
+  FROM, TRUNCATE TABLE, CREATE OR REPLACE, and CREATE followed by TABLE, VIEW or
+  FUNCTION with at most one real SQL modifier in between -- TEMP, TEMPORARY,
+  MATERIALIZED, EXTERNAL or SNAPSHOT.
+
+  Only those modifiers, and this is the whole difficulty of the list. Allow any
+  word between CREATE and its noun and a docstring saying it will "create the
+  destination table for you" becomes a statement, and a table that exists
+  nowhere appears on screen as a fact. Measured: three docstrings in one
+  repository turned into statements that way.
+
+  Measured the other way: 24 blocks in 9 files of a real BigQuery warehouse,
+  18 of them a DELETE against a table that same repository publishes.
+
+  Say it in whole sentences when part of a file was mined and part was not.
+  Slotting a phrase into one sentence produced "Ripple could not take some of
+  out of it", which is not English -- on the one list whose whole job is to
+  persuade somebody to go and open a file.
+
 TWO MORE THINGS ABOUT MINING SQL OUT OF A FILE
 
   A quoted YAML value may run over several lines. Taking only the key's own line

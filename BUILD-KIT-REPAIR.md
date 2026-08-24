@@ -244,6 +244,22 @@ Two rules here are easy to get backwards, so hold on to them:
 If you add a way of finding a table name in a file, show me what your pattern does
 NOT match, not only what it does. A pattern that is too loose invents tables that
 do not exist, and that is worse than missing one.
+
+This file also welds back together a statement a program wrote in pieces:
+
+    sql  = "CREATE OR REPLACE TABLE final_published AS SELECT cm13 "
+    sql += "FROM customer_demographics WHERE dt = @d"
+
+Without that, the first piece is what gets mined - and the first piece PARSES,
+because a SELECT with no FROM is valid. So nothing fails, nothing reaches the
+check-by-hand list, and the scan reports no impact with complete coverage over a
+job that really does rebuild the published table. Keep all four guards:
+* Never weld across a comma. That is a LIST of separate queries.
+* A plus-equals only joins to the variable the run before it was assigned to.
+* A welded run must suppress the ordinary miner over the same characters, or
+  every finding in it appears on screen twice.
+* Blank triple-quoted regions before looking for pieces, to spaces of the same
+  length, or a docstring welds itself onto whatever follows it.
 ````
 **Check it worked:** `python -m pytest tests/test_repo.py -q`
 
@@ -264,6 +280,22 @@ Two rules that everything here depends on:
 
 A placeholder standing where a dataset name goes must come out as "not stated",
 never as a guessed name.
+
+Templating is also a small programming language, not only holes with names in
+them. A file with an if/else in it, a set...endset block, or a placeholder alone
+on its own line does not parse at all once the tags are blanked and every body
+kept. So this file also RENDERS a template: it resolves the control flow, twice,
+once taking every condition and once taking none.
+
+Three things about that you must not take away:
+* Both renderings are read, not the better one. Nothing in the file says which
+  way it runs, and on a real warehouse 26 of 103 such files name DIFFERENT
+  tables in their two branches. Picking one loses a source table in silence.
+* A rendering is only ever tried on a file that ALREADY failed to parse. That is
+  what stops a file that reads today from starting to read differently.
+* Blanking a placeholder that stands alone on its line is tried LAST, because a
+  source table written on its own line under a FROM is the same shape, and
+  blanking that throws a real table away with nothing said.
 ````
 **Check it worked:** `python -m pytest tests/test_templating.py -q`
 
@@ -325,6 +357,13 @@ Rules that hold this file together:
   dialect-compatibility helper file. Ask me for that file if you need to see it.
 * The table a statement writes to is left out of its own sources by node identity,
   never by comparing names. Two tables can share a short name.
+* A UNION publishes EVERY branch under the FIRST branch's column names, by
+  position. Merge the branches' select lists without lining the positions up and
+  a column written in the second branch is followed under a name no downstream
+  table can read, so the trail ends at the staging table and reports no
+  production impact. Which branch somebody happened to type first then decides
+  whether a real break is found. Only line them up when the branch has the same
+  number of items as there are output names and no star is in the way.
 * A loose name match is right for FOLLOWING a chain and catastrophic for RULING
   ONE OUT.
 * When the SQL does not say which of two tables a column came from, keep the usage

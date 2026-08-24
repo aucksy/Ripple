@@ -409,10 +409,127 @@ class RepoIndex:
 # ── pulling SQL out of programs that build it as text ──────────────────────
 _TRIPLE = re.compile(r'("""|\'\'\')(?P<body>.*?)\1', re.DOTALL)
 _SINGLE = re.compile(r'"(?P<body>[^"\n]{40,})"|\'(?P<body2>[^\'\n]{40,})\'')
+# Which blocks of text inside a program, a YAML file or a shell script are worth
+# handing to the SQL parser.
+#
+# Every word here used to need a SELECT in it somewhere, so a statement that has
+# none was mined by nothing: a DELETE that clears a published table before a
+# reload, a TRUNCATE, a CREATE FUNCTION. The file was not read, and it went onto
+# the "check by hand" list saying there was SQL in it that could not be taken
+# out -- which named neither the table nor the column. Measured on a real
+# BigQuery warehouse: 24 such blocks in 9 files, 18 of them a DELETE against a
+# table that same repository publishes.
+#
+# Written tightly on purpose, and this is the whole difficulty of the list. It
+# is matched against ordinary prose -- docstrings, comments, log messages -- and
+# a loose CREATE ... TABLE takes "this helper will create the destination table"
+# with it. Measured: three docstrings in one repository became statements, each
+# one a table on screen that does not exist anywhere. So only real SQL modifiers
+# may sit between CREATE and its noun, never "the", "a" or "your".
 _LOOKS_SQL = re.compile(
-    r"\b(SELECT|INSERT\s+INTO|CREATE\s+TABLE|CREATE\s+OR\s+REPLACE|MERGE\s+INTO|UPDATE)\b",
-    re.IGNORECASE,
+    r"""\b(
+          SELECT
+        | INSERT\s+(?:INTO|OVERWRITE)
+        | MERGE\s+INTO
+        | UPDATE
+        | DELETE\s+FROM
+        | TRUNCATE\s+TABLE
+        | CREATE\s+OR\s+REPLACE
+        | CREATE\s+(?:TEMP\s+|TEMPORARY\s+|MATERIALIZED\s+|EXTERNAL\s+|SNAPSHOT\s+)?
+          (?:TABLE|VIEW|FUNCTION)
+      )\b""",
+    re.IGNORECASE | re.VERBOSE,
 )
+
+
+# ── SQL a program builds out of several strings ───────────────────────────
+# One statement, written as pieces, is the ordinary way a program that has to
+# fill something in writes SQL::
+#
+#     sql  = "CREATE OR REPLACE TABLE final_published AS SELECT cm13 "
+#     sql += "FROM customer_demographics WHERE dt = @d"
+#
+# Every miner below looks for a whole statement inside ONE pair of quotes, so
+# what it found here was the first half. And the first half PARSES -- BigQuery
+# is happy with a SELECT that has no FROM -- so nothing failed, nothing landed
+# on the check-by-hand list, and the scan came back `risk none, prod [],
+# coverage complete` over a job that really does rebuild the published table
+# out of that column. A green tick, with "I could see all of it" printed beside
+# it. That is the worst answer this tool is capable of giving.
+#
+# The pieces are welded back together on the way in. Only where the join is
+# plainly one string -- whitespace, a +, a line continuation, or the same
+# variable += -- and never across a comma, so a LIST of separate queries is
+# left as the separate queries it is.
+#
+# Every character position is kept: the quotes and the joining text are replaced
+# by spaces and newlines of exactly the same length, never removed. A finding
+# still points at the line the statement starts on, which is the only line
+# anybody can go and look at.
+_STR_PREFIX = r"[fFrRbBuU]{0,2}"
+# One quoted piece, on one line. Its own line, deliberately: the miner below
+# joins pieces itself, and a quote allowed to run over a line break is how one
+# apostrophe in a comment swallows the rest of a file.
+_PIECE = re.compile(r"""(?P<q>['"])(?P<body>[^'"\n]*)(?P=q)""")
+# What may sit BETWEEN two pieces for them to still be one string: whitespace, a
+# line continuation, a +, or the same variable being added to. Never a comma --
+# that is a LIST of separate queries, and welding those together would invent a
+# statement that is in no file.
+_WELD_GAP = re.compile(
+    r"""^[ \t]*(?:\\\r?\n[ \t]*)?\+?[ \t]*(?:\r?\n[ \t]*)?"""
+    r"""(?:(?P<name>\w+)[ \t]*\+=[ \t]*)?""" + _STR_PREFIX + r"""$""")
+_ASSIGNED = re.compile(
+    r"""(?P<name>\w+)[ \t]*\+?=[ \t]*""" + _STR_PREFIX + r"""['"]""")
+
+
+def welded_blocks(text: str) -> tuple[list[tuple[str, int]], list[tuple[int, int]]]:
+    """One statement written as several strings, joined back into one.
+
+    Gives back the joined blocks AND the character spans they were built from.
+    The spans matter: the first piece of a welded run is a quoted string in its
+    own right, so the ordinary miner finds it too, and a statement read once
+    whole and once in half puts every finding in it on screen twice.
+
+    Only runs of TWO OR MORE pieces are welded. A lone string is already found
+    by the ordinary miners and is left to them.
+
+    The line offset is the line the FIRST piece starts on, which is the line of
+    the file somebody opens to check the finding.
+    """
+    out: list[tuple[str, int]] = []
+    spans: list[tuple[int, int]] = []
+    # A triple-quoted block is three quote characters in a row, so the piece
+    # scanner reads its fence as two empty pieces and welds the whole docstring
+    # onto whatever follows it. Blanked to spaces first -- same length, so every
+    # offset below is still an offset into the real file. What is inside them is
+    # already mined by _TRIPLE.
+    scan = _TRIPLE.sub(lambda m: " " * (m.end() - m.start()), text)
+    pieces = list(_PIECE.finditer(scan))
+    used = 0
+    while used < len(pieces):
+        run = [pieces[used]]
+        at = used + 1
+        while at < len(pieces):
+            gap = scan[run[-1].end():pieces[at].start()]
+            m = _WELD_GAP.match(gap)
+            if m is None:
+                break
+            if m.group("name"):
+                # "sql += ..." only joins to the variable the run was assigned
+                # to. Two variables holding two queries must stay two queries.
+                before = _ASSIGNED.findall(scan[:run[0].end()])
+                owner = before[-1] if before else None
+                if owner is not None and owner != m.group("name"):
+                    break
+            run.append(pieces[at])
+            at += 1
+        if len(run) > 1:
+            body = "".join(p.group("body") for p in run)
+            if _LOOKS_SQL.search(body):
+                out.append((body, scan[:run[0].start("body")].count("\n")))
+                spans.append((run[0].start(), run[-1].end()))
+        used = at if at > used else used + 1
+    return out, spans
 
 
 def extract_sql_blocks(f: SourceFile) -> list[tuple[str, int]]:
@@ -422,16 +539,31 @@ def extract_sql_blocks(f: SourceFile) -> list[tuple[str, int]]:
     so findings can still point at a real line in the real file.
     """
     blocks: list[tuple[str, int]] = []
-    for m in _TRIPLE.finditer(f.text):
+    # One statement written as several strings, joined back into one. See
+    # welded_blocks -- without it the miners take the first piece, that piece
+    # parses on its own, and the scan reports complete coverage over half a
+    # statement.
+    welded, welded_spans = welded_blocks(f.text)
+    blocks.extend(welded)
+    text = f.text
+
+    def already_welded(at: int) -> bool:
+        return any(lo <= at < hi for lo, hi in welded_spans)
+
+    for m in _TRIPLE.finditer(text):
         body = m.group("body")
         if _LOOKS_SQL.search(body):
-            offset = f.text[: m.start("body")].count("\n")
+            offset = text[: m.start("body")].count("\n")
             blocks.append((body, offset))
-    for m in _SINGLE.finditer(f.text):
+    for m in _SINGLE.finditer(text):
         body = m.group("body") or m.group("body2") or ""
         if _LOOKS_SQL.search(body):
             start = m.start("body") if m.group("body") else m.start("body2")
-            offset = f.text[:start].count("\n")
+            # This piece was already read as part of a whole statement above.
+            # Reading it again puts every finding in it on screen twice.
+            if already_welded(start):
+                continue
+            offset = text[:start].count("\n")
             blocks.append((body, offset))
     return blocks
 

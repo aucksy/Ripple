@@ -547,3 +547,135 @@ def has_blocks(text: str) -> bool:
                 or _RAISE.match(code) or _PROCEDURE.match(code)):
             return True
     return False
+
+
+# ── templates that are more than holes ─────────────────────────────────────
+# Everything above treats templating as holes with names in them. Real pipeline
+# SQL uses it as a small programming language as well, and those shapes do not
+# survive having their tags blanked and their bodies kept:
+#
+#     {% if backfill %} ... {% else %} ... {% endif %}   both branches, run on
+#     {% set clause %} ... {% endset %}                  a value, left inside
+#                                                         the statement
+#     {{ header }} on a line of its own                  a whole block of SQL,
+#                                                         turned into a bare word
+#                                                         welded to the line below
+#
+# Measured on a real BigQuery warehouse of 7,304 files: 329 of its 2,320 .sql
+# files are templated, and 176 of those did not parse at all. Every one landed
+# on the "check by hand" list -- which is honest, but it is 176 files of a real
+# warehouse whose tables and columns are in NO answer Ripple gives. Rendering
+# them the way below reads 119 of the 176.
+#
+# These renderings are only ever tried on a file that did NOT parse as it
+# stands. They cannot take a file that reads today and make it read differently,
+# which matters more than the extra files: the first rule of this tool is that
+# it does not quietly change an answer that was right.
+_JINJA_TAG = re.compile(r"\{%-?\s*(?P<kw>\w+)\b(?P<args>.*?)-?%\}", re.DOTALL)
+
+# A placeholder with nothing else on its line. In a generated warehouse this is
+# how a whole block of SQL is dropped in -- a header, a shared set of CTEs, a
+# UDF. Replaced by a bare identifier it becomes a word sitting on its own line
+# in front of the next statement, which no parser will take. Blanking it loses
+# nothing a name lookup would have found, because it never was one name.
+#
+# NOT done on the first pass. A table name written on its own line under a FROM
+# is exactly this shape too, and blanking that would lose a real source table
+# without a word said. Only a file that has already failed to parse gets this.
+#
+# The trailing class has to allow \r. A repository cloned on Windows has CRLF
+# line endings, Python's ``$`` in MULTILINE matches before the \n and the \r is
+# still sitting there -- so this matched on a Linux checkout of a file and not
+# on a Windows one. The same file, the same SQL, a different answer depending on
+# which machine ran the scan, and nothing anywhere saying so.
+_STANDALONE_VAR = re.compile(r"^[ \t]*\{\{-?[^}]*?-?\}\}[ \t\r]*$", re.MULTILINE)
+
+# Blocks whose body is a value or a definition, never part of the statement
+# around them. A {% set x %}...{% endset %} holds a clause that is used
+# somewhere else through {{ x }}; leaving its body where it is written puts a
+# WHERE in the middle of a WITH.
+_VALUE_BLOCKS = {"set", "macro", "raw", "filter"}
+_TRANSPARENT_BLOCKS = {"call", "block"}
+
+
+def _emitting(stack: list) -> bool:
+    return all(on for _, on in stack)
+
+
+def _render_branches(text: str, take: bool) -> str:
+    """One rendering of a template's control flow. Line numbers do not move.
+
+    ``take`` decides which side of every ``{% if %}`` is kept: True keeps the
+    if-branch and drops the else, False the other way round. Both are rendered
+    and both are tried, because nothing in the file says which way it runs and
+    guessing one would be a chain lost on the files that guessed wrong.
+    """
+    out: list[str] = []
+    at = 0
+    stack: list[tuple[str, bool]] = []
+    for m in _JINJA_TAG.finditer(text):
+        kw = m.group("kw").lower()
+        chunk = text[at:m.start()]
+        out.append(chunk if _emitting(stack) else _keep_lines(chunk))
+        at = m.end()
+        out.append(_keep_lines(m.group(0)))       # the tag itself carries nothing
+        if kw == "if":
+            stack.append(("if", take))
+        elif kw == "elif":
+            if stack and stack[-1][0] == "if":
+                stack[-1] = ("if", take)
+        elif kw == "else":
+            if stack and stack[-1][0] == "if":
+                stack[-1] = ("if", not take)
+        elif kw == "endif":
+            if stack and stack[-1][0] == "if":
+                stack.pop()
+        elif kw in _VALUE_BLOCKS:
+            # "{% set x = 1 %}" assigns and opens nothing; only the block form,
+            # which has no "=", has a body to leave out.
+            if kw != "set" or "=" not in m.group("args"):
+                stack.append((kw, False))
+        elif kw in _TRANSPARENT_BLOCKS:
+            stack.append((kw, True))
+        elif kw.startswith("end") and stack and stack[-1][0] == kw[3:]:
+            stack.pop()
+        # for / endfor: the body is kept once, which is what it was before.
+    tail = text[at:]
+    out.append(tail if _emitting(stack) else _keep_lines(tail))
+    return "".join(out)
+
+
+def has_control_flow(text: str) -> bool:
+    """Is there templating here that is more than a hole with a name in it?"""
+    for m in _JINJA_TAG.finditer(text):
+        kw = m.group("kw").lower()
+        if kw in ("if", "elif", "else", "endif", "for", "endfor") or kw in _VALUE_BLOCKS:
+            return True
+    return bool(_STANDALONE_VAR.search(text))
+
+
+def renderings(text: str) -> list[str]:
+    """Ways to read a template that did not parse as it stands, best first.
+
+    Given back as raw template text with the control flow resolved -- the caller
+    still puts it through ``fill_placeholders`` and ``unwrap_blocks``, exactly
+    as it does the original, so a rendering can never take a path the ordinary
+    one does not.
+
+    Every one keeps the file's line count, so a finding still points at the real
+    line of the real file. That is not a nicety: the whole use of this list is
+    that somebody opens the file and looks.
+    """
+    if not has_control_flow(text):
+        return []
+    out: list[str] = []
+    for take in (True, False):
+        rendered = _render_branches(text, take)
+        if rendered != text:
+            out.append(rendered)
+        # A placeholder standing alone on its line is a block of SQL, not a
+        # name. Tried last, because on a file that parses without it this would
+        # throw a real table name away. See _STANDALONE_VAR.
+        out.append(_STANDALONE_VAR.sub(lambda m: "", rendered))
+    seen: set[str] = set()
+    return [r for r in out if not (r in seen or seen.add(r)) and r != text]
