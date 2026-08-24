@@ -186,7 +186,11 @@ something is wrong later you know which single file to open.
 | `ripple/progress.py` | What Ripple is doing right now, so a screen can say so |
 | `ripple/store.py` | History of past analyses |
 | `ripple/build_info.py` | One version number, and the build stamp on the settings screen |
+| `ripple/providers.py` | A table of which AI company a pasted key belongs to. Opens nothing; `config.py` imports it, so it is not optional |
 | `ripple/api.py` | The web service, on Python's own server: every address the screens call |
+
+Not built here, on purpose: `ripple/ai.py` (the AI reader) and
+`ripple/scanner/github.py` (downloading a repository). Both need the network.
 | `web/app.js` | **Every screen** — all six steps, every card, every word |
 | `web/styles.css` | Colours, spacing, fonts |
 | `web/index.html` | The empty page the screens are drawn into |
@@ -206,6 +210,7 @@ ripple-build/
     __init__.py            <- empty, but it must exist
     config.py  production.py  catalog.py  notification.py
     narrative.py  progress.py  store.py  api.py
+    providers.py           <- a table, not a connection; see below
     scanner/
       __init__.py          <- empty, but it must exist
       repo.py  templating.py  sqlread.py  lineage.py
@@ -218,6 +223,18 @@ ripple-build/
     test_narrative.py  test_api.py
   mockrepo/                <- a tiny fake pipeline to test against (Phase 12)
 ```
+
+**Two files exist in the full product and are deliberately absent here.**
+`ripple/ai.py` reads a pasted email using an AI provider, and
+`ripple/scanner/github.py` downloads a repository. Both reach the network, and
+this build has no network and no way to install an HTTP client. Do not write
+them, and do not write the routes in `api.py` that call them.
+
+`ripple/providers.py` **is here, and it has to be.** It looks like it belongs
+with the two above — it is the table of which AI company a pasted key belongs
+to — but it opens no connection at all. It is 140 lines of data, and `config.py`
+imports it, so leaving it out stops the build in the file everything else reads.
+Write it; it does nothing on its own.
 
 In PowerShell, in the folder you want the project in:
 
@@ -577,7 +594,10 @@ ripple/narrative.py            writing the summary and the reply, without AI
 ripple/progress.py             what the engine is doing this second
 ripple/store.py                saving analyses to SQLite
 ripple/build_info.py           the one version number, and the build stamp
+ripple/providers.py            which AI company a pasted key belongs to - a
+                               table, opens nothing, imported by config.py
 ripple/api.py                  the web service, on http.server
+NOT BUILT HERE: ripple/ai.py and ripple/scanner/github.py - both need network
 web/index.html web/styles.css web/app.js    the front end
 
 DATA SHAPES THAT CROSS FILE BOUNDARIES — do not change these names

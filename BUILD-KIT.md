@@ -217,9 +217,11 @@ C:\ripple-build\
     __init__.py            <- empty, but it must exist
     config.py  production.py  catalog.py  notification.py
     narrative.py  progress.py  store.py  api.py
+    providers.py  ai.py      <- the optional AI reader (Phase 11a)
     scanner\
       __init__.py          <- empty, but it must exist
       repo.py  templating.py  sqlread.py  lineage.py
+      github.py            <- reading a repository over the network
   web\
     index.html  styles.css  app.js
   tests\
@@ -228,6 +230,26 @@ C:\ripple-build\
     test_narrative.py
   mockrepo\                <- a small fake pipeline to test against (Phase 12)
 ```
+
+**Those three are the only ones that reach the network**, and the only ones this
+kit treats as optional. Ripple answers every question without them: they add a
+reader that turns a pasted email into a filled-in form, and a way to point at a
+repository you have no local copy of.
+
+Two of them are optional, one is not, and the difference is which file imports
+which:
+
+* `providers.py` **is not optional.** `config.py` imports it on line one of its
+  imports, and `config.py` is read by everything. It is a table of which AI
+  company a pasted key belongs to — 140 lines, almost all of it data, and it
+  reaches nothing by itself. Build it even if you never build the reader.
+* `ai.py` and `scanner/github.py` **are optional.** Only `api.py` imports them.
+  Leave them out and you must leave out the routes that use them — which the kit
+  already treats as optional, under "THE AI ROUTES, IF THIS BUILD HAS AN AI
+  READER AT ALL".
+
+What `providers.py` has to contain is written out in full later in this kit,
+under "THE AI KEY BOX".
 
 ---
 
@@ -344,6 +366,9 @@ something is wrong later you know which single file to open.
 | `ripple/progress.py` | What Ripple is doing right now, so a screen can say so |
 | `ripple/store.py` | History of past analyses |
 | `ripple/build_info.py` | One version number, and the build stamp on the settings screen |
+| `ripple/providers.py` | Which AI company a pasted key belongs to, worked out from the key. Needed by `config.py` whether or not you build the reader |
+| `ripple/ai.py` | The optional AI reader. Turns a pasted email into a filled-in form |
+| `ripple/scanner/github.py` | Reading a repository over the network, for when there is no local copy |
 | `ripple/api.py` | The web service: every address the screens call and what comes back |
 | `web/app.js` | **Every screen** — all six steps, every card, every word |
 | `web/styles.css` | Colours, spacing, fonts |
@@ -463,6 +488,10 @@ ripple/narrative.py            writing the summary and the reply, without AI
 ripple/progress.py             what the engine is doing this second
 ripple/store.py                saving analyses to SQLite
 ripple/build_info.py           the one version number, and the build stamp
+ripple/providers.py            which AI company a pasted key belongs to -
+                               imported by config.py, so always built
+ripple/ai.py                   the optional AI reader (reaches the network)
+ripple/scanner/github.py       reading a repository over the network (optional)
 ripple/api.py                  the web service
 web/index.html web/styles.css web/app.js    the front end
 

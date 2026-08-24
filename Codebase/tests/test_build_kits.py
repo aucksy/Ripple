@@ -53,21 +53,50 @@ def test_each_kit_says_which_of_the_three_it_is():
 # A file the kits never name is a file nobody builds. dialectcompat.py and
 # build_info.py were both in this state: real, imported, load-bearing, and
 # absent from every file map and every phase.
-ENGINE_FILES = [
-    "config.py", "production.py", "catalog.py", "narrative.py", "notification.py",
-    "progress.py", "store.py", "api.py", "build_info.py",
-    "scanner/repo.py", "scanner/templating.py", "scanner/sqlread.py",
-    "scanner/lineage.py", "scanner/rescue.py", "scanner/dialectcompat.py",
-]
+#
+# This list used to be typed out by hand, and that is its own version of the
+# same bug: providers.py, ai.py and scanner/github.py were shipped, imported and
+# named in no kit for months, and the test written to catch exactly that could
+# not see them because nobody had added them to the list. A list of what to
+# check, kept by hand, goes stale in the same silence as the thing it checks.
+#
+# So the list is read off the disk now. A new engine file is guarded the moment
+# it exists, without anybody remembering to come here.
+ENGINE_DIR = Path(__file__).resolve().parent.parent / "ripple"
+
+
+def _engine_files() -> list[str]:
+    """Every engine file that ships, newest arrivals included.
+
+    ``__init__.py`` is left out: it is empty by design, both kits say so in
+    their folder tree, and there is nothing about it for a kit to describe.
+    """
+    found = [
+        p.relative_to(ENGINE_DIR).as_posix()
+        for p in ENGINE_DIR.rglob("*.py")
+        if "__pycache__" not in p.parts and p.name != "__init__.py"
+    ]
+    return sorted(found)
+
+
+ENGINE_FILES = _engine_files()
+
+
+def test_the_engine_has_files_to_check():
+    """A glob that quietly matches nothing passes every test after it."""
+    assert len(ENGINE_FILES) > 10, f"only found {ENGINE_FILES} - the glob is wrong"
 
 
 @pytest.mark.parametrize("name", ENGINE_FILES)
 def test_every_engine_file_is_named_in_both_build_kits(name):
     leaf = name.split("/")[-1]
-    assert (Path(__file__).resolve().parent.parent / "ripple" / name).is_file(), \
-        f"{name} is not in the shipped code - fix the list in this test"
     for kit in BUILD_KITS:
-        assert leaf in text(kit), f"{kit.name} never names {leaf}"
+        assert leaf in text(kit), (
+            f"{kit.name} never names {leaf}, which ships in ripple/{name}. "
+            f"A file no kit names is a file nobody builds. Put it in the folder "
+            f"tree and the file map — and if this kit deliberately does not build "
+            f"it, say so there in a sentence, which counts as naming it."
+        )
 
 
 @pytest.mark.parametrize("name", ENGINE_FILES)
