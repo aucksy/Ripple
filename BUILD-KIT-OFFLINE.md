@@ -4742,6 +4742,12 @@ Name the family so it cannot collide: .iwrap, .ifact, button.i, .ipanel. In
 particular do NOT call it .why — that class already names the amber tag riding
 on a matched line inside a code snippet, and a bare .why rule reaches it too.
 
+The same trap in the script. Nothing may declare a local `why` — a const, a let
+or a var — inside a function that also calls the helper, because a local shadows
+the shared function for the whole of that function and the call throws. The
+offline build refuses to run when it finds one, and names it, because that fault
+appears only in the packaged copy nobody can check.
+
 WHAT MAY GO BEHIND THE BUTTON, AND WHAT MAY NOT
 This is the line the whole product rests on, and getting it wrong breaks the
 tool rather than making it untidy.

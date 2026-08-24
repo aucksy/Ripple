@@ -66,10 +66,25 @@ HTML_BANNER = """<!-- GENERATED — do not edit. Built from Codebase/web/index.h
 
 _FUNCTION = re.compile(r"^\s*function\s+([A-Za-z_$][\w$]*)\s*\(", re.MULTILINE)
 
+# Names from the shared front end that offline.js must not reuse for a local
+# variable. A `const why = ...` inside a function shadows the shared helper of
+# that name for the whole function, so calling it there throws -- and it throws
+# only in the offline build, on the copy nobody can check. This is not caught by
+# the function-clash test below: a local const is not a declaration.
+SHADOWED = ("why", "el", "api", "run", "render", "esc")
+
+_LOCAL = re.compile(
+    r"^\s*(?:const|let|var)\s+(" + "|".join(SHADOWED) + r")\s*=", re.MULTILINE)
+
 
 def _functions(text: str) -> set[str]:
     """Every function this script declares at the top level of a line."""
     return set(_FUNCTION.findall(text))
+
+
+def _shadowed(text: str) -> list[str]:
+    """Shared helper names offline.js reuses as a local variable."""
+    return sorted(set(_LOCAL.findall(text)))
 
 
 class BuildError(RuntimeError):
@@ -149,6 +164,14 @@ def build(out_dir: Path | None = None, shared_web: Path | None = None) -> Path:
     # That is the whole mechanism for the three above -- and a trap for every
     # other name, where the offline build would quietly run different code from
     # the one that can be checked. Only the deliberate three are allowed.
+    shadow = [n for n in _shadowed(offline_js) if f"function {n}(" in js]
+    if shadow:
+        raise BuildError(
+            f"offline.js uses {', '.join(shadow)} as a local variable, and the shared front "
+            f"end has a helper of that name. A local const shadows it for the whole function, "
+            f"so calling the helper there throws -- and only in this build, on the copy nobody "
+            f"can check. Rename the local one.")
+
     clash = sorted(_functions(js) & _functions(offline_js) - set(REPLACED))
     if clash:
         raise BuildError(

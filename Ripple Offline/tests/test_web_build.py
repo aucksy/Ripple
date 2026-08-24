@@ -211,3 +211,37 @@ def test_the_real_build_carries_no_provider_at_all(built):
     js = (built / "app.js").read_text(encoding="utf-8").lower()
     for word in ("openai", "gemini", "groq", "googleapis", "aicard", "api key"):
         assert word not in js, word
+
+
+def test_a_local_variable_that_shadows_a_shared_helper_stops_the_build(tmp_path,
+                                                                       monkeypatch):
+    """Found by hitting it. offline.js had a `const why = ...` inside one of its
+    cards, and `why` is the name of the shared information button. A local const
+    shadows the shared function for the whole surrounding function, so calling
+    it there throws — and only here, on the copy nobody can check.
+
+    The function-clash test above does not catch this: a local const is not a
+    declaration, so the two files declare no name in common.
+    """
+    spoiled = webbuild.OFFLINE_JS.read_text(encoding="utf-8").replace(
+        "function settingsView(root) {",
+        "function settingsView(root) {\n  const why = el('div', {});", 1)
+    fake = tmp_path / "offline.js"
+    fake.write_text(spoiled, encoding="utf-8")
+    monkeypatch.setattr(webbuild, "OFFLINE_JS", fake)
+    with pytest.raises(webbuild.BuildError, match="local variable"):
+        webbuild.build(out_dir=tmp_path / "out")
+
+
+def test_the_information_button_is_in_the_offline_build(built):
+    """It is the pattern every screen uses. If it were stripped out with the
+    online-only parts, every card would say the fact and lose the explanation
+    with nothing on screen to say so."""
+    js = (built / "app.js").read_text(encoding="utf-8")
+    assert js.count("\nfunction why(") == 1, "the information button is not in this build"
+    assert "aria-expanded" in js and "aria-controls" in js
+    css = (built / "styles.css").read_text(encoding="utf-8").replace(" ", "")
+    assert "button.i{" in css, "the information button has no style rule here"
+    # It must be used by the offline-only screens too, not only the shared ones.
+    at = js.index("function settingsView(")
+    assert "why(" in js[at:at + 4000], "the offline settings screen never uses it"

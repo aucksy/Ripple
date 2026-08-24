@@ -132,21 +132,23 @@ function settingsView(root) {
 
   if (!h.configured) {
     root.append(el('div', { className: 'note info', style: 'margin-bottom:18px' },
-      el('b', { textContent: 'Choose the repository folder to get started. ' }),
-      'Ripple reads a copy of the code that is already on this machine — it does not '
-      + 'download anything and it never writes to your code. Point it at the folder, '
-      + 'check the SQL dialect underneath, and save.'));
+      why(el('b', { textContent: 'Choose the repository folder to get started.' }),
+        'what choosing a folder does',
+        'Ripple reads a copy of the code that is already on this machine — it does not '
+        + 'download anything and it never writes to your code. Point it at the folder, '
+        + 'check the SQL dialect underneath, and save.')));
   }
 
   const grid = el('div', { className: 'grid2 even' });
   const prod = el('div', { style: 'margin-top:18px' },
     productionCard({ persistNote: '' }),
     el('div', { className: 'note warn', style: 'margin-top:14px' },
-      el('b', { textContent: 'Get this wrong and a real impact reads as a clean result. ' }),
-      'A finding is only counted as production impact when the table it ends at is on this '
-      + 'list. Nothing is hidden either way — every table the change reaches is still listed — '
-      + 'but the headline, the risk level and the drafted reply all follow it. '
-      + 'Press Save below to use it.'));
+      why(el('b', { textContent: 'Get this wrong and a real impact reads as a clean result.' }),
+        'what the published-table list decides',
+        'A finding is only counted as production impact when the table it ends at is on this '
+        + 'list. Nothing is hidden either way — every table the change reaches is still '
+        + 'listed — but the headline, the risk level and the drafted reply all follow it. '
+        + 'Press Save below to use it.')));
   grid.append(el('div', {}, folderCard(h, o), dialectCard(h, o), prod, saveRow(h, o)),
               el('div', { className: 'rail' }, whereCard(h), guardCard(), factsCard(h),
                  buildCard(h), closeCard()));
@@ -158,18 +160,21 @@ function settingsView(root) {
    stopped, its own folder cannot be deleted or moved. */
 function closeCard() {
   const card = el('div', { className: 'card pad lg', style: 'margin-top:18px' });
-  card.append(el('span', { className: 'lbl', textContent: 'Finished with Ripple' }));
-  card.append(el('div', { className: 'small muted', style: 'margin-top:10px;line-height:1.55',
-    textContent: 'Ripple runs as a small program on this machine, not inside the browser, so '
-      + 'closing this tab is not the same as closing Ripple. While it is running its own '
-      + 'folder cannot be deleted or moved.' }));
+  card.append(why(
+    el('span', { className: 'lbl', textContent: 'Finished with Ripple' }),
+    'closing the tab is not closing Ripple',
+    'Ripple runs as a small program on this machine, not inside the browser, so closing this '
+    + 'tab is not the same as closing Ripple. While it is running, its own folder cannot be '
+    + 'deleted or moved.'));
   const stop = el('button', { className: 'ghost', style: 'margin-top:12px',
     textContent: 'Close Ripple' });
   stop.onclick = () => closeRipple();
   card.append(stop);
-  card.append(el('div', { className: 'small faint', style: 'margin-top:10px;line-height:1.55',
-    textContent: 'It also closes itself a few minutes after the last tab is shut, so a '
-      + 'forgotten one does not sit there holding the folder open.' }));
+  card.append(el('div', { className: 'small faint', style: 'margin-top:10px' },
+    why(el('span', { textContent: 'It also closes itself.' }),
+      'when Ripple closes itself',
+      'A few minutes after the last tab is shut, so a forgotten one does not sit there '
+      + 'holding the folder open.')));
   return card;
 }
 
@@ -177,10 +182,11 @@ function closeCard() {
    when this machine actually has one to open. */
 function folderCard(h, o) {
   const card = el('div', { className: 'card pad lg' });
-  card.append(el('span', { className: 'lbl', textContent: 'Repository folder' }));
-  card.append(el('div', { className: 'small faint', style: 'margin-top:6px;line-height:1.55',
-    textContent: 'The folder holding the code to search. Ripple reads every file in it and '
-      + 'never writes to any of them.' }));
+  card.append(why(
+    el('span', { className: 'lbl', textContent: 'Repository folder' }),
+    'what Ripple does with this folder',
+    'The folder holding the code to search. Ripple reads every file in it and never writes '
+    + 'to any of them.'));
 
   const inp = el('input', { type: 'text', className: 'mono', value: o.path,
     placeholder: 'D:\\code\\our-pipelines', style: 'margin-top:12px;padding:12px 14px' });
@@ -223,19 +229,23 @@ function dialectCard(h, o) {
   const sel = el('select', { className: 'statussel', style: 'width:100%;padding:11px 12px;margin-top:12px' });
   (h.dialects || []).forEach(d => sel.append(el('option', {
     value: d.id, textContent: d.label, selected: d.id === o.dialect })));
-  const why = el('div', { className: 'small faint', style: 'margin-top:6px;line-height:1.55' });
-  const showWhy = () => {
+  // NOT called `why`. That is the name of the shared information-button helper,
+  // and a local const of the same name shadows it for the whole function -- so
+  // calling it here would throw instead of drawing a button.
+  const note = el('div', { className: 'small faint', style: 'margin-top:6px;line-height:1.55' });
+  const showNote = () => {
     const d = (h.dialects || []).find(x => x.id === sel.value);
-    why.textContent = d ? d.note : '';
+    note.textContent = d ? d.note : '';
   };
-  sel.onchange = () => { o.dialect = sel.value; showWhy(); };
-  showWhy();
-  card.append(sel, why);
+  sel.onchange = () => { o.dialect = sel.value; showNote(); };
+  showNote();
+  card.append(sel, note);
   card.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
-    el('b', { textContent: 'This matters more than it looks. ' }),
-    'Read as generic SQL, a BigQuery pipeline in Ripple\u2019s own tests parsed 2 of its 5 '
-    + 'files and reported no impact on a change that really broke two things. That is not '
-    + 'a vaguer answer than the right one — it is the opposite answer.'));
+    why(el('b', { textContent: 'This matters more than it looks.' }),
+      'why the dialect changes the answer',
+      'Read as generic SQL, a BigQuery pipeline in Ripple\u2019s own tests parsed 2 of its 5 '
+      + 'files and reported no impact on a change that really broke two things. That is not '
+      + 'a vaguer answer than the right one — it is the opposite answer.')));
   return card;
 }
 
@@ -254,8 +264,8 @@ function saveRow(h, o) {
     // the page having done something by itself.
     row.append(el('span', { className: 'spin' }),
       el('span', { className: 'small muted',
-        textContent: 'Reading every file and parsing the SQL. On a large repository this takes '
-          + 'a few seconds — the counts on the right update when it finishes.' }));
+        textContent: 'Reading every file and parsing the SQL — the counts on the right '
+          + 'update when it finishes.' }));
   } else {
     row.append(el('span', { className: 'small faint',
       textContent: 'Saved to the settings file beside Ripple, so it is remembered next time.' }));
@@ -278,9 +288,11 @@ function whereCard(h) {
       el('div', { className: 'small muted', textContent: k }),
       el('div', { className: 'small mono', textContent: v,
         style: 'margin-top:3px;font-weight:600;word-break:break-all' }))));
-  card.append(el('div', { className: 'small faint', style: 'margin-top:12px;line-height:1.55',
-    textContent: 'Both sit in the folder you copied across. Take that folder to another machine '
-      + 'and your settings and saved analyses go with it. Delete it and Ripple is gone.' }));
+  card.append(el('div', { className: 'small faint', style: 'margin-top:12px' },
+    why(el('span', { textContent: 'Both sit in the folder you copied across.' }),
+      'what moving the folder takes with it',
+      'Take that folder to another machine and your settings and saved analyses go with it. '
+      + 'Delete it and Ripple is gone.')));
   const sync = h.syncedFolder;
   if (sync && sync.synced) {
     // Keeping everything beside the executable is what makes this copy portable.
@@ -289,13 +301,14 @@ function whereCard(h) {
     // surprise. Neither point is a reason to stop; both are a reason to say so.
     card.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
       el('b', { style: 'display:block', textContent: `${sync.client} is syncing this folder` }),
-      el('div', { style: 'margin-top:6px;line-height:1.55', textContent:
-        'Two things follow. Saved analyses are kept in a database file in here, and a sync '
-        + 'tool copies files whenever it likes — if Ripple ever says it could not save an '
-        + 'analysis, that is the most likely reason, and trying again usually works. And '
-        + 'everything in this folder is being uploaded to your company\u2019s cloud, including '
-        + 'the Ripple program itself, which is about 44 MB across roughly 1,770 files and is '
-        + 'not signed by a known publisher.' }),
+      why(el('div', { style: 'margin-top:6px;line-height:1.55', textContent:
+          'Everything in this folder is being uploaded to your company\u2019s cloud — including '
+          + 'the Ripple program itself, about 44 MB across roughly 1,770 files, and not '
+          + 'signed by a known publisher.' }),
+        'what a synced folder means for Ripple',
+        'Saved analyses are kept in a database file in here, and a sync tool copies files '
+        + 'whenever it likes — if Ripple ever says it could not save an analysis, that is '
+        + 'the most likely reason, and trying again usually works.'),
       el('div', { className: 'small', style: 'margin-top:8px;line-height:1.55', textContent:
         'If you would rather neither happened, close Ripple and move this folder somewhere '
         + 'that is not synced — C:\\Ripple, for example — then start it again from there. '
@@ -312,21 +325,25 @@ function guardCard() {
   const state = el('div', { style: 'margin-top:12px' },
     el('span', { className: 'small muted', textContent: 'Checking…' }));
   card.append(state);
-  card.append(el('div', { className: 'small faint', style: 'margin-top:12px;line-height:1.55',
-    textContent: 'This copy has no connection to anywhere and no AI — there is nothing here to '
-      + 'type a key or an address into. It reads the folder above and writes the two files listed.' }));
+  card.append(el('div', { className: 'small faint', style: 'margin-top:12px' },
+    why(el('span', { textContent: 'No connection to anywhere, and no AI.' }),
+      'what this copy can and cannot do',
+      'There is nothing here to type a key or an address into. It reads the folder above and '
+      + 'writes the two files listed.')));
   api('/api/offline-check').then(g => {
     state.innerHTML = '';
     if (g.guardInstalled) {
       state.append(el('div', { className: 'note good' },
-        el('b', { textContent: 'Outbound connections are blocked. ' }),
-        'Anything in this program that tried to call out would fail on the spot, not '
-        + 'succeed quietly because this machine happens to have internet.'));
+        why(el('b', { textContent: 'Outbound connections are blocked.' }),
+          'how the block behaves',
+          'Anything in this program that tried to call out would fail on the spot, not '
+          + 'succeed quietly because this machine happens to have internet.')));
     } else {
       state.append(el('div', { className: 'note warn' },
-        el('b', { textContent: 'The block is not switched on in this copy. ' }),
-        'Ripple still has nothing in it that calls out, but that is not being enforced '
-        + 'here. Start Ripple the normal way to switch it back on.'));
+        why(el('b', { textContent: 'The block is not switched on in this copy.' }),
+          'what an unenforced block means',
+          'Ripple still has nothing in it that calls out, but that is not being enforced '
+          + 'here. Start Ripple the normal way to switch it back on.')));
     }
     if (g.attempts && g.attempts.length) {
       state.append(el('div', { className: 'note bad', style: 'margin-top:10px' },
