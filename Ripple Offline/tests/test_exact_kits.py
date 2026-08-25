@@ -29,8 +29,7 @@ OFF = ROOT / "Ripple Offline"
 TOOL = OFF / "tools" / "make_exact_kits.py"
 SNAPSHOT_TOOL = OFF / "tools" / "make_demo_snapshot.py"
 
-HERE_KIT = ROOT / "RUN-RIPPLE-HERE.md"                 # pip works
-NO_INSTALL_KIT = ROOT / "RUN-RIPPLE-HERE-NO-INSTALLS.md"  # pip is blocked
+HERE_KIT = ROOT / "RUN-RIPPLE-HERE.md"
 
 UI_NAMES = ("web/index.html", "web/styles.css", "web/app.js")
 
@@ -104,7 +103,7 @@ def engine_source(saved_as: str) -> Path:
 
 # ── both kits ─────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("kit_path", [HERE_KIT, NO_INSTALL_KIT], ids=["here", "no-installs"])
+@pytest.mark.parametrize("kit_path", [HERE_KIT], ids=["here"])
 def test_the_pieces_join_back_into_the_real_files(kit_path, offline_web):
     """The one that matters. Byte for byte, or it is not the same Ripple."""
     got = rebuilt(read(kit_path))
@@ -126,7 +125,7 @@ def test_the_pieces_join_back_into_the_real_files(kit_path, offline_web):
         )
 
 
-@pytest.mark.parametrize("kit_path", [HERE_KIT, NO_INSTALL_KIT], ids=["here", "no-installs"])
+@pytest.mark.parametrize("kit_path", [HERE_KIT], ids=["here"])
 def test_the_checksums_the_kit_publishes_are_the_real_ones(kit_path, offline_web):
     """Each kit ships a checker. Stale digests tell somebody their imitation is
     exact, which is the worst answer it could possibly give."""
@@ -140,7 +139,7 @@ def test_the_checksums_the_kit_publishes_are_the_real_ones(kit_path, offline_web
         )
 
 
-@pytest.mark.parametrize("kit_path", [HERE_KIT, NO_INSTALL_KIT], ids=["here", "no-installs"])
+@pytest.mark.parametrize("kit_path", [HERE_KIT], ids=["here"])
 def test_no_piece_is_big_enough_to_be_refused(kit_path):
     """A chat window will not take an unlimited paste, and a piece that gets
     truncated produces a file that looks finished and is not."""
@@ -150,7 +149,7 @@ def test_no_piece_is_big_enough_to_be_refused(kit_path):
     assert not over, f"{len(over)} piece(s) over 45 KB in {kit_path.name}: {over}"
 
 
-@pytest.mark.parametrize("kit_path", [HERE_KIT, NO_INSTALL_KIT], ids=["here", "no-installs"])
+@pytest.mark.parametrize("kit_path", [HERE_KIT], ids=["here"])
 def test_each_kit_is_generated_and_says_so(kit_path):
     """A copy of a source file inside a document is a second copy of it, and the
     second copy is always the one that goes stale."""
@@ -160,7 +159,7 @@ def test_each_kit_is_generated_and_says_so(kit_path):
     assert "edit this by hand" in kit, f"{kit_path.name} does not warn against hand-editing"
 
 
-@pytest.mark.parametrize("kit_path", [HERE_KIT, NO_INSTALL_KIT], ids=["here", "no-installs"])
+@pytest.mark.parametrize("kit_path", [HERE_KIT], ids=["here"])
 def test_each_kit_is_honest_about_what_it_cannot_give_you(kit_path):
     """Neither kit can contain the SQL parser, and saying so is the difference
     between a kit and a wasted evening."""
@@ -170,16 +169,16 @@ def test_each_kit_is_honest_about_what_it_cannot_give_you(kit_path):
 
 # ── the two kits together ─────────────────────────────────────────────────
 
-def test_each_kit_is_a_whole_Ripple_on_its_own():
-    """Neither is half a job.
+def test_the_kit_is_a_whole_Ripple_on_its_own():
+    """It is not half a job.
 
-    These used to be three files -- one for the screens, one for the engine, one
+    This started as three files -- one for the screens, one for the engine, one
     for everything -- and somebody following the first two had to know they were
-    a pair. They are one kit each now: pick the one that matches your machine,
-    follow it to the end, and you have Ripple. So each has to carry BOTH halves,
-    and a kit that quietly lost one would still read perfectly well.
+    a pair. One kit now: follow it to the end and you have Ripple. So it has to
+    carry BOTH halves, and a kit that quietly lost one would still read
+    perfectly well.
     """
-    for kit_path in (HERE_KIT, NO_INSTALL_KIT):
+    for kit_path in (HERE_KIT,):
         got = set(rebuilt(read(kit_path)))
         screens = {n for n in got if n.startswith("web/")}
         engine = {n for n in got if n.startswith("ripple")}
@@ -190,7 +189,7 @@ def test_each_kit_is_a_whole_Ripple_on_its_own():
             f"{kit_path.name} hands over no way to start it"
 
 
-def test_the_two_kits_are_told_apart_by_pip_and_say_so():
+def test_the_kit_is_not_named_for_a_distinction_nobody_draws():
     """The words 'online' and 'offline' mean two opposite things depending on
     who is saying them -- hosted-or-not to most people, network-or-not inside
     this repository. Both kits were named with the second meaning and read with
@@ -198,19 +197,15 @@ def test_the_two_kits_are_told_apart_by_pip_and_say_so():
     carries either word now, and the one for a normal machine says out loud that
     running it here and hosting it later are the same files.
     """
-    for kit_path in (HERE_KIT, NO_INSTALL_KIT):
-        assert "online" not in kit_path.name.lower(), f"{kit_path.name} says 'online'"
-        assert "offline" not in kit_path.name.lower(), f"{kit_path.name} says 'offline'"
+    assert "online" not in HERE_KIT.name.lower(), f"{HERE_KIT.name} says 'online'"
+    assert "offline" not in HERE_KIT.name.lower(), f"{HERE_KIT.name} says 'offline'"
     here = read(HERE_KIT)
     assert "pip install" in here, "the usual kit never says what to install"
     assert "same files" in here, (
         "RUN-RIPPLE-HERE.md does not say that running it here and hosting it "
         "later are the same files, which is the thing people get wrong."
     )
-    assert "pip install" in read(NO_INSTALL_KIT), (
-        "the no-installs kit does not tell somebody to try pip first, so people "
-        "who could use the shorter kit will follow the longer one."
-    )
+
 
 
 def test_the_engine_kit_matches_what_the_snapshot_actually_ships():
@@ -232,69 +227,6 @@ def test_the_engine_kit_matches_what_the_snapshot_actually_ships():
             f"{listname} differs: the exact kit has {sorted(names_a - names_b)} "
             f"that the snapshot does not, and is missing {sorted(names_b - names_a)}."
         )
-
-
-def test_the_no_install_screens_carry_no_way_out_of_the_machine(offline_web):
-    """The bug this test was written for, caught the day the kit was made.
-
-    The first version of the UI kit handed over ``Codebase/web/app.js`` — the
-    ONLINE screens. They contain a box asking for an AI provider key and a
-    button that downloads a repository from GitHub. Pasted onto a locked-down
-    laptop that is the exact opposite of what the machine is for, and the
-    settings screen it does need, choosing a folder and a dialect, was not in
-    there at all.
-
-    The offline build already refuses to ship those words. So must the kit.
-    """
-    import sys
-    sys.path.insert(0, str(OFF))
-    from ripple_offline import webbuild
-
-    # Only the SCREENS, and only the handed-over code rather than the prose
-    # around it. webbuild applies this list to the front end alone, and it has
-    # to: ripple/providers.py is a table of which company a pasted key belongs
-    # to, so it names all three of them. It opens no connection, and it ships
-    # inside the no-install build that is proven to run.
-    code = "\n".join(v for k, v in rebuilt(read(NO_INSTALL_KIT)).items()
-                     if k.startswith("web/")).lower()
-    found = [w for w in webbuild.BANNED if w.lower() in code]
-    assert not found, (
-        f"{NO_INSTALL_KIT.name} hands over screens containing {found}. That is the "
-        f"online front end. The offline one is built from it with those parts "
-        f"deleted - regenerate with tools/make_exact_kits.py."
-    )
-    assert "dialect" in code, (
-        "the kit's screens have no way to choose a SQL dialect, so this is not "
-        "the offline front end and nobody can point it at a repository."
-    )
-
-
-def test_every_empty_file_gets_its_own_command():
-    """A kit that lists two empty files and gives one command creates one of them.
-
-    The empty __init__.py files are the ones people skip, because everything
-    works without them. What they actually stop is Python merging EVERY folder
-    called `ripple` on the machine into one package -- measured: without the
-    file, `ripple.__path__` spans two folders and a module from an unrelated
-    decoy folder imports as though it were Ripple's own. Nothing errors and
-    nothing warns, which is the one failure this tool exists to make impossible.
-    """
-    kit = read(HERE_KIT)
-    if "## First: the empty files" not in kit:
-        pytest.skip("this kit hands over no empty files")
-    section = kit.split("## First: the empty files")[1].split("\n---")[0]
-    listed = re.findall(r"^\s{4}([\w./]+\.py)$", section, re.MULTILINE)
-    assert listed, "the section lists no files"
-    for name in listed:
-        want = "type nul > " + name.replace("/", "\\")
-        assert want in section, (
-            f"{HERE_KIT.name} lists {name} as an empty file to create but gives "
-            f"no command for it. Somebody creates the ones that have a line."
-        )
-    assert "namespace package" in section, (
-        "the section does not say what skipping these actually costs, so it reads "
-        "as housekeeping somebody can skip - and everything does work without them."
-    )
 
 
 # ── the page that decides which file somebody opens ───────────────────────
@@ -445,11 +377,11 @@ def test_the_repair_kit_is_one_block_somebody_can_paste():
         assert must in prompt, f"the pasteable block never says `{must}`"
 
 
-def test_the_rescue_prompts_for_the_two_hard_phases_are_in_both_kits():
+def test_the_rescue_prompts_for_the_two_hard_phases_are_there():
     """Phases 4 and 8 are where a build stalls, and both kits already NAMED what
     goes wrong without ever giving somebody the sentence to send back. A person
     in a broken window at ten at night does not compose one."""
-    for kit_name in ("BUILD-KIT.md", "BUILD-KIT-OFFLINE.md"):
+    for kit_name in ("BUILD-KIT.md",):
         kit = (ROOT / kit_name).read_text(encoding="utf-8")
         for phase in (4, 8):
             assert f"## When Phase {phase} goes wrong" in kit, \

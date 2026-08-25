@@ -28,18 +28,20 @@ all twelve build the same product.
 
 ---
 
-## The three kits, and which one you want
+## The three files, and which one you want
 
 | Kit | When |
 |---|---|
 | **BUILD-KIT.md** | Building Ripple on a laptop that CAN install Python packages. Ends with a program you can double-click and hand to somebody. |
-| **BUILD-KIT-OFFLINE.md** | Building Ripple on a locked-down laptop that can install NOTHING. Same tool, same screens, same findings; the plumbing underneath is written out of Python's own library instead. Runs with `python run.py`. |
-| **BUILD-KIT-REPAIR.md** | You already HAVE a working Ripple and want to change something. Tells you which single file to put in front of Copilot, and exactly what to say to it. |
+| **RUN-RIPPLE-HERE.md** | You want Ripple running, identical to the copy it came from, without building it. 36 pastes of its actual files. Also the repair shop for this kit: where a phase falls short, take that one file from there. |
+| **BUILD-KIT-REPAIR.md** | You already HAVE a working Ripple and want to change something. One prompt; it answers with the files to open and where they are saved. |
 
-The two build kits share Phases 1 to 12 almost word for word, because the tool
-they build is the same tool. They differ in how you get the SQL parser onto the
-machine, in the web service underneath, in how the tests are run, and in whether
-there is a packaging step at the end. Do not mix pages between them.
+There was a second build kit once, written for a machine where nothing at all
+could be installed. It was 86% this same document, and the only part of it that
+mattered to anybody whose `pip` works is here now, under "If the install step
+will not work at all" — three routes for getting the SQL parser on when the
+company mirror is down. Two accounts of one build is a tool that behaves
+differently depending on which file somebody happened to open.
 
 ---
 
@@ -73,12 +75,13 @@ What that means in practice:
 files hand the whole thing over instead of describing it, in pieces you paste
 one after another, each ending with a checksum that says `exact` per file:
 
-* `RUN-RIPPLE-HERE.md` — for a machine where `pip install` works. 36 pastes,
-  nothing to copy, fonts included.
-* `RUN-RIPPLE-HERE-NO-INSTALLS.md` — for a machine where it does not. 25 pastes,
-  and `sqlglot` still has to arrive as a folder.
-
+`RUN-RIPPLE-HERE.md` hands the whole thing over instead of describing it — 36
+pastes, fonts included, ending with a checksum that says `exact` per file.
 Nothing else gets two people to the same pixels.
+
+It is also worth having open WHILE you follow this kit. Where a phase's output
+falls short, take that one file's pieces from there rather than arguing with a
+chat about it.
 
 ### The one thing no kit can ever do
 
@@ -223,6 +226,173 @@ python -c "import sqlglot,fastapi,uvicorn,pydantic,multipart,extract_msg,httpx,p
 
 You want `all set - sqlglot 30.17.0`. If instead it names one thing it could not
 find, install that one on its own and run this again.
+
+---
+
+## If the install step will not work at all
+
+Everything above assumes `pip` can reach something. When it cannot — no mirror,
+no route out, and IT cannot help today — one package still has to arrive, and
+only one: **`sqlglot`**. Everything else on that install line can be worked
+around; the SQL parser cannot, and a word search calling itself an impact
+analysis is the exact thing Ripple exists to replace.
+
+It is pure Python with no dependencies of its own, so it does not have to be
+*installed*. A copy of the folder sitting beside your code is enough.
+
+**Whichever route you take, this is the proof.** Run it from `ripple-build`,
+and nowhere else:
+
+```
+python -c "import sqlglot; print(sqlglot.__version__)"
+```
+
+It must print exactly `30.17.0`. Anything else — an error, a blank, a different
+number — means that route did not land, and you move to the next one.
+
+### Route 1 — the source zip, unpacked beside your code
+
+Try this second: it needs nothing from any other machine, and no permission from
+anyone. Many companies block the package site but leave GitHub open, because
+people need to read code.
+
+**1. Open this in your browser:**
+
+```
+https://github.com/tobymao/sqlglot/archive/refs/tags/v30.17.0.zip
+```
+
+If it downloads, GitHub is reachable and this route works. If it does not, go to
+Route C.
+
+**2. Unblock and unzip it.** Windows marks anything downloaded as coming from the
+internet, which can make Python refuse to load it:
+
+```powershell
+Unblock-File $env:USERPROFILE\Downloads\sqlglot-30.17.0.zip
+```
+
+```powershell
+Expand-Archive $env:USERPROFILE\Downloads\sqlglot-30.17.0.zip -DestinationPath $env:USERPROFILE\Downloads\sqlglot-src
+```
+
+**3. Take ONE folder out of it — the inner one.** The zip contains a folder called
+`sqlglot-30.17.0`, and inside that is another called `sqlglot`. **The inner one is
+the parser**; the outer one is the project around it — tests, documentation, build
+files — and none of that is wanted. Copy the inner one into your project:
+
+```powershell
+Copy-Item $env:USERPROFILE\Downloads\sqlglot-src\sqlglot-30.17.0\sqlglot -Destination .\ripple-build\sqlglot -Recurse
+```
+
+**4. Fix the one thing the zip is missing.** This will catch you out, so do it now
+rather than debugging it later. The file that records the version number is not in
+the source code — it is created when the package is built, and the zip is the code
+before that happens. Without it, `import sqlglot` prints a red error line and
+`sqlglot.__version__` does not exist, **even though parsing works perfectly**. The
+fix is one small file. Create `ripple-build\sqlglot\_version.py` containing exactly:
+
+```python
+__version__ = version = '30.17.0'
+__version_tuple__ = version_tuple = (30, 17, 0)
+```
+
+**Proof:** the command above. Run it from `ripple-build`. If it prints
+`Unable to set __version__` you skipped step 4.
+
+---
+
+### Route 2 — a wheel carried across and installed with no network
+
+Try this third. It gives the best result of the three remaining: a properly
+installed package that works from any folder, not just this project.
+
+**On any machine that can reach the internet** — a home laptop, a phone
+tethered to a spare machine, anything outside the corporate network — fetch the
+file:
+
+```
+python -m pip download sqlglot==30.17.0 --no-deps --dest D:\ripple-parts
+```
+
+That produces one file, `sqlglot-30.17.0-py3-none-any.whl`, **415 KB**. The
+`py3-none-any` in the name means it is not tied to any Python version or any kind
+of machine — the same file works on your 3.10 laptop. `--no-deps` is safe here
+because sqlglot has no dependencies.
+
+Move that one file to the office laptop by whatever route is allowed to you — USB,
+OneDrive, Teams, emailing it to yourself. It is under half a megabyte.
+
+**On the office laptop**, install it from the folder you put it in. There is no
+network in this command; nothing is fetched:
+
+```
+python -m pip install --no-index --find-links=C:\ripple-parts sqlglot==30.17.0
+```
+
+If that is refused for permissions, add `--user`:
+
+```
+python -m pip install --user --no-index --find-links=C:\ripple-parts sqlglot==30.17.0
+```
+
+**Proof:** the command above. This route is the one where it also works from
+outside `ripple-build`, which is a good sign you got the best outcome available.
+
+---
+
+### Route 3 — the folder copied across as plain files
+
+The last route, and the one that cannot fail for any reason involving pip, because
+pip is not involved. Use it if pip refuses to install even from a local file.
+
+**On any machine that can reach the internet**, install it there first, then find
+where it landed:
+
+```
+python -m pip install sqlglot==30.17.0
+```
+
+```
+python -c "import sqlglot,os;print(os.path.dirname(sqlglot.__file__))"
+```
+
+That prints a folder called `sqlglot`. Copy it, then **delete every `__pycache__`
+folder inside the copy**. Those hold code compiled for that machine's Python
+version, they are useless anywhere else, and they are more than half the size:
+
+```powershell
+Get-ChildItem <your copy>\sqlglot -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+```
+
+You should be left with **71 files and 1.8 MB**. Move that folder across, and drop
+it into the project so it sits beside `ripple`:
+
+```
+ripple-build\sqlglot\
+```
+
+Nothing is installed and nothing is configured. Python looks in the folder it was
+started from, finds `sqlglot` there, and uses it.
+
+**Proof:** the command above, run from `ripple-build`. This route only works from
+`ripple-build`, which is why the contract card tells every window that commands run
+from the project root.
+
+---
+
+### When none of them work
+
+Say so early rather than building eleven-twelfths of a tool that cannot read SQL.
+The options left are all requests to someone else, in rough order of how often
+they are granted: ask IT to install one named pure-Python package for you; ask for
+the internal mirror to be enabled; ask for a temporary firewall exception to
+`pypi.org` and `files.pythonhosted.org`; or build Ripple somewhere else and use it
+against a copy of the repository. There is no version of Ripple worth having that
+reads SQL without a parser — a word search that calls itself an impact analysis is
+the exact thing this tool exists to replace.
+
+---
 
 ---
 
@@ -827,7 +997,26 @@ result. Handle all of these with no tidying up by the user:
   "table" settles it. Otherwise score each column by how many of its cells
   look like a real table name, where "real" means it also contains an
   underscore, a dot or a digit.
-- a heading row on top: "Table name", "TABLE_NAME", "Name", and similar
+- a heading row on top. This list has to be long, because a heading that is
+  not recognised becomes a published table name — and a published-table list
+  with a word like "Status" on it matches nothing, quietly, on the one setting
+  that decides whether "no production table is impacted" is a result or an
+  accident. Match on the cell's own text, lower-cased and trimmed, against all
+  of these:
+
+    #  no  s no  sr no  sl no  row  id  index
+    name  names  table  tables  tablename  table name  table names
+    full name  full table name  qualified name  fully qualified name
+    fully qualified table name
+    target table  output table  published table  prod table
+    production table  downstream table
+    dataset  datasets  schema  project  database  db
+    owner  team  layer  domain  env  environment  source  type  status
+    sla  frequency  comment  comments  notes  description
+
+  The last dozen are there because a real list is copied out of a spreadsheet
+  that had other columns beside the table names, and every one of those column
+  headings arrives with it.
 - Slack and Confluence decoration: bullets • - * and numbering 1. 1) (1),
   backticks, ``` code fences, quotes, trailing commas and semicolons,
   markdown table pipes and ruled lines
@@ -1212,6 +1401,19 @@ the rest) and read from there to the closing quote: starting from the command
 cannot be set off by "don't" in a comment. Dedupe the blocks afterwards — a
 one-line bq query is found by the ordinary string miner as well, and reading it
 twice counts every finding in it twice.
+
+  A BARE WORD IN SQL IS NOT ALWAYS A COLUMN. Where a name is read back out of
+  text rather than off the parse tree, check it against the words that are
+  never a column before recording one, or a WHERE clause reports a usage of a
+  column called AND:
+
+    AND  OR  NOT  IN  IS  NULL  TRUE  FALSE  LIKE  BETWEEN
+    CASE  WHEN  THEN  ELSE  END  AS  CAST  ANY  ALL
+    STRING  INT64  FLOAT64  BOOL  DATE  TIMESTAMP
+    SESSION_USER  CURRENT_DATE  CURRENT_TIMESTAMP
+
+  The type names matter as much as the keywords: CAST(cm13 AS FLOAT64) holds
+  two bare words and only one of them is a column.
 
   looks_like_unread_sql(f, blocks)  SQL is plainly written in this file and
                                   none could be extracted — the shape where a
@@ -2290,11 +2492,27 @@ For each parsed statement build a Statement with:
            node with the very same kind, so tell them apart by their BODY — a
            table function's is a SELECT, a scalar one's is an expression, and
            getting this wrong turns every helper in the repository into a table.
-           And BigQuery's own built-in table functions (EXTERNAL_QUERY, APPENDS,
-           CHANGES, GAP_FILL, VECTOR_SEARCH and friends) WRAP a table rather
-           than being one; the table they wrap is parsed separately and found
-           anyway, so taking the wrapper's name too only invents a table nobody
-           has. Keep a short list of those and skip them.
+           And some things written in a FROM clause look exactly like a table
+           and are not. BigQuery's own built-in table functions WRAP a table
+           rather than being one; the table they wrap is parsed separately and
+           found anyway, so taking the wrapper's name as well only invents a
+           table nobody has — on the answer, in the dependency picture, and in
+           the letter. Skip every one of these, and skip nothing else:
+
+             EXTERNAL_QUERY  APPENDS  CHANGES  GAP_FILL  VECTOR_SEARCH
+             RANGE_SESSIONIZE  SESSIONIZE  OBJECT_METADATA  SEARCH_INDEX_STATUS
+             TABLE_DATE_RANGE  TABLE_QUERY
+             GENERATE_ARRAY  GENERATE_DATE_ARRAY  GENERATE_TIMESTAMP_ARRAY
+
+           The last three are the ones that catch people out: a generated range
+           of dates or numbers is written in a FROM clause exactly like a table
+           and is not one, and a repository that builds a calendar that way
+           reports a table called GENERATE_DATE_ARRAY feeding production.
+
+           Write the list as a set matched on the name in CAPITALS, so the
+           spelling in the file does not matter. Anything not on it that sits
+           in a FROM clause IS treated as a table — the other way round, an
+           unfamiliar function name silently swallows a real read.
 
            A TABLE HANDED INTO A FUNCTION IS A REAL READ, AND IT IS NOT A
            TABLE NODE.

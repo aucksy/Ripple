@@ -8,7 +8,7 @@ Writes two files at D:\Apps\Ripple:
 
 WHY THESE EXIST, said plainly.
 
-BUILD-KIT.md and BUILD-KIT-OFFLINE.md describe Ripple. They are specifications:
+BUILD-KIT.md describes Ripple. It is a specification:
 what each file must do, which colours to use, which facts may never be hidden.
 A chat given those builds a Ripple that behaves the same way and looks close.
 
@@ -469,7 +469,7 @@ UI_INTRO = """# Ripple — the screens, exactly
 whole, in pieces you paste one after another.
 
 **Why it is not written like the other kits.** `BUILD-KIT.md` and
-`BUILD-KIT-OFFLINE.md` describe how Ripple works and let a chat write the code.
+describes how Ripple works and lets a chat write the code.
 That is right for the engine and wrong for the screens. Of every substantial
 line of Ripple's shipped source, **one per cent** appears word for word in those
 two kits — and for `app.js` and `index.html` it is **none**. They are a
@@ -494,7 +494,7 @@ nothing to get right. Three text files in a folder called `web`, and the screens
 are exact.
 
 **This kit gives you the screens, not the engine.** For the Python underneath,
-either follow `BUILD-KIT-OFFLINE.md` — which builds a working engine that is
+follow `BUILD-KIT.md` — which builds a working engine that is
 simpler than the shipped one — or use `BUILD-KIT-ENGINE-EXACT.md`, which hands
 that over whole the same way this hands over the screens.
 
@@ -511,7 +511,7 @@ ENGINE_INTRO = """# Ripple — the engine, exactly
 you paste one after another. This is the same set of files that runs on a
 machine with nothing installed: Python's own library, plus the SQL parser.
 
-**Why it is not written like the other kits.** `BUILD-KIT-OFFLINE.md` describes
+**Why it is not written like the build kit.** `BUILD-KIT.md` describes
 the engine and lets a chat write it. That produces a working Ripple, and it is
 the right kit if you want to understand how Ripple works or change it. But its
 phases budget about 4,500 lines and the shipped engine is 10,797. The difference
@@ -742,7 +742,7 @@ than a word search, no chat can write it, and pasted through a chat window it is
 about seventy-five pastes. **It has to arrive as files**, in a folder called
 `sqlglot` sitting beside `run.py`.
 
-`BUILD-KIT-OFFLINE.md` has a whole section on getting it there — an internal
+`BUILD-KIT.md` has a whole section on getting it there — an internal
 company mirror, the source zip from GitHub, a copy from a colleague's machine.
 Read Phase 0 of that file first. Nothing below works without it.
 
@@ -813,27 +813,19 @@ the table the chain ends at is on that list."""
 
 
 def main() -> None:
-    """Two kits, not three, and named for the question somebody is actually asking.
+    """One kit. There were three, then two, and each cut was the same mistake
+    found again: a file named for a distinction nobody outside this repository
+    draws. What is left hands over Ripple's own files for a machine where pip
+    works, which is every machine anybody has actually had to use.
 
-    They used to be called ONLINE-EXACT, UI-EXACT and ENGINE-EXACT. Those names
-    were a mistake. Inside this repository "online" and "offline" mean whether
-    Ripple may reach the network -- but to everybody else they mean whether it
-    is hosted or running on a laptop, which is the OPPOSITE axis. Somebody
-    wanting to run Ripple on their own machine before it is hosted anywhere
-    read "online" and went to the wrong file. And the screens and the engine
-    were two kits that are useless apart, so they are one kit now.
+    The pair for a machine that installs nothing went with the second build kit.
+    Everything they said is still true and still in git; what stopped being true
+    is that anybody needed a separate document for it.
     """
-    n0, l0 = build_kit(ROOT / "RUN-RIPPLE-HERE.md", "everything", ONLINE_INTRO,
-                       online_files(), "check_ripple.py", ONLINE_TAIL,
-                       with_fonts=True)
-    print(f"RUN-RIPPLE-HERE.md             {n0:>3} pastes  {l0:>7,} lines   "
-          f"<- pip works. THE USUAL ONE.")
-
-    n1, l1 = build_kit(ROOT / "RUN-RIPPLE-HERE-NO-INSTALLS.md", "everything",
-                       NO_INSTALL_INTRO, engine_files() + ui_files(),
-                       "check_ripple.py", NO_INSTALL_TAIL)
-    print(f"RUN-RIPPLE-HERE-NO-INSTALLS.md {n1:>3} pastes  {l1:>7,} lines   "
-          f"<- pip is blocked, and sqlglot has to be copied")
+    n, lines = build_kit(ROOT / "RUN-RIPPLE-HERE.md", "everything", ONLINE_INTRO,
+                         online_files(), "check_ripple.py", ONLINE_TAIL,
+                         with_fonts=True)
+    print(f"RUN-RIPPLE-HERE.md  {n} pastes, {lines:,} lines of Ripple, nothing to copy")
 
 
 main()

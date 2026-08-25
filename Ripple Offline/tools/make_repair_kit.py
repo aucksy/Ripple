@@ -372,7 +372,7 @@ file, give both.
       the project root holds run.py, and folders ripple\\ , web\\ and tests\\
       example: ripple\\scanner\\sqlread.py
 
-  Built from BUILD-KIT-OFFLINE.md (nothing can be installed):
+  The packaged program (Ripple Offline):
       the same, plus a folder ripple_offline\\ and a copied folder sqlglot\\
       example: ripple\\scanner\\sqlread.py   (the same place)
       but the web service is ripple_offline\\app.py, not ripple\\api.py

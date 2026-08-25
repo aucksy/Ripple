@@ -23,30 +23,49 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 ONLINE = ROOT / "BUILD-KIT.md"
-OFFLINE = ROOT / "BUILD-KIT-OFFLINE.md"
 REPAIR = ROOT / "BUILD-KIT-REPAIR.md"
-BUILD_KITS = (ONLINE, OFFLINE)
+BUILD_KITS = (ONLINE,)
 
 
 def text(p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
 
-def test_all_three_kits_are_here():
-    """One builds on an ordinary laptop, one on a locked-down one, one changes a
-    Ripple that already exists. Losing any of them loses a road in."""
-    for kit in (ONLINE, OFFLINE, REPAIR):
+def test_both_kits_are_here():
+    """One builds Ripple from nothing, one changes a Ripple that already exists.
+    Losing either loses a road in.
+
+    There were two BUILD-KITs once, a second written for a machine where nothing
+    could be installed. It was 86% the same document, and the only part of it
+    that mattered to anybody whose pip works -- four routes for getting sqlglot
+    on when the mirror is down -- lives in BUILD-KIT.md now, under "If the
+    install step will not work at all". Two accounts of one build is a product
+    that behaves differently depending on which file somebody opened.
+    """
+    for kit in (ONLINE, REPAIR):
         assert kit.is_file(), f"{kit.name} is missing"
         assert len(text(kit).splitlines()) > 400, f"{kit.name} is too short to be the kit"
 
 
-def test_each_kit_says_which_of_the_three_it_is():
+def test_the_build_kit_keeps_the_way_in_when_pip_cannot_reach_anything():
+    """The one thing worth keeping from the kit that was deleted. sqlglot is the
+    only package that cannot be worked around, and a build that gets eleven
+    twelfths of the way and then cannot read SQL is a wasted evening."""
+    body = text(ONLINE)
+    assert "## If the install step will not work at all" in body,         "BUILD-KIT.md has no fallback for a blocked pip"
+    for route in ("### Route 1", "### Route 2", "### Route 3"):
+        assert route in body, f"the fallback is missing {route}"
+    assert "python -c \"import sqlglot; print(sqlglot.__version__)\"" in body,         "the fallback gives no way to prove the parser arrived"
+
+
+def test_each_kit_says_which_of_the_two_it_is():
     """Somebody who opens the wrong one and follows it to the end has wasted two
-    evenings, so each kit names all three and says when to use each."""
-    for kit in (ONLINE, OFFLINE, REPAIR):
+    evenings, so each names the other and says when to use it."""
+    for kit in (ONLINE, REPAIR):
         body = text(kit)
-        for other in ("BUILD-KIT.md", "BUILD-KIT-OFFLINE.md"):
-            assert other in body, f"{kit.name} never mentions {other}"
+        for other in ("BUILD-KIT.md", "BUILD-KIT-REPAIR.md"):
+            if other != kit.name:
+                assert other in body, f"{kit.name} never mentions {other}"
 
 
 # ── every engine file is named somewhere ──────────────────────────────────
@@ -145,29 +164,8 @@ def test_the_contract_card_declares_every_field_on_a_finding():
     assert not missing, f"the contract card never names these finding fields: {missing}"
 
 
-# ── the two build kits agree with each other ──────────────────────────────
+# ── the kit does not contradict itself ───────────────────────────────────
 _HEADING = re.compile(r"^[A-Z][A-Z '\*\-,\.\(\)/_]{24,}", re.M)
-
-# Blocks that belong to one kit only, and why. Anything NOT on this list has to
-# appear in both, because both build the same tool.
-ONLY_ONLINE = {"NAME WHAT YOU PRODUCE FOR ITS VERSION"}     # nothing is packaged offline
-ONLY_OFFLINE = {"EVERY COMMAND RUNS FROM THE PROJECT ROOT",  # the parser sits beside the code
-                "FIVE THINGS THAT MUST BE EXACTLY RIGHT"}    # getting the parser on at all
-
-
-def _headings(body: str) -> set[str]:
-    return {m.group(0).split(".")[0].strip() for m in _HEADING.finditer(body)}
-
-
-def test_the_two_build_kits_carry_the_same_behaviour_blocks():
-    """They build the same tool out of the same engine. A rule that reaches one
-    kit and not the other is a product that behaves differently depending on
-    which laptop it was built on, and nothing anywhere would say so."""
-    a, b = _headings(text(ONLINE)), _headings(text(OFFLINE))
-    only_a = {h for h in a - b if not any(h.startswith(x) for x in ONLY_ONLINE)}
-    only_b = {h for h in b - a if not any(h.startswith(x) for x in ONLY_OFFLINE)}
-    assert not only_a, f"only in the normal kit: {sorted(only_a)}"
-    assert not only_b, f"only in the offline kit: {sorted(only_b)}"
 
 
 def test_neither_build_kit_states_one_rule_twice():
@@ -193,17 +191,6 @@ def test_the_sqlglot_pin_is_the_one_the_kits_name():
         assert not wrong, f"{kit.name} names sqlglot {sorted(wrong)}, pinned is {pinned}"
 
 
-def test_the_offline_kit_does_not_name_a_version_that_disagrees_with_itself():
-    """Phase 0 has somebody type a version file by hand. The string and the
-    numbers in it are read by different things, so they have to match."""
-    body = text(OFFLINE)
-    strings = re.findall(r"__version__ = version = '([0-9.]+)'", body)
-    tuples = re.findall(r"__version_tuple__ = version_tuple = \((\d+), (\d+), (\d+)\)", body)
-    assert strings and tuples, "the hand-typed version file is not in the offline kit"
-    for s, parts in zip(strings, tuples):
-        assert s == ".".join(parts), f"version string {s} does not match tuple {parts}"
-
-
 RAW_KEYS = ('args["except"]', 'args["from"]', 'args["replace"]',
             'args["expressions"]', 'args["columns"]', 'args["fields"]')
 
@@ -222,3 +209,51 @@ def test_a_kit_only_shows_a_raw_parse_tree_key_while_warning_about_it():
                 warned = ("became" in line or "->" in line
                           or "dialectcompat" in line or "never" in line.lower())
                 assert warned, f"{kit.name}:{n} shows {raw} with no warning beside it"
+
+
+# ── the kits carry the WHOLE of every list, not an example of one ─────────
+# A rule written as "EXTERNAL_QUERY, APPENDS and friends" produces a Ripple that
+# knows three of fourteen. Every entry it never heard of is a silent wrong
+# answer of exactly the kind the surrounding paragraph exists to prevent: a
+# built-in function recorded as a table nobody has, a spreadsheet heading
+# recorded as a published table, the word AND recorded as a column.
+#
+# These are the enumerable ones. If a new list of this shape is added to the
+# engine, add it here too - and then the kits have to name it.
+RULE_LISTS = [
+    ("the built-in functions that wrap a table", "ripple/scanner/sqlread.py", "_NOT_A_TABLE"),
+    ("the words that are never a column", "ripple/scanner/sqlread.py", "_NOT_A_COLUMN"),
+    ("the heading rows a pasted list arrives with", "ripple/production.py", "_HEADINGS"),
+    ("the file types that are known not to be code", "ripple/scanner/repo.py", "NOT_CODE_EXTS"),
+    ("the template suffixes", "ripple/scanner/repo.py", "TEMPLATE_SUFFIXES"),
+    ("the kinds a usage can be", "ripple/scanner/sqlread.py", "KIND_PRIORITY"),
+    ("which change breaks which kind", "ripple/scanner/lineage.py", "BREAKS"),
+]
+
+
+def _entries(rel: str, const: str) -> list[str]:
+    """Every string inside a module-level assignment, read off the code."""
+    import ast
+    path = Path(__file__).resolve().parent.parent / rel
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        named = (isinstance(node, ast.Assign)
+                 and any(getattr(t, "id", None) == const for t in node.targets))
+        if named:
+            return [s.value for s in ast.walk(node)
+                    if isinstance(s, ast.Constant) and isinstance(s.value, str)
+                    and len(s.value) > 1]
+    return []
+
+
+@pytest.mark.parametrize("label,rel,const", RULE_LISTS,
+                         ids=[c for _, _, c in RULE_LISTS])
+def test_the_kit_names_every_entry_of_every_rule_list(label, rel, const):
+    entries = _entries(rel, const)
+    assert entries, f"{const} is not in {rel} any more - fix the list in this test"
+    body = text(ONLINE).lower()
+    missing = sorted({e for e in entries if e.lower() not in body})
+    assert not missing, (
+        f"{len(missing)} of {len(entries)} entries of {label} appear in the "
+        f"build kit: {missing}. A chat cannot write a list it was never given, "
+        f"and every one of these is a wrong answer nothing would report."
+    )
