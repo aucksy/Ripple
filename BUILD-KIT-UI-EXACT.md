@@ -1,7 +1,7 @@
 # Ripple — the screens, exactly
 
 **What this is.** The three files that ARE Ripple's user interface, handed over
-whole, in 7 pieces you paste one after another.
+whole, in pieces you paste one after another.
 
 **Why it is not written like the other kits.** `BUILD-KIT.md` and
 `BUILD-KIT-OFFLINE.md` describe how Ripple works and let a chat write the code.
@@ -28,14 +28,14 @@ That is also the good news: there is nothing to compile, nothing to install and
 nothing to get right. Three text files in a folder called `web`, and the screens
 are exact.
 
-**This kit gives you the screens, not the engine.** You still need the Python
-underneath, from `BUILD-KIT-OFFLINE.md`. The two fit together: build the engine
-from that kit, then put these three files in `web/` and the screens are Ripple's
-own rather than an imitation.
+**This kit gives you the screens, not the engine.** For the Python underneath,
+either follow `BUILD-KIT-OFFLINE.md` — which builds a working engine that is
+simpler than the shipped one — or use `BUILD-KIT-ENGINE-EXACT.md`, which hands
+that over whole the same way this hands over the screens.
 
 **One thing cannot be typed by anybody.** The SQL parser, `sqlglot`, is 183
-files. No chat can write it and no kit can contain it. It has to be copied. That
-is Phase 0 of the offline kit and it has not changed.
+files and 2.7 MB. No chat can write it and no kit can contain it. It has to be
+copied. That is Phase 0 of the offline kit and it has not changed.
 
 ---
 
@@ -43,13 +43,13 @@ is Phase 0 of the offline kit and it has not changed.
 
 | File | What it decides | Lines | Pieces |
 |---|---|---|---|
-| `web/index.html` | the empty page the screens are drawn into | 215 | 1 |
+| `web/index.html` | the empty page the screens are drawn into | 206 | 1 |
 | `web/styles.css` | every colour, size and spacing rule | 396 | 1 |
-| `web/app.js` | every screen, every card, every word | 3,235 | 5 |
+| `web/app.js` | every screen, every card, every word | 3,250 | 5 |
 
-**3,846 lines in 7 pastes.** Do them in the order below.
-Where a file is split, the pieces MUST go in one after another, into the same
-file — piece 2 goes on the end of piece 1, not into a new file.
+**3,852 lines in 6 pastes.** Do them in the order below.
+Where a file is split, the pieces MUST go one after another into the SAME file —
+piece 2 goes on the end of piece 1, never into a new file.
 
 ---
 
@@ -64,32 +64,34 @@ to and whether it starts that file or continues it.
 Write them out exactly as given. Do not reformat, do not re-indent, do not
 "improve" anything, do not add or remove comments, do not change quote marks,
 and do not shorten anything with a comment saying the rest is unchanged. If a
-piece looks like it was cut off mid-way, that is correct — the next piece
+piece looks like it was cut off mid-way, that is correct -- the next piece
 continues it.
 
 If you cannot write the whole piece, say so and stop. Do not summarise it.
 ````
 
 That last line matters. A chat asked for a long file will sometimes write half
-and put `// ... rest of the file unchanged ...` in the middle, which produces a
-file that looks finished and is not. The check at the bottom catches it.
+of it and put `# ... rest unchanged ...` in the middle, which produces a file
+that looks finished and is not. The check at the bottom catches it.
 
 ---
 
 ## The pieces
 
+## Paste 1 of 6 — 2 files
 
 ### web/index.html
 
 Create the file `web/index.html` and put exactly this in it. Change nothing: not a space, not a quote, not a blank line.
 
 ````html
+<!-- GENERATED — do not edit. Built from Codebase/web/index.html. -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ripple — upstream change impact analysis</title>
+<title>Ripple Offline — upstream change impact analysis</title>
 <link rel="stylesheet" href="/static/fonts/fonts.css">
 <link rel="stylesheet" href="/static/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='44' fill='none' stroke='%23006FCF' stroke-width='8' opacity='.4'/><circle cx='50' cy='50' r='28' fill='none' stroke='%23006FCF' stroke-width='8' opacity='.75'/><circle cx='50' cy='50' r='13' fill='%2300175A'/></svg>">
@@ -141,9 +143,6 @@ Create the file `web/index.html` and put exactly this in it. Change nothing: not
         </div>
         <div class="small muted" style="margin-top:16px;line-height:1.55">
           No file? Use <b>Enter manually</b> above.
-          <!--<online-only>-->
-          <span class="faint" data-x="aiState"></span>
-          <!--</online-only>-->
         </div>
       </div>
       <div class="rail">
@@ -213,13 +212,6 @@ Create the file `web/index.html` and put exactly this in it. Change nothing: not
 <template id="t-step3">
   <div class="head">
     <div><h2 data-x="title">Connected repository</h2><p data-x="sub"></p></div>
-    <!--<online-only>-->
-    <div class="right">
-      <span class="lbl faint">Source</span>
-      <button class="pill" data-src="folder">This machine</button>
-      <button class="pill" data-src="github">GitHub</button>
-    </div>
-    <!--</online-only>-->
   </div>
   <div data-x="alert"></div>
   <div class="grid2 even">
@@ -704,28 +696,21 @@ select.statussel{width:auto;padding:5px 9px;font-size:12.5px}
 .empty b{display:block;font-size:17px;font-weight:800}
 ````
 
+## Paste 2 of 6
+
 ### web/app.js — piece 1 of 5
 
 Create the file `web/app.js` and put exactly this in it. Change nothing: not a space, not a quote, not a blank line.
 
 ````javascript
+/* GENERATED — do not edit.
+   Built from Codebase/web/app.js with the online-only parts removed, plus
+   Ripple Offline's own screens appended. Edit those two files instead; this one
+   is rewritten from them every time Ripple Offline starts or is built. */
 /* Ripple — front end.
    Plain JavaScript on purpose: no build step, no framework, nothing to install.
    The same file can be opened, read and changed by anyone. */
 
-//<online-only>
-// This file is also the front end of Ripple Offline, which is built from it
-// rather than being a second copy — a copy would drift, and the drifting one
-// would be the build running where nobody can check it. The lines between
-// //<online-only> and //</online-only> are deleted from that build: they are
-// the parts that reach out (the GitHub source and the AI key form), which must
-// not merely be unused offline but absent. Deleting those lines has to leave
-// working JavaScript, so each block is written to read correctly with its
-// marked lines gone. The offline build then checks the result for the words
-// that should be gone, and fails with the line it found rather than shipping a
-// key box onto a locked-down machine. Moving a marker is safe; quietly dropping
-// one is not. See Ripple Offline/ripple_offline/webbuild.py.
-//</online-only>
 
 const STEPS = [
   ['Notification',    'Upload or type it in'],
@@ -747,9 +732,6 @@ const S = {
   summary: null,
   reply: null,
   savedId: null,
-  //<online-only>
-  aiMsg: null,        // result of the last AI key action, kept across redraws
-  //</online-only>
   manRows: [{ table: '', attrs: '' }],
   man: { source: '', changeKind: 'unknown', effectiveDate: '', changeDesc: '',
          pocName: '', pocEmail: '', pocTeam: '' },
@@ -758,13 +740,6 @@ const S = {
   // Which information buttons are open, by label. Kept here so a redraw does
   // not shut a panel somebody is in the middle of reading.
   why: {},
-  //<online-only>
-  // Repository step. The token is held here only long enough to send it once;
-  // it is cleared as soon as the server has accepted it.
-  repoTab: null,
-  gh: { repo: '', branch: '', token: '' },
-  connecting: false, connectMsg: '',
-  //</online-only>
 };
 
 // Typed by hand, so the awkward ones are given the right control rather than a
@@ -1252,11 +1227,6 @@ function renderStatus() {
     el('div', { className: 'srow' },
       el('span', { className: 'dot ' + (repoOk ? 'ok' : 'warn') }),
       el('span', { textContent: repoOk ? `${h.repo.label} · ${h.repo.files} files` : 'No repository found' })),
-    //<online-only>
-    el('div', { className: 'srow' },
-      el('span', { className: 'dot ' + (h.ai.available ? 'ok' : 'off') }),
-      el('span', { textContent: h.ai.available ? 'AI on' : 'AI off — rules only' })),
-    //</online-only>
     el('div', { className: 'srow' },
       el('span', { className: 'dot ' + (h.sqlDialect === 'generic' ? 'warn' : 'ok') }),
       el('span', { textContent: `SQL read as ${h.sqlDialect}` })),
@@ -1279,12 +1249,6 @@ function step1(root) {
   x(root, 'manualMode').classList.toggle('hide', S.mode !== 'manual');
 
   if (S.mode === 'email') {
-    //<online-only>
-    const ai = S.health?.ai?.available;
-    x(root, 'aiState').textContent = ai
-      ? ` The email is read by ${S.health.ai.modelLabel}.`
-      : ' AI is off — fields are matched against the repository instead.';
-    //</online-only>
     // What Ripple does, in one line, with the four steps behind the button.
     const does = x(root, 'does');
     does.append(el('span', { className: 'lbl', textContent: 'What Ripple does' }));
@@ -1482,18 +1446,8 @@ function step2(root) {
   x(root, 'title').textContent = manual ? 'Change details' : 'What Ripple read';
   x(root, 'sub').textContent = manual
     ? 'Edit anything before scanning.'
-````
-
-### web/app.js — piece 2 of 5
-
-Add this to the END of `web/app.js`, straight after what is already there. Do not start a new file. Do not re-type anything above.
-
-````javascript
     : 'Ripple scans on exactly what is here, not on the email.';
   x(root, 'by').textContent = manual ? 'Entered by you — no AI used'
-    //<online-only>
-    : v.extractedBy === 'ai' ? 'Read by AI — check it'
-    //</online-only>
     : 'Found by matching the catalogue — check it';
 
   const warn = x(root, 'warnings'); warn.innerHTML = '';
@@ -1520,6 +1474,15 @@ Add this to the END of `web/app.js`, straight after what is already there. Do no
       inp.oninput = () => { v[key] = inp.value; };
       card.append(inp);
       if (key === 'effectiveDate' && dl !== null) {
+````
+
+## Paste 3 of 6
+
+### web/app.js — piece 2 of 5
+
+Add this to the END of `web/app.js`, straight after what is already there. Do not start a new file. Do not re-type anything above.
+
+````javascript
         card.append(el('span', { className: 'badge sm ' + (dl <= 21 ? 'amber' : 'blue'),
           textContent: dl < 0 ? 'date has passed' : `${dl} day${dl === 1 ? '' : 's'} left`, style: 'margin-top:8px' }));
       }
@@ -1568,46 +1531,16 @@ function renderUpstreamRows(root, v) {
    nothing at all. Online that is a failed connection; offline it is a folder
    that has been moved or deleted since it was chosen, so the offline build
    replaces this whole function rather than sharing it. */
-//<online-only>
-function repoAlert(h) {
-  if (S.connectMsg) {
-    return el('div', { className: 'note bad', style: 'margin-bottom:18px' },
-      el('b', { textContent: 'Could not connect. ' }), S.connectMsg);
-  }
-  if (h.connectError) {
-    return el('div', { className: 'note warn', style: 'margin-bottom:18px' },
-      el('b', { textContent: 'Reading the folder on this machine instead. ' }), h.connectError);
-  }
-  return null;
-}
-//</online-only>
 
 function step3(root) {
   const h = S.health;
   if (!h) return;
-  //<online-only>
-  if (S.repoTab === null) S.repoTab = h.source === 'github' ? 'github' : 'folder';
-  const onGit = S.repoTab === 'github';
-  const live = h.source === 'github';
-  //</online-only>
 
   x(root, 'title').textContent =
-    //<online-only>
-    onGit ? 'Read a GitHub repository' :
-    //</online-only>
     'Connected repository';
   x(root, 'sub').textContent =
-    //<online-only>
-    onGit ? 'Point Ripple at a repository and give it an access token. It only ever reads.' :
-    //</online-only>
     'This is the code Ripple will search. It is read, never written to.';
 
-  //<online-only>
-  $$('[data-src]', root).forEach(b => {
-    b.className = 'pill' + (b.dataset.src === S.repoTab ? ' on' : '');
-    b.onclick = () => { S.repoTab = b.dataset.src; S.connectMsg = ''; render(); };
-  });
-  //</online-only>
 
   const alert = x(root, 'alert'); alert.innerHTML = '';
   const said = repoAlert(h);
@@ -1615,9 +1548,6 @@ function step3(root) {
 
   x(root, 'left').innerHTML = '';
   x(root, 'left').append(
-    //<online-only>
-    onGit ? gitHubForm(h, live) :
-    //</online-only>
     repoFacts(h));
 
   // the same confirmation the prototype shows, on the numbers Ripple really has
@@ -1628,16 +1558,6 @@ function step3(root) {
   // nothing rather than claiming "main" because that is the usual answer.
   let where = 'a folder on this machine';
   let pin = h.repo.branch ? ['Branch ', el('span', { className: 'mono', textContent: h.repo.branch })] : [];
-  //<online-only>
-  // Pulled from a hosted repository instead, where the commit is the exact
-  // version. Naming the source here is what stops a connect form sitting beside
-  // this note from being mistaken for "connected" when the folder is what is
-  // really loaded.
-  if (live) {
-    where = 'from GitHub';
-    pin = ['Commit ', el('span', { className: 'mono', textContent: h.github.shortCommit || h.github.branch })];
-  }
-  //</online-only>
   ready.append(el('div', { className: 'note ' + (repoOk ? 'good' : 'warn') },
     el('b', { textContent: repoOk ? `✓ ${h.repo.label} connected` : `Nothing to scan in ${h.repo.label}`,
       style: 'display:block;font-size:14px' }),
@@ -1813,14 +1733,8 @@ function step3(root) {
 
 /* What Ripple is reading now — the same facts either way. */
 function repoFacts(h) {
-  //<online-only>
-  const live = h.source === 'github';
-  //</online-only>
   const r = el('div', { className: 'card pad lg' });
   r.append(el('span', { className: 'lbl', textContent:
-    //<online-only>
-    live ? 'GitHub repository' :
-    //</online-only>
     'Folder on this machine' }));
   r.append(el('div', { className: 'mono', textContent: h.repo.label,
     style: 'font-size:17px;font-weight:600;color:var(--blued);margin-top:8px;word-break:break-all' }));
@@ -1850,118 +1764,15 @@ function repoFacts(h) {
     // one step too late.
     ['Counts as published', h.production || 'not set'],
   ];
-  //<online-only>
-  if (live) {
-    facts.splice(3, 0, ['Commit read', h.github.commit ? h.github.commit.slice(0, 12) : 'unknown']);
-    facts.push(['Visibility', h.github.private ? 'private' : 'public']);
-  }
-  //</online-only>
   const t = el('div', { style: 'margin-top:18px' });
   facts.forEach(([k, val]) => t.append(el('div', { style: 'display:flex;gap:14px;padding:9px 0;border-top:1px solid var(--hair)' },
     el('span', { className: 'small muted', textContent: k, style: 'flex:1' }),
     el('span', { className: 'small' + (k === 'Commit read' ? ' mono' : ''), textContent: val, style: 'font-weight:700' }))));
   r.append(t);
-  //<online-only>
-  if (live) {
-    const off = el('button', { className: 'ghost sm', textContent: 'Disconnect and forget the token', style: 'margin-top:18px' });
-    off.onclick = () => run(async () => {
-      S.health = await api('/api/repo/disconnect', { method: 'POST' });
-      S.repoTab = 'folder'; S.connectMsg = ''; S.gh.token = '';
-      render();
-    });
-    r.append(off);
-  }
-  //</online-only>
   return r;
 }
 
 /* The connect form. Nothing here pretends: the button does one real request. */
-//<online-only>
-function gitHubForm(h, live) {
-  const card = el('div', { className: 'card pad lg' });
-  const envToken = h.tokenFrom === 'environment';
-
-  // Built first so typing a repository name can switch it on straight away,
-  // without redrawing the form and throwing away the cursor.
-  const btn = el('button', { className: 'pri',
-    textContent: S.connecting ? 'Reading the repository…' : (live ? 'Read it again' : 'Connect and read it') });
-  const syncBtn = () => { btn.disabled = S.connecting || (!S.gh.repo.trim() && !live); };
-
-  const field = (label, key, opts = {}) => {
-    const wrap = el('div', { style: 'margin-bottom:18px' });
-    wrap.append(el('label', { className: 'lbl', textContent: label, style: 'display:block;margin-bottom:7px' }));
-    const inp = el('input', {
-      type: opts.secret ? 'password' : 'text',
-      value: S.gh[key], placeholder: opts.hint || '',
-      className: opts.mono ? 'mono' : '',
-      style: 'padding:12px 14px' + (opts.width ? `;width:${opts.width}` : ''),
-    });
-    if (opts.secret) inp.autocomplete = 'off';
-    inp.oninput = () => { S.gh[key] = inp.value; syncBtn(); };
-    inp.onkeydown = (e) => { if (e.key === 'Enter') doConnect(); };
-    wrap.append(inp);
-    if (opts.note) wrap.append(el('div', { className: 'small faint', textContent: opts.note, style: 'margin-top:6px' }));
-    return wrap;
-  };
-
-  card.append(field('Repository', 'repo', {
-    mono: true, hint: 'owner/repository', note: 'Or paste the address straight from GitHub.' }));
-  card.append(field('Branch', 'branch', {
-    mono: true, hint: 'leave blank for the default', width: '240px' }));
-
-  if (envToken) {
-    card.append(el('div', { style: 'margin-bottom:18px' },
-      el('span', { className: 'lbl', style: 'display:block;margin-bottom:7px', textContent: 'Access token' }),
-      el('div', { className: 'note good' },
-        el('b', { textContent: 'A token is already set on this server. ' }),
-        'It was set as an environment variable, so it survives restarts. Leave the box below empty to keep using it.')));
-    card.append(field('Use a different token instead', 'token', { secret: true, hint: 'optional' }));
-  } else {
-    card.append(field('Access token', 'token', {
-      secret: true, hint: 'ghp_… or github_pat_…',
-      note: 'Needed for a private repository. A public one can be read without a token. '
-          + 'Read access is all it needs — Ripple never writes.' }));
-  }
-
-  syncBtn();
-  btn.onclick = () => doConnect();
-  const row = el('div', { className: 'foot', style: 'margin-top:4px' }, btn);
-  if (S.connecting) row.append(el('span', { className: 'spin' }),
-    el('span', { className: 'small muted', textContent: 'Downloading and indexing. A large repository takes a moment.' }));
-  card.append(row);
-
-  card.append(el('div', { className: 'note info', style: 'margin-top:20px' },
-    why(el('b', { textContent: 'The token is never written to disk, and never sent back to '
-        + 'this page.' }),
-      'where the token goes',
-      'Your token is sent to GitHub and held in memory while the server runs. It is never '
-      + 'written to a file, never logged, and never sent back to this page.',
-      h.serverless
-        ? 'This copy runs on a host that replaces its machine often. Ask whoever runs it to '
-          + 'set the token on the server so it lasts.'
-        : 'Restart the server and you will need to enter it again.')));
-  return card;
-}
-
-function doConnect() {
-  const repo = S.gh.repo.trim() || (S.health?.github?.slug || '');
-  if (!repo || S.connecting) return;
-  S.connecting = true; S.connectMsg = ''; render();
-  api('/api/repo/connect', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ repo, branch: S.gh.branch.trim(), token: S.gh.token }),
-  }).then(out => {
-    S.health = out;
-    S.gh.token = '';            // the server has it now; do not keep a copy here
-    S.gh.repo = out.github?.slug || repo;
-    S.gh.branch = '';
-    S.connectMsg = '';
-    S.scan = null; S.summary = null;   // anything scanned before was another repo
-  }).catch(e => {
-    S.connectMsg = e.message;
-  }).finally(() => { S.connecting = false; render(); });
-}
-//</online-only>
 
 /* deeper is set when a trail was cut short by the hop limit and the person
    asked for it to be followed further. It applies to that one scan; the setting
@@ -2162,13 +1973,6 @@ function step4(root) {
   // bill of health for a repository that was never there.
   if (!st.couldNotRead && !unopenedTypes && uncovered.length === 1 && !nothingRead) {
     gaps3.append(el('div', { className: 'note good', style: 'grid-column:span 2;align-self:stretch;display:flex;align-items:center' },
-````
-
-### web/app.js — piece 3 of 5
-
-Add this to the END of `web/app.js`, straight after what is already there. Do not start a new file. Do not re-type anything above.
-
-````javascript
       el('div', {}, el('b', { style: 'display:block', textContent: 'Every file was opened and read.' }),
         'Nothing was skipped, and nothing was left for a person to follow by hand.')));
   }
@@ -2305,6 +2109,15 @@ Add this to the END of `web/app.js`, straight after what is already there. Do no
 
 /* A run of table cards, with a readable number of them drawn.
 
+````
+
+## Paste 4 of 6
+
+### web/app.js — piece 3 of 5
+
+Add this to the END of `web/app.js`, straight after what is already there. Do not start a new file. Do not re-type anything above.
+
+````javascript
    Measured on a repository the size of the one this was built for: following a
    key column reaches over two hundred tables, and two hundred identical
    collapsed cards is a page nobody scrolls to the end of — so the tables at the
@@ -2561,14 +2374,6 @@ function renderChecks(box, sc) {
 
 /* The address of a finding in the connected repository, or nothing at all.
    Points at the first line that actually matched, not the top of the file. */
-//<online-only>
-function fileUrl(r) {
-  const tpl = S.scan?.repo?.urlTemplate;
-  if (!tpl || !r.file) return '';
-  const hit = (r.lines || []).find(l => l.hit) || (r.lines || [])[0];
-  return tpl.replace('{path}', r.file).replace('{line}', String(hit?.n ?? 1));
-}
-//</online-only>
 
 function detailFor(r) {
   const d = el('div', { className: 'detail' });
@@ -2620,12 +2425,6 @@ function detailFor(r) {
     el('span', { className: 'lang', textContent: r.lang }));
   // Only offered when Ripple genuinely knows the address of this code. On a
   // local folder there is nothing to link to, so no link is shown.
-  //<online-only>
-  const href = fileUrl(r);
-  if (href) {
-    head.append(el('a', { href, textContent: 'Open in GitHub ↗', target: '_blank', rel: 'noopener' }));
-  }
-  //</online-only>
   code.append(head);
   const body = el('div', { className: 'body' });
   (r.lines || []).forEach(ln => {
@@ -2824,13 +2623,6 @@ function renderTrailGaps(box, sc) {
       + 'you act on it.',
       sc.mergedNames.some(m => m.reason === 'capitals')
         ? 'BigQuery treats capital letters as significant, so two names that differ only in '
-````
-
-### web/app.js — piece 4 of 5
-
-Add this to the END of `web/app.js`, straight after what is already there. Do not start a new file. Do not re-type anything above.
-
-````javascript
           + 'case really are two different tables there.'
         : null));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
@@ -2973,6 +2765,15 @@ Add this to the END of `web/app.js`, straight after what is already there. Do no
           + 'tool that runs it names the table after the file. '
         : dbt
         ? `Some are ${tools} models; the rest hold one query and no CREATE. Whatever runs them `
+````
+
+## Paste 5 of 6
+
+### web/app.js — piece 4 of 5
+
+Add this to the END of `web/app.js`, straight after what is already there. Do not start a new file. Do not re-type anything above.
+
+````javascript
           + 'puts the rows in a table named after the file. '
         : 'Each of these files holds one query and no CREATE. Whatever runs it puts the rows in '
           + 'a table named after the file. ')
@@ -3381,9 +3182,6 @@ function step6(root) {
   }
   const [cls, label] = RISK[S.scan.risk] || RISK.none;
   x(root, 'sub').textContent =
-    //<online-only>
-    s.writtenBy === 'ai' ? `Written by ${S.health.ai.modelLabel} from the findings — no code was sent to it.` :
-    //</online-only>
     'Written from the findings without AI.';
 
   const b = x(root, 'body');
@@ -3478,13 +3276,6 @@ function step6(root) {
   }
   x(root, 'save').onclick = () => run(async () => {
     const out = await api('/api/history', {
-````
-
-### web/app.js — piece 5 of 5
-
-Add this to the END of `web/app.js`, straight after what is already there. Do not start a new file. Do not re-type anything above.
-
-````javascript
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ vals: S.vals, scan: S.scan, summary: S.summary, mode: S.vals.extractedBy }),
     });
@@ -3611,220 +3402,6 @@ function historyView(root) {
    this whole screen: it has no key to set, and it has two settings of its own
    that online reads from environment variables — which folder to scan, and
    which SQL dialect to read it as. */
-//<online-only>
-function settingsView(root) {
-  const h = S.health;
-  root.append(el('div', { className: 'head' }, el('div', {},
-    el('h2', { textContent: 'Settings & checks' }),
-    el('p', { textContent: 'What Ripple is connected to, and whether it is working.' }))));
-
-  // First, and on its own: the one setting on this screen that can turn a real
-  // impact into a clean result.
-  root.append(productionCard({
-    onSave: (text) => api('/api/production', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    }).then(out => { S.health = out; }),
-    persistNote: 'Held by this server while it runs. Set RIPPLE_PROD_TABLES to keep it after a restart.',
-    savedNote: 'Saved. Every scan from now on uses this list — until this server restarts.',
-  }));
-  if (!h.productionSet) {
-    root.append(el('div', { className: 'note warn', style: 'margin:14px 0 24px' },
-      why(el('b', { textContent: 'Nothing can be scanned until this list is set.' }),
-        'why this one setting stops everything',
-      'A published table is one people outside your team read. Ripple has no way of working '
-      + 'out which of yours those are — every warehouse names them differently — so until you '
-      + 'say, every table fails that test and every scan would come back "no production table '
-      + 'is affected". That sentence is the one thing this tool sells, and it would be '
-      + 'meaningless.',
-      'Paste the table names above, or a pattern they all share such as _PUBLISHED. You can '
-      + 'change it whenever you like.')));
-  } else {
-    root.append(el('div', { style: 'height:24px' }));
-  }
-
-  const grid = el('div', { className: 'grid2 even' });
-  const left = el('div', { className: 'card pad lg' });
-  left.append(el('span', { className: 'lbl', textContent: 'Repository' }));
-  [['Folder', h.repo.path], ['Label', h.repo.label], ['Files indexed', String(h.repo.files)],
-   ['Statements understood', String(h.repo.statements)], ['Files unreadable', String(h.repo.unreadable)],
-   ...(((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0))
-     ? [['Files never opened', String((h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0))]]
-     : []),
-   ['SQL dialect', h.sqlDialect], ['Renames followed', hopsPhrase(h.maxHops)],
-   ['Tables you publish', h.production || 'not set']].forEach(([k, v]) =>
-    left.append(el('div', { className: 'factrow' },
-      el('span', { className: 'small muted', textContent: k }),
-      el('span', { className: 'small', textContent: v }))));
-  left.append(el('div', { className: 'note info', style: 'margin-top:14px' },
-    'Set on the host with environment variables — ',
-    el('span', { className: 'mono', textContent: 'RIPPLE_REPO' }), ', ',
-    el('span', { className: 'mono', textContent: 'RIPPLE_SQL_DIALECT' }), ', ',
-    el('span', { className: 'mono', textContent: 'RIPPLE_PROD_TABLES' }), ', ',
-    el('span', { className: 'mono', textContent: 'RIPPLE_AI_KEY' }), '. See the README.'));
-
-  grid.append(left, el('div', {}, aiCard(h), buildCard(h)));
-  root.append(grid);
-}
-
-/* Turning the AI on from the screen. Same rules as the GitHub token: the key
-   goes to the server, is held in memory only, and never comes back to this
-   page — so this form can show whether one is set, never what it is. */
-/* Which company issued a key, worked out from the key itself.
-
-   One box, not one box per provider. Somebody pasting a key should not have to
-   tell Ripple who issued it — the key says so in its first few characters, and
-   asking is one more thing to get wrong. The prefixes come from the server, so
-   there is one list of them and this screen cannot drift from it.
-
-   Nothing is sent anywhere while this runs: it reads the box as it is typed. */
-function whoIssued(h, key) {
-  key = (key || '').trim();
-  if (!key) return null;
-  for (const u of (h.ai.unsupported || [])) {
-    if (u.prefixes.some(px => key.startsWith(px))) return { unsupported: u.label };
-  }
-  let best = null, longest = -1;
-  for (const pr of (h.ai.providers || [])) {
-    for (const px of pr.prefixes) {
-      if (key.startsWith(px) && px.length > longest) { best = pr; longest = px.length; }
-    }
-  }
-  return best;
-}
-
-/* "a OpenAI key" reads as a typo on the one screen that has to look careful. */
-function anOrA(word) {
-  return /^[AEIOU]/i.test(word || '') ? 'an' : 'a';
-}
-
-function aiCard(h) {
-  const card = el('div', { className: 'card pad lg' });
-  const on = h.ai.available;
-  const fromEnv = h.ai.keyFrom === 'environment';
-
-  card.append(el('span', { className: 'lbl', textContent: 'AI (optional)' }));
-  card.append(el('div', { className: 'note ' + (on ? 'good' : 'info'), style: 'margin-top:12px' },
-    why(el('b', { textContent: on ? `AI is on — ${h.ai.modelLabel}.` : 'No key set — rules alone.' }),
-      on ? 'what is sent to the model' : 'what runs without a key',
-      on
-        ? (fromEnv
-          ? 'The key is set on the server, so it survives a restart. Only the notification text '
-            + 'and the findings are sent to the model — never your code.'
-          : 'Only the notification text and the findings are sent to the model — never your '
-            + 'code.')
-        : 'Ripple works exactly the same without a key. The wording it writes is just plainer.')));
-
-  // ── the key ─────────────────────────────────────────────────────────────
-  card.append(el('label', { className: 'lbl', style: 'display:block;margin:18px 0 7px',
-    textContent: fromEnv ? 'Use a different key instead' : 'API key' }));
-  const key = el('input', { type: 'password', autocomplete: 'off',
-    placeholder: 'sk-…   AIza…   gsk_…', style: 'padding:12px 14px' });
-  card.append(key);
-
-  const who = el('div', { className: 'small', style: 'margin-top:7px;line-height:1.5' });
-  const names = (h.ai.providers || []).map(pr => pr.label);
-  const blank = names.length
-    ? `Paste a key from ${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}. `
-      + 'Ripple works out which from the key itself.'
-    : '';
-  const sayWho = () => {
-    const found = whoIssued(h, key.value);
-    who.className = 'small' + (found && found.unsupported ? ' warn' : ' faint');
-    if (!found) {
-      who.textContent = key.value.trim()
-        ? 'Ripple does not recognise that key. It reads OpenAI, Google Gemini and Groq keys.'
-        : blank;
-      return;
-    }
-    if (found.unsupported) {
-      who.textContent = `That is ${anOrA(found.unsupported)} ${found.unsupported} key. `
-        + 'Ripple cannot use one — it reads OpenAI, Google Gemini and Groq keys.';
-      return;
-    }
-    who.textContent = `That is ${anOrA(found.label)} ${found.label} key. `
-      + `Get one at ${found.where}.`;
-  };
-  key.oninput = sayWho;
-  sayWho();
-  card.append(who);
-
-  // ── the model ───────────────────────────────────────────────────────────
-  // Only after a key has been accepted, because the list is the provider's own
-  // answer to "what can this key use" rather than a list written down here. A
-  // written-down list is wrong within months, and then it offers a model that
-  // no longer exists to somebody in the middle of reading an email.
-  let sel = null;
-  if ((h.ai.models || []).length) {
-    card.append(el('label', { className: 'lbl', style: 'display:block;margin:18px 0 7px',
-      textContent: 'Model' }));
-    sel = el('select', { className: 'statussel', style: 'width:100%;padding:11px 12px' });
-    h.ai.models.forEach(m => sel.append(el('option', {
-      value: m, textContent: m, selected: m === h.ai.model })));
-    card.append(sel);
-    card.append(el('div', { className: 'small faint', style: 'margin-top:6px;line-height:1.5' },
-      `${h.ai.models.length} model${h.ai.models.length === 1 ? '' : 's'} this key can use, `
-      + `asked of ${h.ai.providerLabel} rather than remembered. The one at the top is the `
-      + 'one Ripple would pick.'));
-  } else if (!on) {
-    card.append(el('div', { className: 'small faint', style: 'margin-top:14px;line-height:1.5',
-      textContent: 'The model list appears once a key is accepted — Ripple asks the provider '
-        + 'which models that key can actually use.' }));
-  }
-
-  const out = el('div', { style: 'margin-top:14px' });
-  if (S.aiMsg) {
-    out.append(el('div', { className: 'note ' + (S.aiMsg.ok ? 'good' : 'warn'), textContent: S.aiMsg.text }));
-  }
-  const say = (ok, text) => { S.aiMsg = { ok, text }; };
-
-  const save = el('button', { className: 'pri', textContent: on ? 'Save and re-test' : 'Turn the AI on' });
-  save.onclick = () => run(async () => {
-    S.aiMsg = null;
-    try {
-      S.health = await api('/api/ai/connect', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        // No model on a brand-new key: the provider has not been asked yet, so
-        // Ripple takes whichever it recommends and shows the list afterwards.
-        body: JSON.stringify({ key: key.value, model: sel ? sel.value : '' }),
-      });
-      key.value = '';                    // the server has it; keep no copy here
-      say(true, `AI is on. The model answered, using ${S.health.ai.modelLabel}.`);
-    } catch (e) { say(false, 'That did not work — ' + e.message); }
-  });
-
-  const test = el('button', { className: 'ghost', textContent: 'Test the key' });
-  test.onclick = () => run(async () => {
-    const res = await api('/api/ai/check', { method: 'POST' });
-    say(res.ok, res.ok ? `Working — the model replied, using ${res.model}.` : `Not working — ${res.reason}`);
-  });
-
-  const row = el('div', { className: 'foot', style: 'margin-top:16px' }, save, test);
-  if (on && h.ai.keyFrom === 'entered') {
-    const forget = el('button', { className: 'ghost', textContent: 'Forget the key' });
-    forget.onclick = () => run(async () => {
-      S.health = await api('/api/ai/forget', { method: 'POST' });
-      S.aiMsg = { ok: true, text: 'Key forgotten. Ripple is back to rules alone.' };
-    });
-    row.append(forget);
-  }
-  card.append(row, out);
-
-  // On a host that is replaced constantly, a typed key does not last -- and
-  // while it does last, every other visitor to this copy is spending it.
-  if (h.ai.keyLasts === false) {
-    card.append(el('div', { className: 'note warn', style: 'margin-top:18px' },
-      why(el('b', { textContent: 'A key typed in here is shared, and temporary.' }),
-        'a key typed into a public copy',
-      'Anyone with this address can open this copy. While your key is loaded, other people '
-      + 'using the site are spending it — and it disappears whenever the host replaces the '
-      + 'machine, often within minutes.',
-      'For anything more than a demonstration, run Ripple on your own machine, or ask whoever '
-      + 'hosts this to set the key on the server.')));
-  }
-  return card;
-}
-//</online-only>
 
 // ── plumbing ──────────────────────────────────────────────────────────────
 function goto(n) { S.step = n; S.maxStep = Math.max(S.maxStep, n); S.view = 'wizard'; render(); }
@@ -3855,6 +3432,15 @@ function run(fn, what) {
 function watchProgress() {
   if (S.progressTimer) return;
   S.progressTimer = setInterval(async () => {
+````
+
+## Paste 6 of 6
+
+### web/app.js — piece 5 of 5
+
+Add this to the END of `web/app.js`, straight after what is already there. Do not start a new file. Do not re-type anything above.
+
+````javascript
     if (!S.busy) { clearInterval(S.progressTimer); S.progressTimer = null; S.progress = null; return; }
     try {
       const p = await api('/api/progress');
@@ -3921,9 +3507,6 @@ $('#navSettings').onclick = () => { S.view = 'settings'; render(); };
    screen the very first time, when no repository folder has been chosen yet —
    there, that is a question that has to be asked rather than a default that can
    be assumed. */
-//<online-only>
-function afterBoot() {}
-//</online-only>
 
 /* Reading a repository the size of a real warehouse takes minutes. Measured on
    7,304 files: 101 seconds, during which this page was blank and had no way to
@@ -3972,56 +3555,494 @@ function renderReading() {
   afterBoot();
   render();
 })();
+
+/* Ripple Offline — the screens that only exist here.
+
+   Appended to the shared front end when the offline build is made. Everything
+   else on screen is the shared file, unchanged, so the two editions cannot
+   drift apart. What is here is what genuinely differs: online, the folder to
+   scan and the SQL dialect are environment variables set by whoever deploys
+   the thing. Offline there is nobody to set them, so they are asked for on
+   screen and remembered in a file beside the program.
+
+   These three functions replace ones of the same name in the shared file.
+   JavaScript hoists every function declaration in a file before running any of
+   it, so the later ones — these — are the ones that run. */
+
+// ── the first run ─────────────────────────────────────────────────────────
+/* Nothing has been chosen yet, so the first thing on screen is the question,
+   rather than a wizard that would scan nothing and say nothing was found. */
+function afterBoot() {
+  if (S.health && !S.health.configured) S.view = 'settings';
+  keepAlive();
+}
+
+// ── telling the program somebody is still here ────────────────────────────
+/* The built program has no console window and nothing to close. Closing this
+   tab used to leave it running where nobody could see it, holding its own
+   folder open — so the folder could not be deleted, the port stayed taken, and
+   the only way out was Task Manager.
+
+   So this page says it is here, every few seconds, and says goodbye on the way
+   out. The goodbye is the reliable half: sendBeacon is delivered even as the
+   tab is closing, which fetch is not. The repeating beat is the backstop for a
+   browser that was killed outright and never got to say anything.
+
+   BEAT is deliberately shorter than the program's quiet limit by a long way —
+   a hidden tab is throttled to about one timer a minute, and being throttled
+   must never look like being gone. */
+const BEAT = 10000;
+
+function keepAlive() {
+  if (S.beatTimer) return;
+  const beat = () => { fetch('/api/alive', { method: 'POST' }).catch(() => {}); };
+  beat();
+  S.beatTimer = setInterval(beat, BEAT);
+  // pagehide covers closing the tab, closing the window and navigating away,
+  // in every browser that matters. It also fires on a refresh, which is why
+  // the program treats this as "start a short clock", not "stop now".
+  addEventListener('pagehide', () => {
+    try { navigator.sendBeacon('/api/leaving'); } catch (e) { /* going anyway */ }
+  });
+}
+
+/* Stop the program, and say so, rather than leaving a dead tab that looks
+   exactly like a working one. */
+function closeRipple() {
+  if (S.beatTimer) { clearInterval(S.beatTimer); S.beatTimer = null; }
+  fetch('/api/quit', { method: 'POST' }).catch(() => {});
+  // The reply may never arrive — the server is shutting down as it answers —
+  // so the screen changes on the way out rather than waiting for it.
+  setTimeout(() => {
+    document.body.innerHTML = '';
+    document.body.append(el('div', { className: 'empty', style: 'padding-top:120px' },
+      el('b', { textContent: 'Ripple has stopped.' }),
+      el('div', { className: 'small muted', style: 'margin-top:10px;line-height:1.6',
+        textContent: 'You can close this tab. The program is no longer running, so its folder '
+          + 'can be moved or deleted now.' }),
+      el('div', { className: 'small faint', style: 'margin-top:10px',
+        textContent: 'To use Ripple again, double-click Ripple Offline.exe.' })));
+  }, 250);
+}
+
+// ── what step 3 says when the folder is not there ─────────────────────────
+/* Online this reports a connection that failed. Offline there is no connection
+   to fail — but a folder chosen last week can be moved, renamed or deleted, and
+   that is an ordinary Tuesday on a locked-down machine, not an exception. */
+function repoAlert(h) {
+  const f = h.folder;
+  if (!f || f.ok) return null;
+  const box = el('div', { className: 'note bad', style: 'margin-bottom:18px' },
+    el('b', { textContent: f.state === 'unset' ? 'No repository folder chosen yet. ' : 'Nothing can be scanned. ' }),
+    f.message);
+  const go = el('button', { className: 'ghost sm', textContent: 'Choose the folder', style: 'margin-top:12px' });
+  go.onclick = () => { S.view = 'settings'; render(); };
+  box.append(el('div', {}, go));
+  return box;
+}
+
+// ── settings ──────────────────────────────────────────────────────────────
+function offState() {
+  const h = S.health;
+  if (!S.off) {
+    S.off = {
+      path: (h && h.repo.path) || '',
+      dialect: (h && h.sqlDialectId) || '',
+      hops: (h && h.maxHops) || 0,
+      check: null,        // the answer to "check this folder", before saving
+      msg: null,          // the answer to the last save
+      working: '',        // which button is busy: 'check', 'browse' or 'save'
+    };
+  }
+  // The published-table list lives in the shared control's own state, so that
+  // one box and one reading of it are used by both editions.
+  productionState();
+  return S.off;
+}
+
+/* Slow work here has to be visible on the button that started it. The header
+   spinner is across the screen from whatever was pressed, and a folder being
+   read is the one moment on this screen where nothing happens for a while and
+   then several numbers change at once. */
+function offRun(which, fn) {
+  const o = offState();
+  o.working = which;
+  run(async () => {
+    try { await fn(); } finally { o.working = ''; }
+  }, which === 'save' ? 'Reading every file in the folder…'
+    : which === 'check' ? 'Counting what is in the folder…'
+    : 'Waiting for the folder picker…');
+}
+
+function settingsView(root) {
+  const h = S.health;
+  const o = offState();
+  // The shared header says "Connections and health", and offline there are no
+  // connections to have.
+  setHeader('Settings & checks', h.configured
+    ? 'What Ripple reads, and where it keeps things'
+    : 'Choose the folder to scan');
+  root.append(el('div', { className: 'head' }, el('div', {},
+    el('h2', { textContent: 'Settings & checks' }),
+    el('p', { textContent: h.configured
+      ? 'What Ripple is reading, and where it keeps what it saves.'
+      : 'Two things to choose before the first scan.' }))));
+
+  if (!h.configured) {
+    root.append(el('div', { className: 'note info', style: 'margin-bottom:18px' },
+      why(el('b', { textContent: 'Choose the repository folder to get started.' }),
+        'what choosing a folder does',
+        'Ripple reads a copy of your code that is already on this machine. It downloads '
+        + 'nothing and it never writes to your code. Point it at the folder, check the SQL '
+        + 'type underneath, and save.')));
+  }
+
+  const grid = el('div', { className: 'grid2 even' });
+  const prod = el('div', { style: 'margin-top:18px' },
+    productionCard({ persistNote: '' }),
+    el('div', { className: 'note warn', style: 'margin-top:14px' },
+      why(el('b', { textContent: 'Get this wrong and a real impact reads as a clean result.' }),
+        'what the published-table list decides',
+        'A finding only counts as production impact when the table it ends at is on this list. '
+        + 'Nothing is hidden either way — every table the change reaches is still listed — but '
+        + 'the headline, the risk level and the drafted reply all follow this list.')));
+  grid.append(el('div', {}, folderCard(h, o), dialectCard(h, o), prod, saveRow(h, o)),
+              el('div', { className: 'rail' }, whereCard(h), guardCard(), factsCard(h),
+                 buildCard(h), closeCard()));
+  root.append(grid);
+}
+
+/* The way out. There is no console window and no application window, so
+   without this the only way to stop Ripple is Task Manager — and until it is
+   stopped, its own folder cannot be deleted or moved. */
+function closeCard() {
+  const card = el('div', { className: 'card pad lg', style: 'margin-top:18px' });
+  card.append(why(
+    el('span', { className: 'lbl', textContent: 'Finished with Ripple' }),
+    'closing the tab is not closing Ripple',
+    'Ripple is a small program running on this machine, not a website. Closing this tab leaves '
+    + 'it running, and while it runs its own folder cannot be moved or deleted.'));
+  const stop = el('button', { className: 'ghost', style: 'margin-top:12px',
+    textContent: 'Close Ripple' });
+  stop.onclick = () => closeRipple();
+  card.append(stop);
+  card.append(el('div', { className: 'small faint', style: 'margin-top:10px' },
+    why(el('span', { textContent: 'It also closes itself.' }),
+      'when Ripple closes itself',
+      'A few minutes after the last tab is closed, so a forgotten one is not left holding the '
+      + 'folder open.')));
+  return card;
+}
+
+/* The folder to scan. Typing a path always works; the picker is only offered
+   when this machine actually has one to open. */
+function folderCard(h, o) {
+  const card = el('div', { className: 'card pad lg' });
+  card.append(why(
+    el('span', { className: 'lbl', textContent: 'Repository folder' }),
+    'what Ripple does with this folder',
+    'The folder holding the code you want searched. Ripple reads every file in it and never '
+    + 'writes to any of them.'));
+
+  const inp = el('input', { type: 'text', className: 'mono', value: o.path,
+    placeholder: 'D:\\code\\our-pipelines', style: 'margin-top:12px;padding:12px 14px' });
+  inp.oninput = () => { o.path = inp.value; o.check = null; };
+  inp.onkeydown = (e) => { if (e.key === 'Enter') checkFolder(); };
+  card.append(inp);
+
+  const row = el('div', { className: 'foot', style: 'margin-top:14px' });
+  if (h.canBrowse) {
+    const browse = el('button', { className: 'ghost',
+      textContent: o.working === 'browse' ? 'Waiting for the picker…' : 'Browse…' });
+    browse.disabled = !!o.working;
+    browse.onclick = () => browseForFolder();
+    row.append(browse);
+  }
+  const check = el('button', { className: 'ghost',
+    textContent: o.working === 'check' ? 'Counting the files…' : 'Check this folder' });
+  check.disabled = !!o.working;
+  check.onclick = () => checkFolder();
+  row.append(check);
+  if (o.working === 'check') {
+    row.append(el('span', { className: 'spin' }),
+      el('span', { className: 'small muted', textContent: 'Walking the folder. A large one takes a moment.' }));
+  }
+  card.append(row);
+
+  // A note with nothing in it is an empty coloured box, which reads as
+  // something that failed to load rather than as an answer.
+  if (o.check && o.check.message) {
+    card.append(el('div', { className: 'note ' + (o.check.ok ? 'good' : 'bad'), style: 'margin-top:14px' },
+      o.check.message));
+  }
+  return card;
+}
+
+/* The dialect. This is the setting that looks cosmetic and is not. */
+function dialectCard(h, o) {
+  const card = el('div', { className: 'card pad lg', style: 'margin-top:18px' });
+  card.append(el('span', { className: 'lbl', textContent: 'How the SQL is read' }));
+  const sel = el('select', { className: 'statussel', style: 'width:100%;padding:11px 12px;margin-top:12px' });
+  (h.dialects || []).forEach(d => sel.append(el('option', {
+    value: d.id, textContent: d.label, selected: d.id === o.dialect })));
+  // NOT called `why`. That is the name of the shared information-button helper,
+  // and a local const of the same name shadows it for the whole function -- so
+  // calling it here would throw instead of drawing a button.
+  const note = el('div', { className: 'small faint', style: 'margin-top:6px;line-height:1.55' });
+  const showNote = () => {
+    const d = (h.dialects || []).find(x => x.id === sel.value);
+    note.textContent = d ? d.note : '';
+  };
+  sel.onchange = () => { o.dialect = sel.value; showNote(); };
+  showNote();
+  card.append(sel, note);
+  card.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
+    why(el('b', { textContent: 'This matters more than it looks.' }),
+      'why the dialect changes the answer',
+      'Every warehouse writes SQL a little differently. Choose the wrong one and Ripple cannot '
+      + 'read some of your files — and a file it cannot read is a file it cannot warn you '
+      + 'about. That does not give you a vaguer answer. It gives you the wrong one. If you are '
+      + 'not sure which to pick, ask whoever runs the pipeline.')));
+  return card;
+}
+
+function saveRow(h, o) {
+  const row = el('div', { className: 'card pad lg foot', style: 'margin-top:18px' });
+  const busy = o.working === 'save';
+  const save = el('button', { className: 'pri',
+    textContent: busy ? 'Reading the folder…'
+      : h.configured ? 'Save and read the repository again' : 'Save and read the repository' });
+  save.disabled = !!o.working;
+  save.onclick = () => saveOfflineSettings();
+  row.append(save);
+  if (busy) {
+    // Reading a real repository is thousands of files. Without this the screen
+    // sits still and then several numbers change on their own, which reads as
+    // the page having done something by itself.
+    row.append(el('span', { className: 'spin' }),
+      el('span', { className: 'small muted',
+        textContent: 'Reading every file and parsing the SQL — the counts on the right '
+          + 'update when it finishes.' }));
+  } else {
+    row.append(el('span', { className: 'small faint',
+      textContent: 'Saved to the settings file beside Ripple, so it is remembered next time.' }));
+  }
+  const box = el('div', {}, row);
+  if (o.msg) {
+    box.append(el('div', { className: 'note ' + (o.msg.ok ? 'good' : 'bad'), style: 'margin-top:14px' },
+      o.msg.text));
+  }
+  return box;
+}
+
+/* Where the two files Ripple writes actually are. Nobody should have to guess,
+   and "somewhere in your user profile" is not an answer. */
+function whereCard(h) {
+  const card = el('div', { className: 'card pad' });
+  card.append(el('span', { className: 'lbl', textContent: 'What Ripple writes' }));
+  [['Settings', h.settingsFile], ['Saved analyses', h.historyFile]].forEach(([k, v]) =>
+    card.append(el('div', { style: 'padding:9px 0;border-top:1px solid var(--hair);margin-top:8px' },
+      el('div', { className: 'small muted', textContent: k }),
+      el('div', { className: 'small mono', textContent: v,
+        style: 'margin-top:3px;font-weight:600;word-break:break-all' }))));
+  card.append(el('div', { className: 'small faint', style: 'margin-top:12px' },
+    why(el('span', { textContent: 'Both sit in the folder you copied across.' }),
+      'what moving the folder takes with it',
+      'Move that folder to another machine and your settings and saved analyses go with it. '
+      + 'Delete it and Ripple is gone.')));
+  const sync = h.syncedFolder;
+  if (sync && sync.synced) {
+    // Keeping everything beside the executable is what makes this copy portable.
+    // In an office where sync is on for everybody it also means the folder is
+    // being uploaded, and that is worth one plain paragraph rather than a
+    // surprise. Neither point is a reason to stop; both are a reason to say so.
+    card.append(el('div', { className: 'note warn', style: 'margin-top:14px' },
+      el('b', { style: 'display:block', textContent: `${sync.client} is syncing this folder` }),
+      why(el('div', { style: 'margin-top:6px;line-height:1.55', textContent:
+          'Everything in this folder is being uploaded to your company\u2019s cloud — including '
+          + 'the Ripple program itself, about 44 MB across roughly 1,770 files, and not '
+          + 'signed by a known publisher.' }),
+        'what a synced folder means for Ripple',
+        'Your saved analyses live in a file inside this folder, and a sync tool copies files '
+        + 'whenever it likes. If Ripple ever says it could not save an analysis, that is the '
+        + 'usual reason, and trying again normally works.'),
+      el('div', { className: 'small', style: 'margin-top:8px;line-height:1.55', textContent:
+        'If you would rather neither happened, close Ripple and move this folder somewhere '
+        + 'that is not synced — C:\\Ripple, for example — then start it again from there. '
+        + 'Your settings and saved analyses move with it.' })));
+  }
+  return card;
+}
+
+/* Whether this copy really is sealed off, asked of the running program rather
+   than asserted on a screen. */
+function guardCard() {
+  const card = el('div', { className: 'card pad' });
+  card.append(el('span', { className: 'lbl', textContent: 'Nothing leaves this machine' }));
+  const state = el('div', { style: 'margin-top:12px' },
+    el('span', { className: 'small muted', textContent: 'Checking…' }));
+  card.append(state);
+  card.append(el('div', { className: 'small faint', style: 'margin-top:12px' },
+    why(el('span', { textContent: 'No connection to anywhere, and no AI.' }),
+      'what this copy can and cannot do',
+      'There is nowhere here to type a key or an address. Ripple reads the folder above and '
+      + 'writes the two files listed.')));
+  api('/api/offline-check').then(g => {
+    state.innerHTML = '';
+    if (g.guardInstalled) {
+      state.append(el('div', { className: 'note good' },
+        why(el('b', { textContent: 'Outbound connections are blocked.' }),
+          'how the block behaves',
+          'If anything in this program tried to reach the internet it would fail immediately. '
+          + 'It would not quietly succeed just because this machine happens to be online.')));
+    } else {
+      state.append(el('div', { className: 'note warn' },
+        why(el('b', { textContent: 'The block is not switched on in this copy.' }),
+          'what an unenforced block means',
+          'Ripple still has nothing in it that reaches out, but that is not being enforced in '
+          + 'this copy. Start Ripple the normal way to switch it back on.')));
+    }
+    if (g.attempts && g.attempts.length) {
+      state.append(el('div', { className: 'note bad', style: 'margin-top:10px' },
+        el('b', { textContent: `${g.attempts.length} attempt${g.attempts.length === 1 ? '' : 's'} to reach the network were refused: ` }),
+        g.attempts.slice(0, 5).join(', ')));
+    }
+  }).catch(() => {
+    state.innerHTML = '';
+    state.append(el('div', { className: 'note warn', textContent: 'Could not ask this copy whether the block is on.' }));
+  });
+  return card;
+}
+
+function factsCard(h) {
+  const card = el('div', { className: 'card pad' });
+  card.append(el('span', { className: 'lbl', textContent: 'What was read' }));
+  // "Files indexed 3, files unreadable 0" is the line somebody reads to decide
+  // whether the whole folder was covered, and on its own it answers yes. The
+  // row below it only appears when the answer is no, and then it has to appear,
+  // because this is the panel that gets believed.
+  const neverOpened = (h.repo.heldOnline || 0) + (h.repo.pathTooLong || 0);
+  [['Files indexed', String(h.repo.files)],
+   ['Statements understood', String(h.repo.statements)],
+   ['Files unreadable', String(h.repo.unreadable)],
+   ...(neverOpened ? [['Files never opened', String(neverOpened)]] : []),
+   ['Tables found', String(h.catalog.tables)],
+   ['SQL read as', h.sqlDialect],
+   ['Renames followed', `${h.maxHops} hops`],
+   ['Tables you publish', h.production || 'not set']].forEach(([k, v]) =>
+    card.append(el('div', { className: 'factrow' },
+      el('span', { className: 'small muted', textContent: k }),
+      el('span', { className: 'small', textContent: v }))));
+  return card;
+}
+
+// ── the three things those buttons do ─────────────────────────────────────
+function checkFolder() {
+  const o = offState();
+  offRun('check', async () => {
+    o.check = await api('/api/settings/check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: o.path.trim() }),
+    });
+  });
+}
+
+function browseForFolder() {
+  const o = offState();
+  offRun('browse', async () => {
+    const out = await api('/api/settings/browse', { method: 'POST' });
+    if (out.path) { o.path = out.path; o.check = null; o.msg = null; }
+  });
+}
+
+function saveOfflineSettings() {
+  const o = offState();
+  const p = productionState();
+  offRun('save', async () => {
+    try {
+      S.health = await api('/api/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoPath: o.path.trim(), sqlDialect: o.dialect,
+                               maxHops: o.hops, prodTables: p.text }),
+      });
+      // The box keeps whatever was pasted, so it can be edited rather than
+      // handed back a tidied version of somebody's list. An empty box is the
+      // exception: the server falls back to the default rather than treating
+      // no table as published, and the box has to show what is really in force.
+      p.text = S.health.productionRule?.text ?? p.text;
+      p.report = null; p.loaded = false;
+      // The saved message below says what happened. Leaving the "check this
+      // folder" answer up as well puts an empty green box on screen, because
+      // once it has been saved there is nothing left for it to report.
+      o.check = null;
+      o.msg = { ok: true, text: `Saved. ${S.health.repo.files} file`
+        + `${S.health.repo.files === 1 ? '' : 's'} indexed from ${S.health.repo.label}, `
+        + `read as ${S.health.sqlDialect}. ${S.health.repo.statements} statement`
+        + `${S.health.repo.statements === 1 ? '' : 's'} understood, ${S.health.repo.unreadable} file`
+        + `${S.health.repo.unreadable === 1 ? '' : 's'} could not be read. `
+        + `Published tables: ${S.health.production}.` };
+      // Whatever was scanned before came from a different folder or a different
+      // dialect, so it is dropped rather than left on screen looking current.
+      S.scan = null; S.summary = null; S.reply = null;
+    } catch (e) {
+      o.msg = { ok: false, text: e.message };
+    }
+  });
+}
 ````
 
 ---
 
 ## Check you got it right
 
-Do not trust your eyes for this. A file that is missing thirty lines in the
-middle looks perfectly normal.
+Do not trust your eyes for this. A file missing thirty lines in the middle looks
+perfectly normal.
 
-Save this as `check_ui.py` next to `run.py`, and run `python check_ui.py`:
+Save this as `check_ui.py` in the project root and run `python check_ui.py`:
 
 ````python
-"""Did the three screen files arrive whole? Answers in one word each."""
+"""Did every file arrive whole? One word each."""
 import hashlib
+import sys
+import tempfile
 from pathlib import Path
 
 WANT = {
-    "web/index.html": "a68e74664722a8d33847d076156ab16ae5168a6bbbf6d69a183958e131aefd8a",
+    "web/index.html": "9b9456b41da7c61d76107a04991f440c60d8d7322a4a60496340ea7b7c890b11",
     "web/styles.css": "152ae02a224ff20bc8e8bd12066917d3b93e9d8322febcf3c2148d0b5bc40b48",
-    "web/app.js": "5ae0ab5e500592a35726d44913b75727c3bedfd55e95f5fb58b6f3521ef3ec3c",
+    "web/app.js": "8b1d3ada7018690e15d21cd929ca5b5d960c892d64a7e54a6099b3ad0c79da47",
 }
 
-ok = True
+bad = []
 for name, want in WANT.items():
     f = Path(name)
     if not f.is_file():
-        print(f"{name:16} MISSING")
-        ok = False
+        print(f"{name:34} MISSING")
+        bad.append(name)
         continue
     got = hashlib.sha256(f.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
     if got == want:
-        print(f"{name:16} exact")
+        print(f"{name:34} exact")
     else:
-        n = len(f.read_text(encoding='utf-8', errors='replace').splitlines())
-        print(f"{name:16} DIFFERENT  ({n} lines here)")
-        ok = False
+        n = len(f.read_text(encoding="utf-8", errors="replace").splitlines())
+        print(f"{name:34} DIFFERENT  ({n} lines here)")
+        bad.append(name)
 
 print()
-print("The screens are Ripple's own." if ok else
-      "Something is not identical. Paste that file again, in its pieces.")
+if bad:
+    print(f"{len(bad)} file(s) are not identical. Paste each from its first piece again:")
+    for n in bad:
+        print("   ", n)
+else:
+    print("Every file is identical to the original.")
 ````
 
-`exact` means byte for byte, so the screens cannot differ. `DIFFERENT` with a
-line count well below the table above means a piece was skipped or a chat
-summarised part of it — paste that file again from its first piece.
+`exact` means byte for byte. `DIFFERENT` with a line count well below the table
+above means a piece was skipped, or a chat summarised part of it — paste that
+file again from its first piece.
 
 Line endings are not counted as a difference: Windows may store these with
-different line breaks and that changes nothing on screen.
-
----
+different line breaks and nothing about the program changes.
 
 ## When it is running
 
@@ -4037,7 +4058,8 @@ get black text on white and nothing to say why.
 
 ---
 
-*Generated from the live files by `Ripple Offline/tools/make_ui_kit.py`. Do not
-edit this by hand — run that again instead. A hand-edited copy of app.js is a
-second copy of app.js, and the second copy is the one that goes stale.*
+*Generated from the live files by `Ripple Offline/tools/make_exact_kits.py`. Do
+not edit this by hand — run that again instead. A hand-edited copy of a source
+file inside a document is a second copy of it, and the second copy is the one
+that goes stale.*
 
