@@ -76,6 +76,7 @@ that looks finished and is not. The check at the bottom catches it.
 
 ---
 
+
 ## The pieces
 
 ## Paste 1 of 6 — 2 files
@@ -4002,9 +4003,12 @@ Save this as `check_ui.py` in the project root and run `python check_ui.py`:
 
 ````python
 """Did every file arrive whole? One word each."""
+import base64
 import hashlib
+import io
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 WANT = {

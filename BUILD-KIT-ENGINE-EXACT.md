@@ -41,11 +41,48 @@ finished folder when a working Ripple is all you need.
 
 ---
 
+## First: the empty files
+
+Before anything else, create these. They are empty — nothing goes in them — and
+there is no paste for them below for that reason.
+
+````
+    ripple/__init__.py
+    ripple/scanner/__init__.py
+````
+
+In a Command Prompt, from the folder you are building in:
+
+````
+type nul > ripple\__init__.py
+type nul > ripple\scanner\__init__.py
+````
+
+Nothing is printed and nothing happens on screen. That is correct.
+
+**Do not skip them because everything works without them.** It does. That is
+exactly what makes them worth the two commands.
+
+Leave them out and Python still imports Ripple perfectly happily — as a
+"namespace package", which is a package assembled out of EVERY folder called
+`ripple` it can find, merged together. Measured: with the empty file, `ripple`
+is one folder and a decoy folder elsewhere on the path cannot get in. Without
+it, `ripple` spans two folders and a module from the decoy imports as though it
+were Ripple's own.
+
+Nothing errors. Nothing warns. On a laptop that has ever had another copy of
+Ripple, or a folder called `ripple` belonging to something else, the answer on
+screen comes partly from code that is not in the folder you are looking at —
+which is the one failure this whole tool exists to make impossible.
+
+---
+
+
 ## What you are pasting
 
 | File | What it decides | Lines | Pieces |
 |---|---|---|---|
-| `ripple/__init__.py` | the engine | 0 | 0 |
+| `ripple/__init__.py` | the engine | 0 | empty file |
 | `ripple/build_info.py` | the engine | 197 | 1 |
 | `ripple/catalog.py` | the engine | 93 | 1 |
 | `ripple/config.py` | the engine | 314 | 1 |
@@ -55,7 +92,7 @@ finished folder when a working Ripple is all you need.
 | `ripple/progress.py` | the engine | 64 | 1 |
 | `ripple/providers.py` | the engine | 142 | 1 |
 | `ripple/store.py` | the engine | 144 | 1 |
-| `ripple/scanner/__init__.py` | reading the repository and following the column | 0 | 0 |
+| `ripple/scanner/__init__.py` | reading the repository and following the column | 0 | empty file |
 | `ripple/scanner/dialectcompat.py` | reading the repository and following the column | 138 | 1 |
 | `ripple/scanner/lineage.py` | reading the repository and following the column | 1,726 | 3 |
 | `ripple/scanner/repo.py` | reading the repository and following the column | 964 | 2 |
@@ -103,6 +140,7 @@ of it and put `# ... rest unchanged ...` in the middle, which produces a file
 that looks finished and is not. The check at the bottom catches it.
 
 ---
+
 
 ## The pieces
 
@@ -12508,9 +12546,12 @@ Save this as `check_engine.py` in the project root and run `python check_engine.
 
 ````python
 """Did every file arrive whole? One word each."""
+import base64
 import hashlib
+import io
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 WANT = {

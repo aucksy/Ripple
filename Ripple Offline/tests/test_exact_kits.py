@@ -31,6 +31,7 @@ SNAPSHOT_TOOL = OFF / "tools" / "make_demo_snapshot.py"
 
 UI_KIT = ROOT / "BUILD-KIT-UI-EXACT.md"
 ENGINE_KIT = ROOT / "BUILD-KIT-ENGINE-EXACT.md"
+ONLINE_KIT = ROOT / "BUILD-KIT-ONLINE-EXACT.md"
 
 UI_NAMES = ("web/index.html", "web/styles.css", "web/app.js")
 
@@ -78,6 +79,20 @@ def rebuilt(kit_text: str) -> dict[str, str]:
     return {name: "".join(pieces) for name, pieces in out.items()}
 
 
+def source_for(kit_path: Path, saved_as: str, web: Path) -> Path:
+    """Where a file a kit hands over is really kept.
+
+    The two kits disagree about web/ on purpose. The ONLINE kit hands over
+    Codebase/web as it stands; the locked-down one hands over what webbuild
+    makes of it, with the key box and the GitHub source deleted.
+    """
+    if kit_path == ONLINE_KIT:
+        return ROOT / "Codebase" / saved_as
+    if saved_as in UI_NAMES:
+        return web / saved_as.split("/", 1)[1]
+    return engine_source(saved_as)
+
+
 def engine_source(saved_as: str) -> Path:
     """Where a file the engine kit hands over is really kept."""
     if saved_as.startswith("ripple/"):
@@ -90,14 +105,14 @@ def engine_source(saved_as: str) -> Path:
 
 # ── both kits ─────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT], ids=["ui", "engine"])
+@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT, ONLINE_KIT], ids=["ui", "engine", "online"])
 def test_the_pieces_join_back_into_the_real_files(kit_path, offline_web):
     """The one that matters. Byte for byte, or it is not the same Ripple."""
     got = rebuilt(read(kit_path))
     assert got, f"{kit_path.name} handed over no files at all"
 
     for name, mine in got.items():
-        src = ui_source(name, offline_web) if name in UI_NAMES else engine_source(name)
+        src = source_for(kit_path, name, offline_web)
         assert src.is_file(), f"{kit_path.name} hands over {name}, which is not in the repo"
         real = src.read_text(encoding="utf-8")
         if mine == real:
@@ -112,13 +127,13 @@ def test_the_pieces_join_back_into_the_real_files(kit_path, offline_web):
         )
 
 
-@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT], ids=["ui", "engine"])
+@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT, ONLINE_KIT], ids=["ui", "engine", "online"])
 def test_the_checksums_the_kit_publishes_are_the_real_ones(kit_path, offline_web):
     """Each kit ships a checker. Stale digests tell somebody their imitation is
     exact, which is the worst answer it could possibly give."""
     kit = read(kit_path)
     for name in rebuilt(kit):
-        src = ui_source(name, offline_web) if name in UI_NAMES else engine_source(name)
+        src = source_for(kit_path, name, offline_web)
         digest = hashlib.sha256(src.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
         assert digest in kit, (
             f"the checksum {kit_path.name} publishes for {name} is not the "
@@ -126,7 +141,7 @@ def test_the_checksums_the_kit_publishes_are_the_real_ones(kit_path, offline_web
         )
 
 
-@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT], ids=["ui", "engine"])
+@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT, ONLINE_KIT], ids=["ui", "engine", "online"])
 def test_no_piece_is_big_enough_to_be_refused(kit_path):
     """A chat window will not take an unlimited paste, and a piece that gets
     truncated produces a file that looks finished and is not."""
@@ -136,7 +151,7 @@ def test_no_piece_is_big_enough_to_be_refused(kit_path):
     assert not over, f"{len(over)} piece(s) over 45 KB in {kit_path.name}: {over}"
 
 
-@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT], ids=["ui", "engine"])
+@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT, ONLINE_KIT], ids=["ui", "engine", "online"])
 def test_each_kit_is_generated_and_says_so(kit_path):
     """A copy of a source file inside a document is a second copy of it, and the
     second copy is always the one that goes stale."""
@@ -146,7 +161,7 @@ def test_each_kit_is_generated_and_says_so(kit_path):
     assert "edit this by hand" in kit, f"{kit_path.name} does not warn against hand-editing"
 
 
-@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT], ids=["ui", "engine"])
+@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT, ONLINE_KIT], ids=["ui", "engine", "online"])
 def test_each_kit_is_honest_about_what_it_cannot_give_you(kit_path):
     """Neither kit can contain the SQL parser, and saying so is the difference
     between a kit and a wasted evening."""
@@ -212,4 +227,32 @@ def test_the_ui_kit_carries_no_way_out_of_the_machine(offline_web):
     assert "dialect" in code, (
         "the kit's screens have no way to choose a SQL dialect, so this is not "
         "the offline front end and nobody can point it at a repository."
+    )
+
+
+def test_every_empty_file_gets_its_own_command():
+    """A kit that lists two empty files and gives one command creates one of them.
+
+    The empty __init__.py files are the ones people skip, because everything
+    works without them. What they actually stop is Python merging EVERY folder
+    called `ripple` on the machine into one package -- measured: without the
+    file, `ripple.__path__` spans two folders and a module from an unrelated
+    decoy folder imports as though it were Ripple's own. Nothing errors and
+    nothing warns, which is the one failure this tool exists to make impossible.
+    """
+    kit = read(ONLINE_KIT)
+    if "## First: the empty files" not in kit:
+        pytest.skip("this kit hands over no empty files")
+    section = kit.split("## First: the empty files")[1].split("\n---")[0]
+    listed = re.findall(r"^\s{4}([\w./]+\.py)$", section, re.MULTILINE)
+    assert listed, "the section lists no files"
+    for name in listed:
+        want = "type nul > " + name.replace("/", "\\")
+        assert want in section, (
+            f"{ONLINE_KIT.name} lists {name} as an empty file to create but gives "
+            f"no command for it. Somebody creates the ones that have a line."
+        )
+    assert "namespace package" in section, (
+        "the section does not say what skipping these actually costs, so it reads "
+        "as housekeeping somebody can skip - and everything does work without them."
     )
