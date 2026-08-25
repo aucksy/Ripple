@@ -31,10 +31,10 @@ a detour on the way to hosting it — it is the same thing, started a different 
 be able to code — the chat writes it, you save the files and run one command to
 check each phase.
 
-It is a specification: it says what every file must do, which colours to use,
-which facts may never be hidden, and what each test must prove, with the
-reasoning behind every rule. It is self-contained. There is nothing else to
-open and nothing to fetch.
+It is a set of instructions, not the finished code. It describes what each part
+has to do, which colours to use, what Ripple must never hide from the person
+reading its answer, and what each test has to prove — with the reason behind
+every rule. Everything you need is in it. There is nothing else to open.
 
 It ends with a working Ripple, and a program you can double-click and hand to
 somebody.

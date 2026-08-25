@@ -34,55 +34,58 @@ all twelve build the same product.
 | **BUILD-KIT.md** | You are building Ripple. This document, start to finish, twelve windows, about two evenings. It ends with a working Ripple and a program you can double-click and hand to somebody. |
 | **BUILD-KIT-REPAIR.md** | You have finished building, and now want to change something. One prompt; it answers with which files to open and where they are saved. |
 
-**Everything you need is in this document.** There is nothing else to open,
-nothing to fetch and nothing to compare against. Every phase ends with a command
-that prints either a pass or the exact thing that is wrong, and the two phases
-that stall have ready-made rescue prompts further down, under "When Phase 4 goes
-wrong" and "When Phase 8 goes wrong".
+**Everything you need is in this document.** There is nothing else to open and
+nothing else to get hold of. Every phase ends with one command, and that command
+tells you either that the phase passed or exactly what is wrong. Two of the
+twelve phases are the ones that usually go wrong, so they have ready-written
+prompts you can paste back into the chat — see "When Phase 4 goes wrong" and
+"When Phase 8 goes wrong", further down.
 
 ---
 
-## What this kit is
+## What this document is
 
-This is the first thing to read, because it is the thing most easily assumed
-wrong, and assuming it wrong wastes an evening.
+Read this part first. Getting it wrong is what wastes an evening.
 
-**It is a specification, not a pile of source code to copy out.** It says what
-every file must do, which colours to use, which facts Ripple may never hide,
-which edge cases exist and why, and what each test must prove. A chat reads a
-phase and writes the code. You save the files and run the check at the end of
-the phase.
+**It is a set of instructions, not the finished code.** It does not hold Ripple's
+code for you to copy out. It describes, in order, what each part has to do. You
+paste a section into the chat, the chat writes the code, you save it, and you
+type one command that tells you whether it worked.
 
-So **the code that comes out is yours**. Your spacing, your names, your tests.
-Two chats given the same phase will write it two different ways, and both are
-right, because a description does not come back out of a chat as one fixed file.
+So **the code you end up with is your own**. Somebody else following this same
+document would get code that looks different from yours. Both would work. That
+is normal, and it is not a sign that anything has gone wrong.
 
-What is NOT left to the chat is the behaviour, and that is the part specified
-here in detail:
+The things that matter, though, are decided here and not by the chat.
 
-| | |
-|---|---|
-| What it refuses to answer | Fixed. The honesty rules are the product, and every one of them is written out with the reasoning behind it. |
-| What it follows through the SQL | Fixed. Every rename rule, every edge case, and the measurement that found it. |
-| What it reports, and in what words | Fixed. The exact payload keys, the exact wording rules. |
-| Colours and fonts | Fixed. Phase 9 gives the exact palette, and it is exact on purpose. |
-| The code itself | Yours. |
-| The tests | Yours. Each phase says what must be proved; you and the chat write them. |
+**This document decides these, and the chat may not change them:**
 
-Twelve windows, about two evenings, about six thousand lines of code.
+* **What Ripple is allowed to say.** It must never answer "nothing breaks" when
+  there was something it could not read. These rules are the whole point of
+  Ripple, and each one is written out here with the reason behind it.
+* **How it follows a column through the SQL.** Every renaming rule, every
+  awkward case, and what went wrong the day each rule was added.
+* **What appears on the screen, and in what words.**
+* **The colours and the fonts.** Phase 9 gives the exact colours, and they are
+  exact on purpose.
 
-### The one thing this kit cannot contain
+**You and the chat decide these:**
 
-Ripple reads SQL with a parser called `sqlglot`: **183 files, 80,000 lines,
-2.7 MB.** No chat can write it, and no document can carry it — pasted through a
-chat window it is about seventy-five pastes. It has to arrive on the machine as
-installed files. That is Phase 0, and it is the only one of the twelve steps
-that is not a chat window.
+* **The code itself** — how it is arranged, and what things are named.
+* **The tests.** Each phase says what has to be proved. You and the chat write
+  the tests that prove it.
 
-`sqlglot` is what makes Ripple more than a word search, so Phase 0 is not
-optional and not a shortcut anybody skipped. If your `pip` cannot reach
-anything, the section "If the install step will not work at all", further down,
-gives three routes for getting it onto the machine.
+### The one thing this document cannot hold
+
+Ripple reads SQL using a free tool called `sqlglot`. It is 183 files and 2.7
+megabytes — far too big to paste into a chat, and no chat could write it. It has
+to be installed onto the machine instead. That is Phase 0, and it is the only
+one of the twelve steps that is not a chat window.
+
+Without it, Ripple is only a word search. So Phase 0 is not optional, and it is
+not a step anybody skipped. If your laptop blocks the install, the section "If
+the install step will not work at all", further down, gives three other ways to
+get it on.
 
 
 ---
