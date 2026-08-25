@@ -17,10 +17,9 @@ properly, follows the renames from one table to the next, and reports what actua
 breaks, in which file, on which line.
 
 **Why twelve chat windows and not one.** A chat can hold only so much at once, and
-what these twelve windows produce is about six thousand lines. (The Ripple those
-windows are modelled on has grown to roughly fourteen thousand — see "What this
-kit gives you, and what it does not" below.) So it is built one file at a time,
-twelve windows, each producing one or two finished files. The catch is that every window
+what these twelve windows produce is about six thousand lines. So it is built one
+file at a time, twelve windows, each producing one or two finished files. The
+catch is that every window
 is a stranger: it cannot see the other eleven and has no memory of them. That is
 the whole difficulty of this approach, and the contract card further down is the
 answer to it — the same page of rules pasted at the top of every window, so that
@@ -28,77 +27,62 @@ all twelve build the same product.
 
 ---
 
-## The three files, and which one you want
+## The two files, and which one you want
 
-| Kit | When |
+| File | When |
 |---|---|
-| **BUILD-KIT.md** | Building Ripple on a laptop that CAN install Python packages. Ends with a program you can double-click and hand to somebody. |
-| **RUN-RIPPLE-HERE.md** | You want Ripple running, identical to the copy it came from, without building it. 36 pastes of its actual files. Also the repair shop for this kit: where a phase falls short, take that one file from there. |
-| **BUILD-KIT-REPAIR.md** | You already HAVE a working Ripple and want to change something. One prompt; it answers with the files to open and where they are saved. |
+| **BUILD-KIT.md** | You are building Ripple. This document, start to finish, twelve windows, about two evenings. It ends with a working Ripple and a program you can double-click and hand to somebody. |
+| **BUILD-KIT-REPAIR.md** | You have finished building, and now want to change something. One prompt; it answers with which files to open and where they are saved. |
 
-There was a second build kit once, written for a machine where nothing at all
-could be installed. It was 86% this same document, and the only part of it that
-mattered to anybody whose `pip` works is here now, under "If the install step
-will not work at all" — three routes for getting the SQL parser on when the
-company mirror is down. Two accounts of one build is a tool that behaves
-differently depending on which file somebody happened to open.
+**Everything you need is in this document.** There is nothing else to open,
+nothing to fetch and nothing to compare against. Every phase ends with a command
+that prints either a pass or the exact thing that is wrong, and the two phases
+that stall have ready-made rescue prompts further down, under "When Phase 4 goes
+wrong" and "When Phase 8 goes wrong".
 
 ---
 
-## What this kit gives you, and what it does not
+## What this kit is
 
 This is the first thing to read, because it is the thing most easily assumed
 wrong, and assuming it wrong wastes an evening.
 
-**This kit is a specification, not a copy.** It says what every file must do,
-which colours to use, which facts may never be hidden, and what each test must
-prove. A chat given all of it builds a Ripple that behaves the same way, uses
-the same palette and answers the same questions.
+**It is a specification, not a pile of source code to copy out.** It says what
+every file must do, which colours to use, which facts Ripple may never hide,
+which edge cases exist and why, and what each test must prove. A chat reads a
+phase and writes the code. You save the files and run the check at the end of
+the phase.
 
-**It does not build the same files.** Measured on 25 August 2026, across both
-build kits: of 5,174 substantial lines of shipped Ripple source, **26 appear
-word for word in a kit — one per cent.** For `web/app.js` and `web/index.html`
-it is none at all. The kits are eleven thousand lines of description, and a
-description does not come back out of a chat as the same file.
+So **the code that comes out is yours**. Your spacing, your names, your tests.
+Two chats given the same phase will write it two different ways, and both are
+right, because a description does not come back out of a chat as one fixed file.
 
-What that means in practice:
+What is NOT left to the chat is the behaviour, and that is the part specified
+here in detail:
 
-| | What you get |
+| | |
 |---|---|
-| Behaviour | The same. What Ripple refuses, follows and reports is specified here in detail. |
-| Colours and fonts | The same. Phase 9 gives the exact palette, and it is exact on purpose. |
-| The screens | **Close, not identical.** Same layout, same components, different spacing and different code. |
-| The engine | **Simpler.** These phases budget about 4,500 lines; the shipped engine is 10,797. The gap is edge cases — odd SQL shapes, rescue paths, dialect quirks — so the two can disagree on a hard repository. |
-| Test suites | Yours, not ours. The shipped Ripple carries over 800 tests; you will write far fewer. |
+| What it refuses to answer | Fixed. The honesty rules are the product, and every one of them is written out with the reasoning behind it. |
+| What it follows through the SQL | Fixed. Every rename rule, every edge case, and the measurement that found it. |
+| What it reports, and in what words | Fixed. The exact payload keys, the exact wording rules. |
+| Colours and fonts | Fixed. Phase 9 gives the exact palette, and it is exact on purpose. |
+| The code itself | Yours. |
+| The tests | Yours. Each phase says what must be proved; you and the chat write them. |
 
-**If you need Ripple to be identical**, do not try harder with this kit. Two
-files hand the whole thing over instead of describing it, in pieces you paste
-one after another, each ending with a checksum that says `exact` per file:
+Twelve windows, about two evenings, about six thousand lines of code.
 
-`RUN-RIPPLE-HERE.md` hands the whole thing over instead of describing it — 36
-pastes, fonts included, ending with a checksum that says `exact` per file.
-Nothing else gets two people to the same pixels.
-
-It is also worth having open WHILE you follow this kit. Where a phase's output
-falls short, take that one file's pieces from there rather than arguing with a
-chat about it.
-
-### The one thing no kit can ever do
+### The one thing this kit cannot contain
 
 Ripple reads SQL with a parser called `sqlglot`: **183 files, 80,000 lines,
-2.7 MB.** No chat can write it, and no kit can contain it — pasted through a
-chat window it is about seventy-five pastes. It has to be copied onto the
-machine as files. That is Phase 0, and it is not a shortcut anybody skipped.
+2.7 MB.** No chat can write it, and no document can carry it — pasted through a
+chat window it is about seventy-five pastes. It has to arrive on the machine as
+installed files. That is Phase 0, and it is the only one of the twelve steps
+that is not a chat window.
 
-Follow that thought all the way, because it decides which road you want:
-
-> Whatever can carry 2.7 MB of `sqlglot` onto that laptop can carry the whole of
-> Ripple, which is 4.3 MB. If a memory stick, a shared drive or a download works
-> at all, copying a finished Ripple is one step and building one is two evenings.
-
-Build from this kit when you want to understand it, when you want to change it,
-or when you have to be able to say it was built here. Copy a finished one when
-you just need it working.
+`sqlglot` is what makes Ripple more than a word search, so Phase 0 is not
+optional and not a shortcut anybody skipped. If your `pip` cannot reach
+anything, the section "If the install step will not work at all", further down,
+gives three routes for getting it onto the machine.
 
 
 ---
@@ -4698,7 +4682,8 @@ never be blank - and "from" tells anybody reading it how much the answer is wort
 
 "label" is the one line the settings screen shows, already put together and ready
 to print: "Version 1.5.0 - b6f650d - built 23 Aug 2026". Build the sentence here
-rather than in the screen, so both builds of Ripple say it identically.
+rather than in the screen, so the browser and the double-clickable program print
+it identically.
 
 Serve build_info() on the health route as well, so the version can be read without
 a browser.
@@ -4880,13 +4865,13 @@ GET  /api/catalog     everything learned from the CREATE statements, asked for
                       and the page prints "1,400 so far" rather than a fraction
                       over a denominator nobody could check.
 
-                      THE WHOLE BLOCK, KEY BY KEY. Both kits build the same
-                      three front-end files, and one app.js reads whatever
-                      this route returns in either of them. So a key present
-                      in one kit's health block and absent from the other
-                      fails nowhere: the screen simply shows nothing where the
-                      other one shows a number, and nobody finds out. Write
-                      every key below, spelled exactly this way, in both.
+                      THE WHOLE BLOCK, KEY BY KEY. app.js reads whatever this
+                      route returns, and a key it looks for that is not here
+                      fails nowhere: no error, no warning, the screen simply
+                      shows nothing where a number belongs, and nobody finds
+                      out. Write every key below, spelled exactly this way.
+                      If you ever add a key here, add it to every place that
+                      builds this block, or one of them goes blank in silence.
 
                         ok               always true
                         build            the whole dictionary from
