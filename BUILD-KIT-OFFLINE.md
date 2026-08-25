@@ -30,6 +30,57 @@ there is a packaging step at the end. Do not mix pages between them.
 
 ---
 
+## What this kit gives you, and what it does not
+
+This is the first thing to read, because it is the thing most easily assumed
+wrong, and assuming it wrong wastes an evening.
+
+**This kit is a specification, not a copy.** It says what every file must do,
+which colours to use, which facts may never be hidden, and what each test must
+prove. A chat given all of it builds a Ripple that behaves the same way, uses
+the same palette and answers the same questions.
+
+**It does not build the same files.** Measured on 25 August 2026, across both
+build kits: of 5,174 substantial lines of shipped Ripple source, **26 appear
+word for word in a kit — one per cent.** For `web/app.js` and `web/index.html`
+it is none at all. The kits are eleven thousand lines of description, and a
+description does not come back out of a chat as the same file.
+
+What that means in practice:
+
+| | What you get |
+|---|---|
+| Behaviour | The same. What Ripple refuses, follows and reports is specified here in detail. |
+| Colours and fonts | The same. Phase 9 gives the exact palette, and it is exact on purpose. |
+| The screens | **Close, not identical.** Same layout, same components, different spacing and different code. |
+| The engine | **Simpler.** These phases budget about 4,500 lines; the shipped engine is 10,797. The gap is edge cases — odd SQL shapes, rescue paths, dialect quirks — so the two can disagree on a hard repository. |
+| Test suites | Yours, not ours. The shipped Ripple carries 818 tests; you will write far fewer. |
+
+**If you need the screens to be identical**, do not try harder with this kit.
+Use `BUILD-KIT-UI-EXACT.md`, which hands over `index.html`, `styles.css` and
+`app.js` whole, in seven pastes, and gives you a checksum to prove they arrived
+unchanged. Nothing else gets two people to the same pixels.
+
+### The one thing no kit can ever do
+
+Ripple reads SQL with a parser called `sqlglot`: **183 files, 80,000 lines,
+2.7 MB.** No chat can write it, and no kit can contain it — pasted through a
+chat window it is about seventy-five pastes. It has to be copied onto the
+machine as files. That is Phase 0, and it is not a shortcut anybody skipped.
+
+Follow that thought all the way, because it decides which road you want:
+
+> Whatever can carry 2.7 MB of `sqlglot` onto that laptop can carry the whole of
+> Ripple, which is 4.3 MB. If a memory stick, a shared drive or a download works
+> at all, copying a finished Ripple is one step and building one is two evenings.
+
+Build from this kit when you want to understand it, when you want to change it,
+or when you have to be able to say it was built here. Copy a finished one when
+you just need it working.
+
+
+---
+
 ## What is different in this kit, and why
 
 | # | Changed | Was | Now | Why |
