@@ -622,7 +622,36 @@ If `pip install` works on your machine, you want this file.
 ## Before the first paste: the libraries
 
 This kit hands over Ripple's own code. It does not contain the libraries Ripple
-uses, because those are installed rather than written:
+uses, because those are installed rather than written.
+
+**Three commands, in this order.**
+
+**1. Make sure pip is there at all.**
+
+````
+python -m ensurepip --upgrade --user
+````
+
+A managed Windows build is often installed without pip, and typing `pip` then
+gives "not recognized", which reads as a locked door and is not one. Python
+carries a spare copy of pip inside itself, and this unpacks it. No network, no
+admin rights. If pip is already there this does nothing and says so.
+
+**2. Point pip at the company mirror rather than the public one.**
+
+````
+python -m pip config set global.index-url artifactory.aexp.com/api/pypi/pypi/simple
+````
+
+`pypi.org` is blocked on the network, so pip left alone will hang and then time
+out — which looks like a broken machine rather than a blocked address. This
+writes the internal mirror into pip's own settings once, and every `pip install`
+after it goes there instead. You do it once and never think about it again.
+
+If a later install still cannot reach it, add the scheme and run it again:
+`https://artifactory.aexp.com/api/pypi/pypi/simple`.
+
+**3. Install what Ripple needs.**
 
 ````
 python -m pip install --user sqlglot==30.17.0 fastapi==0.115.0 uvicorn==0.30.6 pydantic==2.13.4 python-multipart==0.0.9 extract-msg==0.48.7 httpx==0.27.2
@@ -635,11 +664,22 @@ no error is raised anywhere. Ripple was written and tested against 30.17.0. If
 the machine already has a different one, say so before trusting any answer it
 gives.
 
-Check what is actually there:
+**If one package alone is refused with a 403** while everything around it
+downloads perfectly, the mirror is not broken. A company mirror routinely holds
+back a version published in the last few days, because nothing has scanned it
+for security yet. Pin that one package a few versions back and run the whole
+command again. A refusal is not a partial install either — pip downloads
+everything before it installs anything, so one refusal near the end means
+nothing was installed, however much of it you watched come down.
+
+**Check they all arrived:**
 
 ````
-python -c "import sqlglot; print(sqlglot.__version__)"
+python -c "import sqlglot,fastapi,uvicorn,pydantic,multipart,extract_msg,httpx;print('all set - sqlglot',sqlglot.__version__)"
 ````
+
+You want `all set - sqlglot 30.17.0`. If it names one thing it could not find,
+install that one on its own and run this again.
 
 **Python itself:** 3.10 or newer. It was developed on 3.12.
 

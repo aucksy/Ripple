@@ -341,3 +341,45 @@ def test_start_here_says_local_and_hosted_are_the_same_files():
     assert "ripple.api import app" in hosted, "the hosted entry no longer loads ripple.api"
     assert "ripple.api:app" in local or "ripple.api import app" in local, \
         "run.py no longer starts ripple.api - the claim in START-HERE.md is stale"
+
+
+def test_the_setup_commands_are_there_and_in_order():
+    """Three commands before the first paste, and the order is the whole point.
+
+    On a managed laptop pip is often absent, and `pip` then says "not
+    recognized" - which reads as a locked door and is not one. And pypi.org is
+    blocked, so pip left pointing at it hangs and times out, which reads as a
+    broken machine rather than a blocked address. Both are one command each, and
+    both have to happen BEFORE the install or the install is what fails and the
+    reason is two steps back.
+    """
+    kit = read(HERE_KIT)
+    wanted = [
+        "python -m ensurepip --upgrade --user",
+        "python -m pip config set global.index-url",
+        "python -m pip install --user sqlglot==",
+    ]
+    where = []
+    for cmd in wanted:
+        assert cmd in kit, f"{HERE_KIT.name} no longer carries `{cmd}`"
+        where.append(kit.index(cmd))
+    assert where == sorted(where), (
+        f"the setup commands are out of order in {HERE_KIT.name}. ensurepip, "
+        f"then the mirror, then the install - any other order and the step that "
+        f"fails is not the step that is wrong."
+    )
+
+
+def test_the_install_line_pins_every_version():
+    """An unpinned install takes whatever was published this morning. sqlglot
+    renamed three parse-tree keys between majors and the renames are silent, so
+    a newer one switches features off with nothing raised anywhere."""
+    kit = read(HERE_KIT)
+    line = next(l for l in kit.splitlines() if l.startswith("python -m pip install --user"))
+    packages = [p for p in line.split()[5:] if not p.startswith("-")]
+    unpinned = [p for p in packages if "==" not in p]
+    assert not unpinned, f"not pinned to a version: {unpinned}"
+    assert "sqlglot==30.17.0" in packages, (
+        "the pinned sqlglot is not 30.17.0, which is the version every rule in "
+        "the build kits was written against."
+    )
