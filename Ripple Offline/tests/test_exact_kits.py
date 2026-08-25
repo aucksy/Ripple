@@ -383,3 +383,82 @@ def test_the_install_line_pins_every_version():
         "the pinned sqlglot is not 30.17.0, which is the version every rule in "
         "the build kits was written against."
     )
+
+
+# ── the repair kit ────────────────────────────────────────────────────────
+
+REPAIR_KIT = ROOT / "BUILD-KIT-REPAIR.md"
+REPAIR_TOOL = OFF / "tools" / "make_repair_kit.py"
+
+
+def test_the_repair_kit_carries_the_real_line_counts():
+    """It is generated for exactly this reason.
+
+    The hand-written version said sqlread.py was 3,573 lines when it was 3,720,
+    repo.py 832 when it was 964, and app.js 2,883 when it was 3,235. Nothing
+    failed; the document simply stopped being true, and a size is the least of
+    what a hand-kept catalogue gets wrong.
+    """
+    kit = read(REPAIR_KIT)
+    checked = 0
+    for p in sorted((ROOT / "Codebase" / "ripple").rglob("*.py")):
+        if "__pycache__" in p.parts or p.stat().st_size == 0:
+            continue
+        name = "ripple/" + p.relative_to(ROOT / "Codebase" / "ripple").as_posix()
+        n = len(p.read_text(encoding="utf-8").splitlines())
+        assert f"### {name}   ({n:,} lines" in kit, (
+            f"{REPAIR_KIT.name} does not give {name} as {n:,} lines. It is stale - "
+            f"run tools/make_repair_kit.py."
+        )
+        checked += 1
+    assert checked > 15, f"only checked {checked} files - the walk is wrong"
+
+
+def test_the_repair_kit_gives_both_directions_of_every_dependency():
+    """One direction is half a routing decision.
+
+    Changing what a file PRODUCES breaks everything under NEEDED BY. Changing
+    what it CONSUMES means everything under IT NEEDS is worth reading first. A
+    catalogue with only one of those gets a chat asking for one file when the
+    change needs three, and the answer that comes back is confident and
+    half-right.
+    """
+    kit = read(REPAIR_KIT)
+    for field in ("IT NEEDS      :", "NEEDED BY     :"):
+        n = kit.count(field)
+        assert n > 25, f"only {n} entries carry `{field.strip()}`"
+    assert kit.count("### ") >= 30, "the catalogue is short a file"
+
+
+def test_the_repair_kit_is_one_block_somebody_can_paste():
+    """The whole design is: paste one thing, type the problem, get a file list.
+    Two blocks and somebody pastes the first and wonders why it does not work.
+    """
+    kit = read(REPAIR_KIT)
+    blocks = re.findall(r"^````text\n(.*?)^````\s*$", kit, re.DOTALL | re.MULTILINE)
+    assert len(blocks) == 1, f"expected one pasteable block, found {len(blocks)}"
+    prompt = blocks[0]
+    assert prompt.startswith("YOU ARE REPAIRING RIPPLE"), "the block does not open with the instruction"
+    for must in ("WHICH FILES I SHOULD SEND", "IT NEEDS", "NEEDED BY",
+                 "ASK FOR EVERY FILE THAT MIGHT HAVE TO CHANGE TOGETHER",
+                 "THE CATALOGUE", "no impact"):
+        assert must in prompt, f"the pasteable block never says `{must}`"
+
+
+def test_the_rescue_prompts_for_the_two_hard_phases_are_in_both_kits():
+    """Phases 4 and 8 are where a build stalls, and both kits already NAMED what
+    goes wrong without ever giving somebody the sentence to send back. A person
+    in a broken window at ten at night does not compose one."""
+    for kit_name in ("BUILD-KIT.md", "BUILD-KIT-OFFLINE.md"):
+        kit = (ROOT / kit_name).read_text(encoding="utf-8")
+        for phase in (4, 8):
+            assert f"## When Phase {phase} goes wrong" in kit, \
+                f"{kit_name} has no rescue section for Phase {phase}"
+        # Each rescue block has to be pasteable, not described.
+        four = kit.split("## When Phase 4 goes wrong")[1].split("# PHASE 5")[0]
+        eight = kit.split("## When Phase 8 goes wrong")[1].split("# PHASE 9")[0]
+        assert four.count("````text") >= 5, f"{kit_name}: Phase 4 has too few ready prompts"
+        assert eight.count("````text") >= 6, f"{kit_name}: Phase 8 has too few ready prompts"
+        # The two silent ones that cost an evening each.
+        assert "0.0.0.0" in eight, f"{kit_name}: nothing about binding to 0.0.0.0"
+        assert "dialectcompat" in four, f"{kit_name}: nothing about reading a parse-tree key directly"

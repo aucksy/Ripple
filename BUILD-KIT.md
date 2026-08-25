@@ -3321,6 +3321,88 @@ set wrong, or Phase 3 not being applied on the way in.
 
 ---
 
+## When Phase 4 goes wrong — the five things to paste back
+
+This is the longest file in the kit and the one most likely to come back wrong.
+Every one of these is a sentence to paste into **the same window**, never a
+fresh one — a fresh window has forgotten what it decided and will invent
+different names.
+
+**It trailed off, or a function body is `pass`, or you see "rest of the
+implementation".**
+
+````text
+That file is not complete. Do not paste it again from the top.
+
+Tell me first: how many lines do you expect the whole file to be, and how many
+parts will you need to give it to me in? Then give me PART 1 OF N only,
+complete, ending at a function boundary rather than mid-function, and say which
+line it ends on. I will ask for the next part in this same window.
+
+No "...", no "rest unchanged", no TODO, no function body left as pass. If a part
+would still be too long, use more parts.
+````
+
+**It used a name that is not in the contract card.**
+
+````text
+The contract card calls that X, not Y. Window 5 and window 8 are being built
+against the card and will be looking for X. They cannot see what you renamed and
+nothing will fail loudly -- it will simply find nothing.
+
+Use the card's name everywhere and give me the file again. If you genuinely
+needed a name that is not in the card, say so in one line at the top so I can
+carry it to the other windows.
+````
+
+**Every test passes and you do not believe them.**
+
+````text
+Would any of those tests fail if the behaviour were missing? Show me the one
+that catches it. Delete the body of the function it tests, in your head, and
+tell me which test goes red.
+
+If there is not one, add it. A test that passes against an empty function makes
+a missing feature look finished, which is worse than having no test at all.
+````
+
+**It reads a parse-tree key directly.** The one rule in this phase that fails
+silently. Search what it gave you for `.args[` — if any file except
+`dialectcompat.py` has one, paste this:
+
+````text
+You are reading a parse-tree key directly, at <line>. Nothing except
+ripple/scanner/dialectcompat.py may do that.
+
+sqlglot renames those keys between major versions and the renames are SILENT --
+the old key returns None, so the code carries on and quietly finds nothing.
+Star.args["except"] became "except_", Merge.args["expressions"] became "whens",
+Select.args["from"] became "from_". Nothing raises, every test goes on passing,
+and the answers go wrong.
+
+Use the function in dialectcompat.py that already covers that key. If there is
+no function for it, tell me which key you need and I will have it added there
+first. Then give me the file again.
+````
+
+**It drops what it could not parse.** This is the big one, and it will do it,
+because dropping things makes the result look cleaner.
+
+````text
+You are throwing away statements you could not read. That is the one thing this
+tool may never do.
+
+Anything the reader could not follow is reported on screen with the file and the
+line, never dropped. A file where some statements failed reads "2 of 63
+statements in this file could not be read - the other 61 were". A file where
+NOTHING was understood is reported as its own case, because that is the quietest
+way to lose a file and it is what a wrong SQL dialect looks like.
+
+Put it back and give me the file again.
+````
+
+---
+
 # PHASE 5 — the catalogue, and following a column
 
 **Saves to:** `ripple-build/ripple/catalog.py`,
@@ -4757,6 +4839,111 @@ curl http://127.0.0.1:8000/api/health
 
 A wall of text starting with `{"ok":true` is a pass. To stop the server when you
 are done, go back to the first window and hold Ctrl and press C.
+
+---
+
+## When Phase 8 goes wrong — the six things to paste back
+
+Phase 8 builds five files at once and every one of its failures is silent: the
+program starts, looks healthy, and is wrong. Check these in order before you
+move on, and paste the matching block into the same window.
+
+**The screen shows a blank where a number should be.** A route answered with an
+acknowledgement instead of the whole block.
+
+````text
+That route answers with {"ok": true}. It has to answer with the WHOLE
+/api/health block instead.
+
+The page keeps one copy of that block and REPLACES its copy with whatever comes
+back. A route that returns an acknowledgement leaves every number on screen
+showing the answer from before the change, and nothing anywhere says so. Every
+route that changes what Ripple is set to -- re-reading the repository, saving
+the published-table list -- answers with the whole block.
+
+Give me the file again.
+````
+
+**The progress line never moves.** `progress.py` on its own reports an empty job
+for ever; `api.py` is what fills it.
+
+````text
+progress.py is built but never wired in, so it reports an empty job for ever and
+the screen shows a spinner for four minutes.
+
+Pass progress.reader(...) as the on_progress argument of all three slow calls,
+and call progress.finish() when each one ends -- including when a scan FAILS, or
+a failed scan leaves the screen counting for ever:
+
+  RepoIndex.build(..., on_progress=progress.reader("reading"))
+  parse_repo(..., on_progress=progress.reader("parsing"))
+  trace(..., on_progress=progress.reader("scanning"))
+
+Those three words are a contract with the page, which is built in a different
+window and turns each one into a sentence. Invent a fourth name and the page
+falls back to the single word "Working" for the whole wait.
+
+Give me the file again.
+````
+
+**A card on a screen is empty and nothing errors.** A key is missing from the
+health block.
+
+````text
+Check the health block against the contract card, key by key, and tell me which
+ones you have left out.
+
+One app.js reads that block in both builds, so a key present in one and absent
+from the other fails nowhere: the screen simply shows nothing where the other
+one shows a number. Every key in the card, spelled exactly that way, including
+all fourteen in the repo block.
+
+Then give me the file again.
+````
+
+**It hands uvicorn a string.** Works today, breaks the day it is packaged.
+
+````text
+run.py passes uvicorn the string "ripple.api:app". Pass it the app OBJECT
+instead -- from ripple.api import app -- and hand that over.
+
+Both work while running from source. Only the object still works once this is
+packaged, because a packaged program has no importable module of that name to
+look up, and the string form exits immediately with "Could not import module".
+That is a whole evening lost in Phase 13, on a fault that looks nothing like
+this one.
+
+Give me run.py again.
+````
+
+**It binds to 0.0.0.0.** Search what it gave you for that number.
+
+````text
+Bind to 127.0.0.1, never 0.0.0.0.
+
+The two look interchangeable and are not. 127.0.0.1 is the machine talking to
+itself and cannot be reached from outside it. 0.0.0.0 offers an analysis of
+internal source code to everyone on the office network, on a port with no
+password on it. Tutorials are full of 0.0.0.0 because they are written for
+containers. This is a laptop.
+
+Give me the file again.
+````
+
+**There is a key box on the settings screen and no route behind it.** Or three
+AI routes and no box. One or the other, never one of the two.
+
+````text
+Either build all three AI routes here -- /api/ai/check, /api/ai/connect,
+/api/ai/forget -- or tell me to take the key box out of Phase 11. A box with no
+route behind it is a screen that looks finished and does nothing, and somebody
+will paste a real key into it.
+
+If you build them: the key lives in this process and nowhere else. Never written
+to disk, never logged, never returned by any route. What /api/health may say
+about it is facts -- which provider, which model, where the key came from --
+never the key.
+````
 
 ---
 
