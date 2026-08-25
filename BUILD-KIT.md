@@ -67,12 +67,18 @@ What that means in practice:
 | Colours and fonts | The same. Phase 9 gives the exact palette, and it is exact on purpose. |
 | The screens | **Close, not identical.** Same layout, same components, different spacing and different code. |
 | The engine | **Simpler.** These phases budget about 4,500 lines; the shipped engine is 10,797. The gap is edge cases — odd SQL shapes, rescue paths, dialect quirks — so the two can disagree on a hard repository. |
-| Test suites | Yours, not ours. The shipped Ripple carries 818 tests; you will write far fewer. |
+| Test suites | Yours, not ours. The shipped Ripple carries over 800 tests; you will write far fewer. |
 
-**If you need the screens to be identical**, do not try harder with this kit.
-Use `BUILD-KIT-UI-EXACT.md`, which hands over `index.html`, `styles.css` and
-`app.js` whole, in seven pastes, and gives you a checksum to prove they arrived
-unchanged. Nothing else gets two people to the same pixels.
+**If you need Ripple to be identical**, do not try harder with this kit. Two
+files hand the whole thing over instead of describing it, in pieces you paste
+one after another, each ending with a checksum that says `exact` per file:
+
+* `RUN-RIPPLE-HERE.md` — for a machine where `pip install` works. 36 pastes,
+  nothing to copy, fonts included.
+* `RUN-RIPPLE-HERE-NO-INSTALLS.md` — for a machine where it does not. 25 pastes,
+  and `sqlglot` still has to arrive as a folder.
+
+Nothing else gets two people to the same pixels.
 
 ### The one thing no kit can ever do
 

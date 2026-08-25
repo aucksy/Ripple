@@ -1,19 +1,30 @@
-# Ripple — the whole thing, exactly
+# Run Ripple here
 
 **What this is.** Every file of Ripple, handed over whole, in pieces you paste
-one after another. Not a description of Ripple: the files.
+one after another. Not a description of Ripple: the files themselves.
 
-**Use this one when `pip install` works on the machine.** If it does, this is
-the shortest honest road to a Ripple that is identical to the one it came from —
-the same engine, the same screens, the same answers. There is nothing to copy
-across and nothing to carry on a memory stick.
+**This is the usual one.** Follow it and you have Ripple running on the machine
+in front of you, identical to the copy it came from — same engine, same screens,
+same answers.
 
-The other kits exist for other situations. `BUILD-KIT.md` and
-`BUILD-KIT-OFFLINE.md` describe Ripple and let a chat write it, which is what
-you want in order to understand it or change it — but of every substantial line
-of shipped source, only **one per cent** appears word for word in them, and for
-`app.js` none at all. They produce a Ripple that behaves the same and looks
-close, not the same one.
+---
+
+## "Local" and "hosted" are the same files
+
+Worth settling before anything else, because two different meanings of the same
+two words have sent people to the wrong file.
+
+Ripple has ONE codebase. `run.py` starts it on your own machine; the hosting
+platform's entry point loads the very same application object. **Nothing is
+rebuilt, reconfigured or ported when it gets hosted** — the same files are
+deployed. So running it here now is not a detour on the way to hosting it; it is
+the same thing, started a different way.
+
+There is a second pair of meanings inside this repository, and it is NOT about
+hosting. There, "offline" means a Ripple that may not reach the network at all —
+no AI reader, no downloading a repository — built for a laptop where nothing can
+be installed. That is a different kit and almost certainly not what you want.
+If `pip install` works on your machine, you want this file.
 
 ---
 
@@ -39,6 +50,8 @@ Check what is actually there:
 python -c "import sqlglot; print(sqlglot.__version__)"
 ````
 
+**Python itself:** 3.10 or newer. It was developed on 3.12.
+
 ---
 
 ## Read this before you start
@@ -49,9 +62,10 @@ every card and every word on them lives in `web/app.js`, which is JavaScript.
 and hands them the numbers.
 
 **This is a transcription, not a build.** You are not writing Ripple here; you
-are having a chat write out files, which is a way to get them onto a machine
-that will not take a memory stick or a download. The other two kits genuinely
-build it. Be clear with yourself about which of those you need.
+are having a chat write out files you already have. That is a way to get them
+onto a machine that will not take a memory stick or a download. If what you
+want is to BUILD Ripple — to understand it, or to change it — `BUILD-KIT.md`
+is the file for that, and it is a different job.
 
 ---
 

@@ -29,9 +29,8 @@ OFF = ROOT / "Ripple Offline"
 TOOL = OFF / "tools" / "make_exact_kits.py"
 SNAPSHOT_TOOL = OFF / "tools" / "make_demo_snapshot.py"
 
-UI_KIT = ROOT / "BUILD-KIT-UI-EXACT.md"
-ENGINE_KIT = ROOT / "BUILD-KIT-ENGINE-EXACT.md"
-ONLINE_KIT = ROOT / "BUILD-KIT-ONLINE-EXACT.md"
+HERE_KIT = ROOT / "RUN-RIPPLE-HERE.md"                 # pip works
+NO_INSTALL_KIT = ROOT / "RUN-RIPPLE-HERE-NO-INSTALLS.md"  # pip is blocked
 
 UI_NAMES = ("web/index.html", "web/styles.css", "web/app.js")
 
@@ -86,7 +85,7 @@ def source_for(kit_path: Path, saved_as: str, web: Path) -> Path:
     Codebase/web as it stands; the locked-down one hands over what webbuild
     makes of it, with the key box and the GitHub source deleted.
     """
-    if kit_path == ONLINE_KIT:
+    if kit_path == HERE_KIT:
         return ROOT / "Codebase" / saved_as
     if saved_as in UI_NAMES:
         return web / saved_as.split("/", 1)[1]
@@ -105,7 +104,7 @@ def engine_source(saved_as: str) -> Path:
 
 # ── both kits ─────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT, ONLINE_KIT], ids=["ui", "engine", "online"])
+@pytest.mark.parametrize("kit_path", [HERE_KIT, NO_INSTALL_KIT], ids=["here", "no-installs"])
 def test_the_pieces_join_back_into_the_real_files(kit_path, offline_web):
     """The one that matters. Byte for byte, or it is not the same Ripple."""
     got = rebuilt(read(kit_path))
@@ -127,7 +126,7 @@ def test_the_pieces_join_back_into_the_real_files(kit_path, offline_web):
         )
 
 
-@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT, ONLINE_KIT], ids=["ui", "engine", "online"])
+@pytest.mark.parametrize("kit_path", [HERE_KIT, NO_INSTALL_KIT], ids=["here", "no-installs"])
 def test_the_checksums_the_kit_publishes_are_the_real_ones(kit_path, offline_web):
     """Each kit ships a checker. Stale digests tell somebody their imitation is
     exact, which is the worst answer it could possibly give."""
@@ -141,7 +140,7 @@ def test_the_checksums_the_kit_publishes_are_the_real_ones(kit_path, offline_web
         )
 
 
-@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT, ONLINE_KIT], ids=["ui", "engine", "online"])
+@pytest.mark.parametrize("kit_path", [HERE_KIT, NO_INSTALL_KIT], ids=["here", "no-installs"])
 def test_no_piece_is_big_enough_to_be_refused(kit_path):
     """A chat window will not take an unlimited paste, and a piece that gets
     truncated produces a file that looks finished and is not."""
@@ -151,7 +150,7 @@ def test_no_piece_is_big_enough_to_be_refused(kit_path):
     assert not over, f"{len(over)} piece(s) over 45 KB in {kit_path.name}: {over}"
 
 
-@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT, ONLINE_KIT], ids=["ui", "engine", "online"])
+@pytest.mark.parametrize("kit_path", [HERE_KIT, NO_INSTALL_KIT], ids=["here", "no-installs"])
 def test_each_kit_is_generated_and_says_so(kit_path):
     """A copy of a source file inside a document is a second copy of it, and the
     second copy is always the one that goes stale."""
@@ -161,7 +160,7 @@ def test_each_kit_is_generated_and_says_so(kit_path):
     assert "edit this by hand" in kit, f"{kit_path.name} does not warn against hand-editing"
 
 
-@pytest.mark.parametrize("kit_path", [UI_KIT, ENGINE_KIT, ONLINE_KIT], ids=["ui", "engine", "online"])
+@pytest.mark.parametrize("kit_path", [HERE_KIT, NO_INSTALL_KIT], ids=["here", "no-installs"])
 def test_each_kit_is_honest_about_what_it_cannot_give_you(kit_path):
     """Neither kit can contain the SQL parser, and saying so is the difference
     between a kit and a wasted evening."""
@@ -171,11 +170,47 @@ def test_each_kit_is_honest_about_what_it_cannot_give_you(kit_path):
 
 # ── the two kits together ─────────────────────────────────────────────────
 
-def test_the_two_kits_do_not_overlap():
-    """One hands over the screens, the other the Python. A file appearing in
-    both means pasting them both leaves one of the two copies losing."""
-    both = set(rebuilt(read(UI_KIT))) & set(rebuilt(read(ENGINE_KIT)))
-    assert not both, f"handed over by both kits: {sorted(both)}"
+def test_each_kit_is_a_whole_Ripple_on_its_own():
+    """Neither is half a job.
+
+    These used to be three files -- one for the screens, one for the engine, one
+    for everything -- and somebody following the first two had to know they were
+    a pair. They are one kit each now: pick the one that matches your machine,
+    follow it to the end, and you have Ripple. So each has to carry BOTH halves,
+    and a kit that quietly lost one would still read perfectly well.
+    """
+    for kit_path in (HERE_KIT, NO_INSTALL_KIT):
+        got = set(rebuilt(read(kit_path)))
+        screens = {n for n in got if n.startswith("web/")}
+        engine = {n for n in got if n.startswith("ripple")}
+        assert screens, f"{kit_path.name} hands over no screens"
+        assert engine, f"{kit_path.name} hands over no engine"
+        assert "web/app.js" in got, f"{kit_path.name} is missing web/app.js"
+        assert any(n.endswith("run.py") for n in got), \
+            f"{kit_path.name} hands over no way to start it"
+
+
+def test_the_two_kits_are_told_apart_by_pip_and_say_so():
+    """The words 'online' and 'offline' mean two opposite things depending on
+    who is saying them -- hosted-or-not to most people, network-or-not inside
+    this repository. Both kits were named with the second meaning and read with
+    the first, and somebody went to the wrong file because of it. Neither name
+    carries either word now, and the one for a normal machine says out loud that
+    running it here and hosting it later are the same files.
+    """
+    for kit_path in (HERE_KIT, NO_INSTALL_KIT):
+        assert "online" not in kit_path.name.lower(), f"{kit_path.name} says 'online'"
+        assert "offline" not in kit_path.name.lower(), f"{kit_path.name} says 'offline'"
+    here = read(HERE_KIT)
+    assert "pip install" in here, "the usual kit never says what to install"
+    assert "same files" in here, (
+        "RUN-RIPPLE-HERE.md does not say that running it here and hosting it "
+        "later are the same files, which is the thing people get wrong."
+    )
+    assert "pip install" in read(NO_INSTALL_KIT), (
+        "the no-installs kit does not tell somebody to try pip first, so people "
+        "who could use the shorter kit will follow the longer one."
+    )
 
 
 def test_the_engine_kit_matches_what_the_snapshot_actually_ships():
@@ -199,7 +234,7 @@ def test_the_engine_kit_matches_what_the_snapshot_actually_ships():
         )
 
 
-def test_the_ui_kit_carries_no_way_out_of_the_machine(offline_web):
+def test_the_no_install_screens_carry_no_way_out_of_the_machine(offline_web):
     """The bug this test was written for, caught the day the kit was made.
 
     The first version of the UI kit handed over ``Codebase/web/app.js`` — the
@@ -215,12 +250,16 @@ def test_the_ui_kit_carries_no_way_out_of_the_machine(offline_web):
     sys.path.insert(0, str(OFF))
     from ripple_offline import webbuild
 
-    kit = read(UI_KIT).lower()
-    # Only look inside the handed-over code, never the prose around it.
-    code = "\n".join(v for k, v in rebuilt(read(UI_KIT)).items()).lower()
+    # Only the SCREENS, and only the handed-over code rather than the prose
+    # around it. webbuild applies this list to the front end alone, and it has
+    # to: ripple/providers.py is a table of which company a pasted key belongs
+    # to, so it names all three of them. It opens no connection, and it ships
+    # inside the no-install build that is proven to run.
+    code = "\n".join(v for k, v in rebuilt(read(NO_INSTALL_KIT)).items()
+                     if k.startswith("web/")).lower()
     found = [w for w in webbuild.BANNED if w.lower() in code]
     assert not found, (
-        f"{UI_KIT.name} hands over screens containing {found}. That is the "
+        f"{NO_INSTALL_KIT.name} hands over screens containing {found}. That is the "
         f"online front end. The offline one is built from it with those parts "
         f"deleted - regenerate with tools/make_exact_kits.py."
     )
@@ -240,7 +279,7 @@ def test_every_empty_file_gets_its_own_command():
     decoy folder imports as though it were Ripple's own. Nothing errors and
     nothing warns, which is the one failure this tool exists to make impossible.
     """
-    kit = read(ONLINE_KIT)
+    kit = read(HERE_KIT)
     if "## First: the empty files" not in kit:
         pytest.skip("this kit hands over no empty files")
     section = kit.split("## First: the empty files")[1].split("\n---")[0]
@@ -249,10 +288,56 @@ def test_every_empty_file_gets_its_own_command():
     for name in listed:
         want = "type nul > " + name.replace("/", "\\")
         assert want in section, (
-            f"{ONLINE_KIT.name} lists {name} as an empty file to create but gives "
+            f"{HERE_KIT.name} lists {name} as an empty file to create but gives "
             f"no command for it. Somebody creates the ones that have a line."
         )
     assert "namespace package" in section, (
         "the section does not say what skipping these actually costs, so it reads "
         "as housekeeping somebody can skip - and everything does work without them."
     )
+
+
+# ── the page that decides which file somebody opens ───────────────────────
+
+START_HERE = ROOT / "START-HERE.md"
+
+
+def test_start_here_names_every_kit_and_no_kit_that_is_gone():
+    """The index is the first thing anybody reads, so it is the worst thing to
+    let go stale.
+
+    It sent somebody to a file called BUILD-KIT-ONLINE-EXACT.md when what they
+    wanted was to run Ripple on their own laptop, because "online" reads as
+    "hosted" to everybody except this repository. Renaming fixed that; this
+    stops the index drifting away from the files that actually exist.
+    """
+    assert START_HERE.is_file(), "START-HERE.md is missing"
+    page = START_HERE.read_text(encoding="utf-8")
+
+    on_disk = {p.name for p in ROOT.glob("*.md")} - {"START-HERE.md"}
+    named = {n for n in re.findall(r"`([A-Z][\w.-]+\.md)`", page)}
+
+    assert not (on_disk - named), (
+        f"START-HERE.md never mentions {sorted(on_disk - named)}, so nobody "
+        f"reading it knows those files exist."
+    )
+    assert not (named - on_disk), (
+        f"START-HERE.md sends people to {sorted(named - on_disk)}, which is not "
+        f"there any more."
+    )
+
+
+def test_start_here_says_local_and_hosted_are_the_same_files():
+    """One codebase. run.py starts it here and the hosting entry point loads the
+    same application object -- verified in Codebase/api/index.py, which does
+    `from ripple.api import app`, exactly as run.py does. Somebody who thinks
+    those are two builds goes looking for a second kit that does not exist.
+    """
+    page = START_HERE.read_text(encoding="utf-8")
+    assert "same files" in page, "START-HERE.md does not say it plainly"
+
+    hosted = (ROOT / "Codebase" / "api" / "index.py").read_text(encoding="utf-8")
+    local = (ROOT / "Codebase" / "run.py").read_text(encoding="utf-8")
+    assert "ripple.api import app" in hosted, "the hosted entry no longer loads ripple.api"
+    assert "ripple.api:app" in local or "ripple.api import app" in local, \
+        "run.py no longer starts ripple.api - the claim in START-HERE.md is stale"

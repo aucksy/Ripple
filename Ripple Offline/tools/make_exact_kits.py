@@ -589,22 +589,33 @@ arriving, a column being followed end to end, and the rule that Ripple must neve
 say "no impact" over a file it could not read."""
 
 
-ONLINE_INTRO = """# Ripple — the whole thing, exactly
+ONLINE_INTRO = """# Run Ripple here
 
 **What this is.** Every file of Ripple, handed over whole, in pieces you paste
-one after another. Not a description of Ripple: the files.
+one after another. Not a description of Ripple: the files themselves.
 
-**Use this one when `pip install` works on the machine.** If it does, this is
-the shortest honest road to a Ripple that is identical to the one it came from —
-the same engine, the same screens, the same answers. There is nothing to copy
-across and nothing to carry on a memory stick.
+**This is the usual one.** Follow it and you have Ripple running on the machine
+in front of you, identical to the copy it came from — same engine, same screens,
+same answers.
 
-The other kits exist for other situations. `BUILD-KIT.md` and
-`BUILD-KIT-OFFLINE.md` describe Ripple and let a chat write it, which is what
-you want in order to understand it or change it — but of every substantial line
-of shipped source, only **one per cent** appears word for word in them, and for
-`app.js` none at all. They produce a Ripple that behaves the same and looks
-close, not the same one.
+---
+
+## "Local" and "hosted" are the same files
+
+Worth settling before anything else, because two different meanings of the same
+two words have sent people to the wrong file.
+
+Ripple has ONE codebase. `run.py` starts it on your own machine; the hosting
+platform's entry point loads the very same application object. **Nothing is
+rebuilt, reconfigured or ported when it gets hosted** — the same files are
+deployed. So running it here now is not a detour on the way to hosting it; it is
+the same thing, started a different way.
+
+There is a second pair of meanings inside this repository, and it is NOT about
+hosting. There, "offline" means a Ripple that may not reach the network at all —
+no AI reader, no downloading a repository — built for a laptop where nothing can
+be installed. That is a different kit and almost certainly not what you want.
+If `pip install` works on your machine, you want this file.
 
 ---
 
@@ -630,6 +641,8 @@ Check what is actually there:
 python -c "import sqlglot; print(sqlglot.__version__)"
 ````
 
+**Python itself:** 3.10 or newer. It was developed on 3.12.
+
 ---
 
 ## Read this before you start
@@ -640,12 +653,101 @@ every card and every word on them lives in `web/app.js`, which is JavaScript.
 and hands them the numbers.
 
 **This is a transcription, not a build.** You are not writing Ripple here; you
-are having a chat write out files, which is a way to get them onto a machine
-that will not take a memory stick or a download. The other two kits genuinely
-build it. Be clear with yourself about which of those you need.
+are having a chat write out files you already have. That is a way to get them
+onto a machine that will not take a memory stick or a download. If what you
+want is to BUILD Ripple — to understand it, or to change it — `BUILD-KIT.md`
+is the file for that, and it is a different job.
 
 ---
 """
+
+NO_INSTALL_INTRO = """# Run Ripple here — on a machine where nothing installs
+
+**What this is.** Every file of Ripple, handed over whole. Same as
+`RUN-RIPPLE-HERE.md`, with one difference that changes everything: this one is
+for a machine where `pip install` does not work.
+
+**Try the other file first.** Run this:
+
+````
+python -m pip install sqlglot==30.17.0
+````
+
+If that succeeds, close this file and use `RUN-RIPPLE-HERE.md`. It is shorter,
+it needs nothing copied, and it gives you the whole product including the AI
+email reader. Only carry on here if pip genuinely cannot reach anything.
+
+---
+
+## What is different here, and what it costs
+
+This build reaches the network nowhere. Three things follow:
+
+* **The web service is Python's own `http.server`**, not FastAPI, because FastAPI
+  is an install. Same addresses, same JSON, same screens.
+* **There is no AI email reader and no "download a repository" button.** Both
+  need a network. The screens here do not have them — not greyed out, not
+  broken: absent.
+* **There is a settings screen the other build does not have**, for choosing the
+  folder and the SQL dialect on screen rather than in environment variables.
+
+Everything else is the same Ripple, and the answers are the same answers.
+
+---
+
+## The one thing that must be copied
+
+`sqlglot` is the SQL parser — 183 files, 2.7 MB. It is what makes Ripple more
+than a word search, no chat can write it, and pasted through a chat window it is
+about seventy-five pastes. **It has to arrive as files**, in a folder called
+`sqlglot` sitting beside `run.py`.
+
+`BUILD-KIT-OFFLINE.md` has a whole section on getting it there — an internal
+company mirror, the source zip from GitHub, a copy from a colleague's machine.
+Read Phase 0 of that file first. Nothing below works without it.
+
+---
+
+## Read this before you start
+
+**No Python file builds the screens.** Every screen, every card and every word
+lives in `web/app.js`, which is JavaScript. `web/styles.css` holds the colours.
+Python only serves those files and hands them the numbers.
+
+**Fonts are not included here.** The other kit carries them as text. This one
+does not, so the screens use whatever Segoe UI and Consolas the machine has:
+same layout, same colours, same spacing, slightly different letterforms.
+
+---
+"""
+
+NO_INSTALL_TAIL = """## When every file says `exact`
+
+You still need `sqlglot` as a folder beside `run.py` — see the top of this file.
+Nothing works without it.
+
+Then, from the folder holding `run.py`:
+
+````
+python run.py
+````
+
+It prints the address it got. Read it rather than assuming 8000 — if something
+else on the machine holds that port, Ripple quietly takes the next free one up
+to 8020.
+
+To prove the engine before opening anything:
+
+````
+python -m unittest tests.test_smoke
+````
+
+Thirteen checks, a second or two. They cover the parser arriving, the engine
+arriving, the screens arriving, a column being followed end to end, and the rule
+that Ripple must never say "no impact" over a file it could not read.
+
+Do not open `index.html` by double-clicking it. The page asks the server for
+`/static/styles.css`, and a file opened directly has no server to ask."""
 
 ONLINE_TAIL = """## When every file says `exact`
 
@@ -671,20 +773,27 @@ the table the chain ends at is on that list."""
 
 
 def main() -> None:
-    n0, l0 = build_kit(ROOT / "BUILD-KIT-ONLINE-EXACT.md", "everything", ONLINE_INTRO,
+    """Two kits, not three, and named for the question somebody is actually asking.
+
+    They used to be called ONLINE-EXACT, UI-EXACT and ENGINE-EXACT. Those names
+    were a mistake. Inside this repository "online" and "offline" mean whether
+    Ripple may reach the network -- but to everybody else they mean whether it
+    is hosted or running on a laptop, which is the OPPOSITE axis. Somebody
+    wanting to run Ripple on their own machine before it is hosted anywhere
+    read "online" and went to the wrong file. And the screens and the engine
+    were two kits that are useless apart, so they are one kit now.
+    """
+    n0, l0 = build_kit(ROOT / "RUN-RIPPLE-HERE.md", "everything", ONLINE_INTRO,
                        online_files(), "check_ripple.py", ONLINE_TAIL,
                        with_fonts=True)
-    print(f"BUILD-KIT-ONLINE-EXACT.md  {n0:>3} pastes  {l0:>7,} lines   <- pip works")
+    print(f"RUN-RIPPLE-HERE.md             {n0:>3} pastes  {l0:>7,} lines   "
+          f"<- pip works. THE USUAL ONE.")
 
-    n1, l1 = build_kit(ROOT / "BUILD-KIT-UI-EXACT.md", "screens", UI_INTRO,
-                       ui_files(), "check_ui.py", UI_TAIL)
-    print(f"BUILD-KIT-UI-EXACT.md      {n1:>3} pastes  {l1:>7,} lines   <- locked down")
-
-    n2, l2 = build_kit(ROOT / "BUILD-KIT-ENGINE-EXACT.md", "engine", ENGINE_INTRO,
-                       engine_files(), "check_engine.py", ENGINE_TAIL)
-    print(f"BUILD-KIT-ENGINE-EXACT.md  {n2:>3} pastes  {l2:>7,} lines   <- locked down")
-    print(f"\npip works        : {n0} pastes, nothing to copy")
-    print(f"nothing installs : {n1 + n2} pastes, plus sqlglot copied as a folder")
+    n1, l1 = build_kit(ROOT / "RUN-RIPPLE-HERE-NO-INSTALLS.md", "everything",
+                       NO_INSTALL_INTRO, engine_files() + ui_files(),
+                       "check_ripple.py", NO_INSTALL_TAIL)
+    print(f"RUN-RIPPLE-HERE-NO-INSTALLS.md {n1:>3} pastes  {l1:>7,} lines   "
+          f"<- pip is blocked, and sqlglot has to be copied")
 
 
 main()
