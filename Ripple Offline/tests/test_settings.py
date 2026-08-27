@@ -240,3 +240,31 @@ def test_the_branch_reader_is_the_shared_one_and_not_a_second_copy():
         "and put a made-up branch name on one of the two screens."
     )
     assert callable(git_branch), "the shared branch reader is gone"
+
+
+def test_both_builds_read_sql_as_the_same_language_by_default():
+    """The dialect is not cosmetic, and the two builds used to disagree on it.
+
+    This build set its own DEFAULT_DIALECT of "bigquery" while the shared engine
+    defaulted to "" -- generic. So the batch-file Ripple and the packaged Ripple
+    read the SAME folder as two different languages. Read as generic, a
+    BigQuery-ism the parser does not know becomes an unreadable statement, the
+    chain through it is never followed, and the answer comes back cleaner than
+    the truth: the one failure this product exists to prevent.
+
+    Nothing caught it. Each build's tests only ever asked its own build. It was
+    found by running both against one folder and comparing every value in the
+    answer -- see tools/compare_builds.py.
+    """
+    from ripple.config import DEFAULT_DIALECT as shared, Settings
+    assert prefs.DEFAULT_DIALECT == shared, (
+        "the packaged build has its own dialect default again"
+    )
+    assert Settings().sql_dialect == shared, (
+        "a fresh engine does not start on the shared default, so the two builds "
+        "will read the same folder as different languages"
+    )
+    src = pathlib.Path(prefs.__file__).read_text(encoding="utf-8")
+    assert 'DEFAULT_DIALECT = "' not in src, (
+        "prefs.py defines its own dialect default again rather than importing it"
+    )

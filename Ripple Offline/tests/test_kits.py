@@ -415,6 +415,15 @@ TRAVELS_BADLY = {
     "not claiming a commit that is not yours": [
         "git ls-files --error-unmatch",
     ],
+    "reading the SQL as the right language": [
+        "ONE default, and set it to the warehouse",
+        "comes back CLEANER than",      # why a wrong dialect is the worst setting
+        "two different languages",      # what happened when two builds disagreed
+    ],
+    "not inventing a branch for a folder that has none": [
+        "EMPTY, and read off the folder",
+        'Not\n                       "main"',
+    ],
     "reading YOUR folder rather than the practice one": [
         "RIPPLE_REPO is the one that decides whether this was worth building",
         'set "RIPPLE_REPO=',            # what makes the choice last

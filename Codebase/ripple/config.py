@@ -49,6 +49,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # the larger models, and any model the provider offers can still be chosen.
 
 
+# Which SQL Ripple reads a repository as, when nobody has said otherwise.
+#
+# This was "" -- generic -- here, while the packaged build set its own default
+# of "bigquery". So the two builds read the SAME folder as two different
+# languages, and the dialect is not a cosmetic setting: read as generic, a
+# BigQuery-ism the parser does not recognise becomes an unreadable statement,
+# the chain through it is never followed, and the answer comes back cleaner than
+# the truth. Comparing the two builds on one folder, this was the difference
+# hiding underneath everything else.
+#
+# One value, here, read by both. Override it per machine with
+# RIPPLE_SQL_DIALECT, or on the settings screen where a build has that control.
+DEFAULT_DIALECT = "bigquery"
+
+
 def git_branch(path: Path | str) -> str:
     """The branch a copied-out repository was on, read from the folder itself.
 
@@ -148,7 +163,7 @@ class Settings:
     # ── how the SQL is read ────────────────────────────────────────────────
     # One of: oracle, teradata, snowflake, hive, spark, postgres, mysql, tsql,
     # duckdb, bigquery, redshift, databricks, presto, trino, sqlite, "" (generic).
-    sql_dialect: str = field(default_factory=lambda: _env("RIPPLE_SQL_DIALECT", ""))
+    sql_dialect: str = field(default_factory=lambda: _env("RIPPLE_SQL_DIALECT", DEFAULT_DIALECT))
 
     # How many renames deep to follow a column.
     #

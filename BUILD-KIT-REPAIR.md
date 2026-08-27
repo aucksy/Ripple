@@ -133,7 +133,7 @@ file, give both.
       but the web service is ripple_offline\app.py, not ripple\api.py
 
 THE CATALOGUE — every file, what it decides, and what it touches
-29 Python files and the three screen files, 13,452 lines in all.
+29 Python files and the three screen files, 13,470 lines in all.
 
 ### ripple/ai.py   (305 lines, normal build only)
 WHAT IT DECIDES: The optional AI layer.
@@ -195,7 +195,7 @@ WHY IT IS LIKE THIS, in the file's own words:
     dictionary, Ripple reads every CREATE TABLE it can find and builds one. The
     same code works against a real repository -- and whatever it cannot read shows
     up as a gap rather than silently shrinking the catalogue.
-### ripple/config.py   (350 lines, both builds)
+### ripple/config.py   (365 lines, both builds)
 WHAT IT DECIDES: Settings for a Ripple installation.
 IT NEEDS      : ripple/production.py, ripple/providers.py
 NEEDED BY     : ripple/ai.py, ripple/api.py, ripple/scanner/github.py, ripple/scanner/lineage.py, ripple/scanner/repo.py, ripple/scanner/sqlread.py, ripple/store.py, ripple_offline/app.py, ripple_offline/prefs.py, run.py
@@ -574,7 +574,7 @@ WHY IT IS LIKE THIS, in the file's own words:
     goes into a hidden application-data folder, so deleting the folder really does
     remove Ripple, and copying the folder to another machine takes the settings and
     the history with it.
-### ripple_offline/prefs.py   (281 lines, packaged build only)
+### ripple_offline/prefs.py   (284 lines, packaged build only)
 WHAT IT DECIDES: The two settings a person has to choose, kept in a file beside the app.
 IT NEEDS      : ripple/config.py, ripple_offline/paths.py
 NEEDED BY     : ripple_offline/app.py

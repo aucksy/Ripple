@@ -40,7 +40,10 @@ DIALECT_CHOICES: tuple[dict[str, str], ...] = (
     {"id": "", "label": "Generic SQL", "note": "Only when the stack is genuinely unknown. Reads least, and can be confidently wrong."},
 )
 
-DEFAULT_DIALECT = "bigquery"
+# Taken from the shared engine, never set here. Two defaults meant the two
+# builds read the SAME folder as two different languages, and the dialect
+# decides whether a chain is followed or quietly lost.
+from ripple.config import DEFAULT_DIALECT                     # noqa: E402,F401
 
 
 def default_hops() -> int:

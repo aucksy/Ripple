@@ -976,8 +976,31 @@ A Settings dataclass with a module-level `settings` instance. Every field has
 a default read from an environment variable, so a laptop, a demo host and a
 locked-down machine differ only by environment. Fields:
 
-  repo_path, repo_label, repo_branch
-  sql_dialect          empty string means generic
+  repo_path, repo_label
+  repo_branch          EMPTY, and read off the folder when it is empty. Not
+                       "main". A folder on somebody's disk may be a copied-out
+                       git checkout, in which case .git/HEAD holds the real
+                       branch and it is worth showing, or it may be a plain
+                       folder, in which case there is no branch at all.
+                       Defaulting to "main" put "Branch main" on the Repository
+                       step over every folder on earth: specific,
+                       checkable-looking, and true of nothing.
+  sql_dialect          ONE default, and set it to the warehouse this is being
+                       built for. Do not leave it generic and do not let any
+                       second copy of Ripple pick its own.
+
+                       This is not a cosmetic setting. Read as generic, a
+                       BigQuery-ism the parser does not recognise becomes an
+                       unreadable statement, the chain running through it is
+                       never followed, and the answer comes back CLEANER than
+                       the truth. That is the one failure this whole tool
+                       exists to prevent, arriving through a dropdown.
+
+                       Two builds of Ripple once disagreed about exactly this -
+                       one defaulted to generic, the other to bigquery - so the
+                       same folder was read as two different languages
+                       depending which one somebody opened. Neither build's
+                       tests noticed, because each only ever asked itself.
   max_hops             default 4 — how many renames deep to follow a column
   code_extensions      .sql .sqlx .ddl .hql .py .scala .java .sh .xml .yaml
                        .yml  —  .sqlx is Dataform, Google's own way of writing a
