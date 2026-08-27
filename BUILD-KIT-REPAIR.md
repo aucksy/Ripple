@@ -133,7 +133,7 @@ file, give both.
       but the web service is ripple_offline\app.py, not ripple\api.py
 
 THE CATALOGUE — every file, what it decides, and what it touches
-29 Python files and the three screen files, 13,238 lines in all.
+29 Python files and the three screen files, 13,268 lines in all.
 
 ### ripple/ai.py   (305 lines, normal build only)
 WHAT IT DECIDES: The optional AI layer.
@@ -156,7 +156,7 @@ WHY IT IS LIKE THIS, in the file's own words:
     Thin on purpose: every route is a few lines that call the scanner, the reader
     or the writer. All of the thinking lives in those modules, so the same logic
     runs from the command line, from a test, or from this API.
-### ripple/build_info.py   (197 lines, both builds)
+### ripple/build_info.py   (227 lines, both builds)
 WHAT IT DECIDES: Which build of Ripple is this one?
 IT NEEDS      : nothing else in Ripple
 NEEDED BY     : ripple/api.py, ripple_offline/app.py
@@ -181,7 +181,9 @@ WHY IT IS LIKE THIS, in the file's own words:
       that can tell one copy of the executable from another, because an executable
       has no git and no source dates worth reading;
     * the host's own environment, which is how Vercel says which commit it deployed;
-    * git, when Ripple is being run from the repository it lives in;
+    * git, but ONLY when git actually tracks the files this copy is made of -- a
+      folder copied into a repository inherits its .git by accident, and reporting
+      that repository's commit is a confident answer about a copy nobody can check;
     * the dates on its own files, which is a guess, and says so.
 ### ripple/catalog.py   (93 lines, both builds)
 WHAT IT DECIDES: What tables and columns exist, learned from the repository itself.

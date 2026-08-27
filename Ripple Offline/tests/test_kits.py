@@ -290,6 +290,76 @@ def test_the_rescue_prompts_for_the_two_hard_phases_are_there():
     assert "dialectcompat" in four, "BUILD-KIT.md: nothing about reading a parse-tree key directly"
 
 
+# ── the folder somebody ends up with ──────────────────────────────────────
+
+BUILD_FOLDER_TOOL = OFF / "tools" / "make_build_folder.py"
+
+
+def test_the_kits_picture_of_the_folder_names_every_file_it_will_contain():
+    """The kit draws the finished folder and says "this is what you are building
+    towards". Somebody compares their folder against that picture.
+
+    It had already gone stale: build_info.py, scanner/rescue.py,
+    scanner/dialectcompat.py, paths.py and start-ripple.bat were all missing
+    from it while later phases created them, so five files in a correct folder
+    had nothing to account for them. A picture that is not exhaustive sends
+    somebody hunting for a mistake that is not theirs.
+
+    make_build_folder.py builds that folder for real by walking the disk, so
+    what it produces is the honest list. Every engine file it copies has to
+    appear in the picture.
+    """
+    body = read(BUILD_KIT)
+    block = re.search(r"^C:\\ripple-build\\\n(.*?)^```", body, re.DOTALL | re.MULTILINE)
+    assert block, "BUILD-KIT.md no longer draws the finished folder"
+    picture = block.group(1)
+
+    engine = ROOT / "Codebase" / "ripple"
+    missing = sorted(
+        p.name for p in engine.rglob("*.py")
+        if "__pycache__" not in p.parts and p.name != "__init__.py"
+        and p.name not in picture
+    )
+    assert not missing, (
+        f"the folder picture in BUILD-KIT.md never names {missing}, which the "
+        f"phases build and make_build_folder.py copies. Somebody comparing their "
+        f"folder against that picture finds files they cannot account for."
+    )
+    for named in ("run.py", "start-ripple.bat", "index.html", "app.js", "mockrepo"):
+        assert named in picture, f"the folder picture never names {named}"
+
+
+def test_the_folder_tool_leaves_nothing_out_silently():
+    """Two tests and a hosting file are deliberately not copied into the folder.
+    Dropping a test quietly is how a suite stops proving anything, so each one
+    has to carry its reason in the tool itself."""
+    tool = BUILD_FOLDER_TOOL.read_text(encoding="utf-8")
+    block = re.search(r"TESTS_LEFT_OUT = \{(.*?)\n\}", tool, re.DOTALL)
+    assert block, "make_build_folder.py no longer lists what it leaves out"
+    named = re.findall(r'"(test_[a-z_]+\.py)":', block.group(1))
+    assert named, "no test is named as left out, yet the list exists"
+    for name in named:
+        assert (ROOT / "Codebase" / "tests" / name).is_file(), (
+            f"make_build_folder.py leaves out {name}, which is not in the suite "
+            f"any more - the reason it was skipped is gone and nobody noticed."
+        )
+    # Every reason is a sentence, not an empty string.
+    reasons = re.findall(r'"test_[a-z_]+\.py":\s*\n?\s*"([^"]*)"', block.group(1))
+    assert len(reasons) == len(named), "a test is left out with no reason given"
+    assert all(len(r) > 15 for r in reasons), f"a reason is too short to be one: {reasons}"
+
+
+def test_the_folder_tool_refuses_to_ship_a_packaged_program():
+    """The whole point of the folder is that it looks like something built by
+    hand in a chat window. An .exe, a virtual environment or a .git folder in
+    there is the one thing that gives it away, so the tool checks its own output
+    rather than trusting the copying above it."""
+    tool = BUILD_FOLDER_TOOL.read_text(encoding="utf-8")
+    for guard in ("*.exe", ".venv", ".git", "dist"):
+        assert guard in tool, f"make_build_folder.py no longer checks for {guard}"
+    assert "sys.exit" in tool, "the tool reports problems without failing on them"
+
+
 # ── the demo snapshot ─────────────────────────────────────────────────────
 
 def test_the_snapshot_only_lists_files_that_exist():

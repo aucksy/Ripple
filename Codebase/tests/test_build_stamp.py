@@ -11,9 +11,11 @@ is a guess, and the screen must never let those two read the same.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -97,3 +99,61 @@ def test_a_working_copy_with_edits_does_not_claim_to_be_the_commit(monkeypatch):
     if found is None:
         return                      # not run from a git working copy; nothing to check
     assert found["commit"].endswith("+edits"), found
+
+
+def test_a_copy_that_merely_sits_inside_a_repository_does_not_claim_its_commit():
+    """A folder copied into a git repository inherits its .git by accident.
+
+    Ripple's own kit-shaped folder is exactly this: a generated copy of the
+    engine, git-ignored, sitting inside the repository it was copied out of.
+    Checking only for a .git nearby, it read that repository's HEAD off the disk
+    beside it and printed the commit as its own build. Carry that folder onto a
+    machine where some unrelated repository happens to be one level up and the
+    answer is not even close -- and it never once says it is guessing.
+
+    The question has to be whether git tracks the files this copy is made of.
+    """
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    if not (repo_root / ".git").exists():
+        pytest.skip("not run from a git working copy - nothing to check")
+
+    stray = repo_root / "_a-copy-that-git-has-never-seen"
+    (stray / "ripple").mkdir(parents=True, exist_ok=True)
+    saved_pkg, saved_root = bi._PKG, bi._ROOT
+    try:
+        shutil.copy2(Path(bi.__file__), stray / "ripple" / "build_info.py")
+        # The same shape as Codebase: a .git exactly one folder up.
+        assert (stray.parent / ".git").exists(), "the test did not reproduce the shape"
+
+        # Run the real lookup as that copy would run it.
+        bi._PKG, bi._ROOT = stray / "ripple", stray
+        assert bi._from_git() is None, (
+            "a copy git has never seen reported a commit. Whatever it printed "
+            "came from the repository lying beside it, not from this copy."
+        )
+
+        # The date it falls back to has to admit it is a guess, or the screen
+        # reads the same either way and the check above bought nothing.
+        assert bi._label({"version": "9.9.9", **bi._from_file_dates()}).endswith(
+            "no build record — this is a guess")
+    finally:
+        bi._PKG, bi._ROOT = saved_pkg, saved_root
+        shutil.rmtree(stray, ignore_errors=True)
+
+    # And the check must not simply switch the stamp off everywhere. Which side
+    # of that applies depends on which copy is running these tests: this same
+    # suite ships inside the generated kit-shaped folder, where git correctly
+    # knows nothing about the files it is looking at.
+    if bi._git_tracks(bi._PKG):
+        assert bi._from_git() is not None, (
+            "the tracked working copy no longer reports a commit - this check is "
+            "now hiding a real one rather than an accidental one"
+        )
+    else:
+        assert bi._from_git() is None, (
+            "git does not track this copy, yet a commit came back anyway"
+        )
+        assert bi._from_file_dates()["from"] == "files", (
+            "a copy with no commit to report must fall through to file dates, "
+            "which are labelled a guess"
+        )

@@ -19,7 +19,9 @@ Four places to look, best first:
   that can tell one copy of the executable from another, because an executable
   has no git and no source dates worth reading;
 * the host's own environment, which is how Vercel says which commit it deployed;
-* git, when Ripple is being run from the repository it lives in;
+* git, but ONLY when git actually tracks the files this copy is made of -- a
+  folder copied into a repository inherits its .git by accident, and reporting
+  that repository's commit is a confident answer about a copy nobody can check;
 * the dates on its own files, which is a guess, and says so.
 """
 from __future__ import annotations
@@ -36,7 +38,7 @@ from pathlib import Path
 # release tag and the line on the settings screen can never disagree.
 #
 # Bump it whenever behaviour changes. Three parts: break.feature.fix.
-VERSION = "1.8.1"
+VERSION = "1.8.2"
 
 # Written into the packaged folder by the offline build script. Kept as a
 # constant because two files have to agree on the name.
@@ -89,9 +91,37 @@ def _from_env() -> dict | None:
     }
 
 
+def _git_tracks(pkg: Path) -> bool:
+    """Is this copy the working tree git knows, or a folder sitting inside one?
+
+    A folder copied into a repository, or copied next to one, inherits its
+    ``.git`` by accident. Ripple's own kit-shaped folder is exactly that: a
+    generated copy of the engine, git-ignored, living inside the repository it
+    was copied out of. Checking only for a ``.git`` nearby, it read that
+    repository's HEAD off the disk beside it and printed the commit as its own
+    build -- a confident, checkable-sounding answer about a copy git has never
+    seen. Carry that folder onto a machine where some unrelated repository
+    happens to be a level up and the answer is not even close.
+
+    So the question is not "is there a ``.git`` nearby" but "does git track the
+    files this copy is made of". If it does not, there is no commit to claim and
+    the file dates below say so out loud.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "build_info.py"],
+            cwd=str(pkg), capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return False
+    return done.returncode == 0
+
+
 def _from_git() -> dict | None:
     """The commit this working copy is actually on."""
     if not any((p / ".git").exists() for p in (_ROOT, _ROOT.parent)):
+        return None
+    if not _git_tracks(_PKG):
         return None
     try:
         done = subprocess.run(

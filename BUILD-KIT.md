@@ -4684,12 +4684,28 @@ that answers, and recording in "from" which one did:
 
   1. a BUILD-STAMP.json sitting beside the code, if there is one
   2. the environment, if the machine that built it set the values there
-  3. git, if this is a checkout - and if the working copy has uncommitted edits,
-     mark the commit so it cannot be mistaken for a clean build
+  3. git - but ONLY if git actually tracks the files this copy is made of. If
+     the working copy also has uncommitted edits, mark the commit so it cannot
+     be mistaken for a clean build
   4. the newest date on the source files themselves
 
 That last one is the reason the list exists. It always answers, so the screen can
 never be blank - and "from" tells anybody reading it how much the answer is worth.
+
+**Step 3 is the one that goes wrong, and it goes wrong silently.** The obvious
+test is "is there a `.git` folder nearby". Do it that way and any copy of Ripple
+that happens to sit inside somebody's repository picks up that repository's
+latest commit and prints it as its own build. Measured on this build on 27 Aug
+2026: a copy generated into the parent folder, which git had never seen, printed
+a real commit hash and a real date, and nothing on the screen hedged. Move that
+same folder to a machine where an unrelated repository is one level up and it
+would confidently print that project's commit instead.
+
+So ask git whether it knows THIS copy, not whether a repository exists nearby -
+`git ls-files --error-unmatch build_info.py`, run inside the folder holding it.
+Nothing tracked, no commit to claim, fall through to step 4, which says out loud
+that it is guessing. A wrong answer that looks checkable is worse than an honest
+guess, and that is the whole reason this file exists.
 
 "label" is the one line the settings screen shows, already put together and ready
 to print: "Version 1.5.0 - b6f650d - built 23 Aug 2026". Build the sentence here
@@ -4714,7 +4730,8 @@ GET  /api/health      includes `build` — which build this is, so a screen can
                       copy that was never installed". Look in four places, best
                       first: a stamp file written into a packaged folder at
                       build time, the host's environment (Vercel sets
-                      VERCEL_GIT_COMMIT_SHA), git, and last the dates on
+                      VERCEL_GIT_COMMIT_SHA), git ONLY where git tracks this
+                      copy's own files, and last the dates on
                       Ripple's own files. Return where the answer came from as
                       well as the answer, and say plainly on screen when it is
                       the last one — a file date moves whenever anything is
