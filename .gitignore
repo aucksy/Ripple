@@ -20,8 +20,11 @@ Codebase/ripple.db
 # this repository is public, and what is in the pictures is not.
 PPT/
 
-# A whole working copy of Ripple, rebuilt from the repair kit to try something
-# out. It carries its own vendored sqlglot and a packaged build, which is
-# tens of megabytes of files this repository already holds the source of.
-# Kept on disk, kept out of git. See "never commit a build artefact".
+# A whole second copy of Ripple, generated so somebody can run and look at the
+# finished shape before building it by hand. Every file in it is copied from
+# Codebase, so committing it would be a second copy of the product that drifts
+# from the first. Two tools write it and it holds whichever ran last:
+# tools/make_build_folder.py for the kit-shaped one started with a batch file,
+# tools/make_demo_snapshot.py for the one that runs where nothing can be
+# installed. Deleting it costs one command. See "never commit a build artefact".
 RIPPLE COPILOT DEMO/
