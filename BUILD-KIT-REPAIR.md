@@ -133,7 +133,7 @@ file, give both.
       but the web service is ripple_offline\app.py, not ripple\api.py
 
 THE CATALOGUE — every file, what it decides, and what it touches
-29 Python files and the three screen files, 13,268 lines in all.
+29 Python files and the three screen files, 13,380 lines in all.
 
 ### ripple/ai.py   (305 lines, normal build only)
 WHAT IT DECIDES: The optional AI layer.
@@ -438,15 +438,23 @@ WHY IT IS LIKE THIS, in the file's own words:
     A single SQLite file. On a serverless host the filesystem is read-only apart
     from /tmp, so the path is configurable and a failure to write is reported
     rather than crashing the request.
-### run.py   (36 lines, normal build only)
+### run.py   (148 lines, normal build only)
 WHAT IT DECIDES: Start Ripple on this machine.
 IT NEEDS      : ripple/config.py
 NEEDED BY     : nothing else in Ripple
-CALLABLE      : main()
+CALLABLE      : take_a_port(), chosen_port(), main()
 WHY IT IS LIKE THIS, in the file's own words:
     python run.py
 
-    Then open http://localhost:8000 in a browser. Nothing else to install or set up.
+    It finds a port it can actually use, prints the address, and opens your browser.
+    Nothing else to install or set up.
+
+    WHY THERE IS A PORT SEARCH HERE AT ALL. This used to be one line: listen on 8000.
+    It printed "open http://localhost:8000", opened the browser, and only then asked
+    Windows for the port. On a managed work laptop, 27 Aug 2026, Windows refused it
+    -- WinError 10013, a port reserved by the machine rather than used by a program
+    -- so the browser was already sitting on a dead address before anything knew the
+    start had failed. Announce nothing until the door is actually open.
 ### ripple_offline/__init__.py   (14 lines, packaged build only)
 WHAT IT DECIDES: Ripple Offline — the same Ripple, packaged for a machine with no internet.
 IT NEEDS      : ripple_offline/engine.py

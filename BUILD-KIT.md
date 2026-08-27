@@ -5038,7 +5038,36 @@ the fonts, if any, for a month.
 
 Also write run.py at the project root: print the repository, the dialect and
 the address, whether it is running packaged or from source, then start uvicorn
-on host 127.0.0.1, port 8000, with a --no-browser flag.
+on host 127.0.0.1, with a --no-browser flag.
+
+TAKE THE PORT BEFORE YOU ANNOUNCE IT. The obvious run.py names port 8000,
+prints "open http://localhost:8000", opens the browser and only then hands the
+number to uvicorn. Measured on a managed work laptop, 27 Aug 2026: Windows
+refused 8000, and by the time anyone knew, the browser was already sitting on
+an address that would never load. So bind first, print second.
+
+  Try 8000, then 8001, up to 8020, and last of all port 0, which means "any
+  free one you like" and is what saves a machine where the whole range is
+  refused. BIND to each -- do not ask whether anything is listening on it.
+  Those are different questions, and the gap between them is the bug: nothing
+  was listening on 8000, and the machine still would not allow it.
+  Report the port you actually got, never the one you hoped for.
+
+  If somebody set a PORT environment variable, use that one and no other. Quietly
+  searching past a number somebody typed starts Ripple somewhere they did not
+  ask for, and the printed address is the only clue it happened.
+
+AND SAY WHICH OF THE TWO PROBLEMS IT IS. A refused port is either occupied by a
+program or RESERVED by Windows itself -- Hyper-V, WSL and Docker each reserve
+whole ranges, and a work laptop often has several. Windows reports the second as
+error 10013. The fixes are opposites: for one, close the program; for the other,
+there is no program to close and closing things is wasted effort. "They are all
+in use, close whatever is using them" is a confident, actionable, wrong answer,
+which is the one kind of answer Ripple may never give. When 10013 appears, say
+the ports are reserved, say closing things will not help, and give the command
+that lists the reserved ranges:
+
+    netsh interface ipv4 show excludedportrange protocol=tcp
 
 Pass uvicorn the app OBJECT -- from ripple.api import app -- and not the string
 "ripple.api:app". Both work today. Only the object still works once this is

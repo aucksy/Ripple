@@ -77,20 +77,42 @@ def start_logging() -> None:
     sys.stderr = _Nowhere()
 
 
+# Windows says this when a port is RESERVED rather than occupied. Hyper-V, WSL
+# and Docker each reserve whole ranges, and a managed work laptop often has
+# several. Nothing is listening on such a port, so telling somebody to close
+# whatever is using it sends them hunting for a program that does not exist.
+_WSAEACCES = 10013
+
+
 def free_port() -> int:
-    """The first port nothing else is already using.
+    """The first port this machine will actually let Ripple listen on.
 
     A fixed port is fine until the day something else on the machine has it,
     and then Ripple simply fails to start with no explanation anyone can act on.
+
+    Binding is the only honest test. Whether anything is LISTENING on a port is
+    a different question from whether this machine will allow the bind, and on
+    27 Aug 2026 a work laptop refused 8000 with nothing listening on it at all.
     """
-    for port in range(FIRST_PORT, LAST_PORT + 1):
+    refused: list[int] = []
+    for port in list(range(FIRST_PORT, LAST_PORT + 1)) + [0]:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
             try:
                 probe.bind(("127.0.0.1", port))
-                return port
-            except OSError:
+            except OSError as e:
+                refused.append(e.errno or 0)
                 continue
+            # port 0 means "any free one" -- ask which it turned out to be
+            return probe.getsockname()[1]
+    if any(code == _WSAEACCES for code in refused):
+        raise RuntimeError(
+            f"Ports {FIRST_PORT} to {LAST_PORT} were all refused by Windows itself, so "
+            f"Ripple has nowhere to listen. They are RESERVED on this machine rather "
+            f"than in use by a program, which is common on a work laptop - closing "
+            f"things will not free them. Somebody who can run commands on this machine "
+            f"can see the reserved ranges with:\n\n"
+            f"    netsh interface ipv4 show excludedportrange protocol=tcp")
     raise RuntimeError(
         f"Ports {FIRST_PORT} to {LAST_PORT} are all in use on this machine, so Ripple "
         f"has nowhere to listen. Close whatever is using them and start Ripple again.")
