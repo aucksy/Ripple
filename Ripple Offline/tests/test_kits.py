@@ -387,6 +387,88 @@ def test_the_batch_file_never_trusts_the_word_python():
         )
 
 
+# Everything a build has to get right that ONLY goes wrong on somebody else's
+# machine. Each of these was found by running Ripple on a managed office laptop
+# after it had passed every check on the machine it was written on. A kit that
+# describes the product but not these builds a Ripple that works until it is
+# carried somewhere, which is the only place it is ever needed.
+TRAVELS_BADLY = {
+    "taking a port rather than naming one": [
+        "TAKE THE PORT BEFORE YOU ANNOUNCE IT",
+        "port 0",                       # the last resort when a whole range is refused
+        "BIND to each",                 # not "is anything listening"
+        "10013",                        # reserved by Windows, not in use
+        "excludedportrange",            # how somebody sees the reserved ranges
+        "closing things is wasted effort",
+    ],
+    "starting from a batch file at all": [
+        "import uvicorn, fastapi, sqlglot",   # ask the Python, do not trust the name
+        "py -3.12",
+        "not installed on this machine yet",  # a sentence, not a traceback
+    ],
+    "installing into the Python that will actually run it": [
+        "you have more than one Python",
+        "where python",                 # how to see them
+        "py --list",
+        "py -3.12 -m pip install --user",   # how to stop guessing which one
+    ],
+    "not claiming a commit that is not yours": [
+        "git ls-files --error-unmatch",
+    ],
+}
+
+
+def flowed(doc: str) -> str:
+    """The document with its line wrapping taken out.
+
+    It is hand-wrapped prose. Any sentence in it can move across a line break the
+    next time a paragraph is edited, and a test that matched an exact substring
+    would then fail for a reason that has nothing to do with what it guards.
+    """
+    return " ".join(doc.split())
+
+
+@pytest.mark.parametrize("what", sorted(TRAVELS_BADLY))
+def test_the_kit_teaches_what_only_breaks_on_somebody_elses_machine(what):
+    """Describing the product is not enough. These are the rules whose absence
+    is invisible until the build is carried to a different laptop."""
+    body = flowed(read(BUILD_KIT))
+    missing = [phrase for phrase in TRAVELS_BADLY[what] if flowed(phrase) not in body]
+    assert not missing, (
+        f"BUILD-KIT.md no longer says {missing} about {what}. A build made from "
+        f"it will pass every check on the machine it was written on and fail on "
+        f"the one it was written for."
+    )
+
+
+def test_the_kit_makes_somebody_prove_the_port_search_rather_than_trust_it():
+    """A phase check that cannot fail teaches nothing.
+
+    Phase 8's check was `curl http://127.0.0.1:8000/api/health`, hard-coded. A
+    build that named port 8000 instead of taking one passed it every time, on any
+    machine where 8000 happened to be free -- which is every machine except the
+    one that matters. And once run.py started choosing its own port, that check
+    was also simply wrong.
+
+    Starting Ripple a second time while the first is running is the whole proof,
+    costs nothing, and cannot pass by accident.
+    """
+    body = flowed(read(BUILD_KIT))
+    assert "Use the address it actually printed" in body, (
+        "the phase check still tells somebody to assume 8000"
+    )
+    for must in ("open a THIRD Command Prompt",
+                 "must print a **different** address",
+                 "NAMED a port instead of taking one"):
+        assert flowed(must) in body, (
+            f"BUILD-KIT.md never makes somebody prove the port search: missing `{must}`"
+        )
+    # And a prompt to send back, because naming what went wrong without giving
+    # the sentence to fix it is what the rescue sections exist to stop.
+    after = body.split("NAMED a port instead of taking one", 1)[1][:3000]
+    assert "````text" in after, "the port failure names itself but hands over no prompt"
+
+
 def test_the_folder_tool_refuses_to_ship_a_packaged_program():
     """The whole point of the folder is that it looks like something built by
     hand in a chat window. An .exe, a virtual environment or a .git folder in

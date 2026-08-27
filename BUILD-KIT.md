@@ -214,6 +214,37 @@ python -c "import sqlglot,fastapi,uvicorn,pydantic,multipart,extract_msg,httpx,p
 You want `all set - sqlglot 30.17.0`. If instead it names one thing it could not
 find, install that one on its own and run this again.
 
+**If it names something you know you just installed, you have more than one
+Python.** Windows commonly does. Measured on one ordinary laptop, 27 Aug 2026,
+three separate things answered to the word `python`: a real 3.12 with everything
+in it, a shortcut to a 3.14 with nothing in it, and a zero-byte Microsoft Store
+placeholder that is not Python at all. `pip` put the packages in one of them and
+this line asked a different one. Ask Windows which ones exist:
+
+```
+where python
+```
+
+```
+py --list
+```
+
+Then install through the launcher and the exact version instead of the bare word,
+so both steps are certainly talking to the same Python — for example:
+
+```
+py -3.12 -m pip install --user sqlglot==30.17.0 fastapi==0.115.0 uvicorn==0.30.6 pydantic==2.13.4 typing-inspection==0.4.2 python-multipart==0.0.9 extract-msg==0.48.7 httpx==0.27.2 pytest==8.3.3
+```
+
+```
+py -3.12 -c "import sqlglot,fastapi,uvicorn,pydantic,multipart,extract_msg,httpx,pytest;print('all set - sqlglot',sqlglot.__version__)"
+```
+
+Use whichever version that turns out to be, and use the same form for every
+`python` in this kit from here on. It is worth the extra keystrokes: this exact
+confusion produced a raw Python traceback about `uvicorn` on a machine where
+nothing whatsoever was wrong.
+
 ---
 
 ## If the install step will not work at all
@@ -4717,7 +4748,20 @@ a browser.
 
 Tests: the version is a plain string and not worked out from anything; every route
 above produces a label; an uncommitted edit is visible in the commit; the stamp
-file is read in preference to git when both are present.
+file is read in preference to git when both are present; and a copy of the folder
+that git does NOT track reports no commit at all rather than the commit of some
+repository it happens to be sitting inside.
+
+That last one sounds far-fetched and is not. Copy your finished folder somewhere
+inside any other project that uses git, and the obvious version of this file --
+"is there a .git nearby?" -- reads that project's latest commit off the disk and
+prints it as Ripple's own build, with nothing hedged. Ask git whether it knows
+THESE files instead:
+
+    git ls-files --error-unmatch build_info.py
+
+run from the folder holding it. Nothing tracked, no commit to claim, fall through
+to the file dates, which say out loud that they are a guess.
 
 --- ripple/api.py
 
@@ -5097,8 +5141,53 @@ running** and open a second Command Prompt, then:
 curl http://127.0.0.1:8000/api/health
 ```
 
-A wall of text starting with `{"ok":true` is a pass. To stop the server when you
-are done, go back to the first window and hold Ctrl and press C.
+**Use the address it actually printed.** It will not always be 8000, and on a
+managed laptop it often is not. If it printed 8014, put 8014 in that line. An
+address you assumed rather than read is the thing this whole phase is about.
+
+A wall of text starting with `{"ok":true` is a pass.
+
+**Now the second check, and it is the one that matters.** Leave that first Ripple
+running, open a THIRD Command Prompt, go to `C:\ripple-build`, and start Ripple
+again:
+
+```
+python run.py --no-browser
+```
+
+It must print a **different** address and keep running. Both are now up, on two
+ports, each answering `/api/health`.
+
+If instead it fails with something about an address already in use, or prints the
+same address as the first one, then your `run.py` NAMED a port instead of taking
+one. That is a real bug and it will not show up on your own machine — it waits
+until a laptop refuses the port, which a managed one does, and by then the
+browser is already open on an address that will never load. Go back and read
+"TAKE THE PORT BEFORE YOU ANNOUNCE IT" above, and paste the chat this:
+
+````text
+run.py is naming a port instead of taking one. Starting Ripple a second time
+while the first is still running either fails or prints the same address.
+
+Rewrite the port part of run.py so that:
+  it BINDS a socket to test each candidate, because whether anything is
+    listening on a port is a different question from whether this machine will
+    allow the bind, and only the second one matters
+  it tries 8000, 8001 ... 8020, and then port 0, which means "any free one"
+  it reports the port it actually got, never the one it hoped for
+  it takes the port BEFORE printing the address or opening the browser
+  if PORT is set in the environment it uses that one and no other, and says
+    which port and why when that one cannot be used
+  when every candidate is refused it tells apart the two causes: Windows error
+    10013 means the ports are RESERVED by this machine, not held by a program,
+    so it must say that closing things will not help and give the command
+    netsh interface ipv4 show excludedportrange protocol=tcp
+    anything else means they really are in use, and it says that instead
+
+Give me the whole of run.py again.
+````
+
+To stop both servers, go back to each window and hold Ctrl and press C.
 
 ---
 
