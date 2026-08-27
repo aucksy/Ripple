@@ -415,6 +415,18 @@ TRAVELS_BADLY = {
     "not claiming a commit that is not yours": [
         "git ls-files --error-unmatch",
     ],
+    "reading YOUR folder rather than the practice one": [
+        "RIPPLE_REPO is the one that decides whether this was worth building",
+        'set "RIPPLE_REPO=',            # how, in the batch file
+        "no box on any screen",         # and why there is not one
+    ],
+    "getting the two typefaces, which no chat can produce": [
+        "The two typefaces, which no chat can hand you",
+        "latin-ext",                    # 30 files come back, 16 are wanted
+        "User-Agent",                   # or Google sends .ttf instead of .woff2
+        "unicode-range",                # losing it costs real download size
+        "<link rel=\"stylesheet\" href=\"/static/fonts/fonts.css\">",  # the line to delete
+    ],
 }
 
 

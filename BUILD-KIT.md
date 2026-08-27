@@ -997,6 +997,42 @@ locked-down machine differ only by environment. Fields:
 Environment variables: RIPPLE_REPO, RIPPLE_REPO_LABEL, RIPPLE_SQL_DIALECT,
 RIPPLE_MAX_HOPS, RIPPLE_PROD_TABLES, RIPPLE_DB.
 
+**RIPPLE_REPO is the one that decides whether this was worth building.** It is
+the folder Ripple reads. Left unset it falls back to `mockrepo` — the small
+practice pipeline from Phase 12, which exists only to prove the machinery runs.
+A Ripple pointed at the practice pipeline answers questions about the practice
+pipeline, confidently and correctly and about nothing anybody cares about.
+
+There is **no box on any screen** for this, and that is deliberate rather than
+missing: the folder is read once when Ripple starts, so that a scan can never be
+half-read from one folder and half from another. The settings screen shows which
+folder it is using and says where that came from. Read that line before trusting
+any answer.
+
+So set it before starting. In the batch file from the end of this kit, one line
+above the rest:
+
+```
+set "RIPPLE_REPO=C:\work\our-pipeline"
+```
+
+or, for one run from a Command Prompt:
+
+```
+set RIPPLE_REPO=C:\work\our-pipeline
+python run.py
+```
+
+Have `run.py` print the folder it is about to read, every single time, before
+anything else — it already prints the dialect and the address. Somebody who
+forgets this variable gets a full, confident, entirely irrelevant answer, and
+the printed folder is the only thing standing between them and acting on it.
+
+**And check the folder exists before starting.** A path with a typo in it is not
+an empty repository; it is a mistake. Ripple already prints a WARNING when the
+folder is not there — keep it, and make the batch file refuse to start at all
+rather than scan nothing and report nothing found.
+
 Methods: production() returning the parsed rule (cached, because it is asked
 once per table visited on every hop of every scan); set_production(text);
 is_production_table(name); production_rule() returning a SHORT one-line
@@ -5350,6 +5386,93 @@ Cards are white with a 1px --line border, 12px radius and --shadow. Body text
 is 14px with line height 1.5. The sans family is 'Public Sans' falling back to
 Segoe UI and system-ui. The monospace family, used for every table and column
 name on screen, is 'IBM Plex Mono' falling back to Consolas.
+
+### The two typefaces, which no chat can hand you
+
+This is the one part of the screens that does not come out of a chat window, and
+it is the second and last thing in this kit that has to arrive as files — the
+first being `sqlglot` in Phase 0. **Public Sans** and **IBM Plex Mono** are 16
+compressed font files, 306 KB in total. They are binary. A chat can write you the
+code that fetches them; it cannot write the fonts.
+
+Both are free and open — Public Sans is the United States government's typeface,
+IBM Plex Mono is IBM's, and both are published under the SIL Open Font License,
+which allows exactly this. Nothing here needs a licence, an account or a purchase.
+
+**Three ways to get them. Try them in this order.**
+
+**Route 1 — have the chat write a small downloader.** This is the one to try
+first, because it keeps the fonts on your own machine and Ripple then needs no
+network at all, ever. Paste this:
+
+````text
+Write me ripple-build/getfonts.py, a one-off script I run once and then never
+again. It has to:
+
+  ask Google Fonts for the stylesheet covering Public Sans at weights
+  400,500,600,700,800 and IBM Plex Mono at weights 400,500,600, using the css2
+  API and display=swap
+
+  send a normal desktop browser User-Agent header on that request. This is the
+  part that catches people out: without it Google returns .ttf files, and with
+  it Google returns the much smaller .woff2 ones. Do not skip it and do not use
+  urllib's default agent
+
+  keep ONLY the "latin" and "latin-ext" subsets and skip the rest. Google now
+  answers with cyrillic, greek and vietnamese as well - 30 files rather than 16,
+  and nearly a third more to download - and Ripple's screens never show a word
+  in any of them
+
+  read every font URL out of the stylesheet it gets back, download each one into
+  ripple-build/web/fonts/, and name each file for its family, weight and subset,
+  lower case with hyphens - for example public-sans-600-latin.woff2
+
+  write ripple-build/web/fonts/fonts.css containing the same @font-face rules,
+  with every src url rewritten to /static/fonts/<the local filename> and every
+  unicode-range kept exactly as Google gave it. The unicode-range is what makes
+  the browser fetch only the file it needs, so losing it is a real cost
+
+  print how many files it saved and their total size, and exit with an error if
+  it saved none, so a silent failure cannot look like success
+
+Use only the Python standard library.
+````
+
+Then run it once:
+
+```
+python getfonts.py
+```
+
+You want it to report 16 files and about 306 KB. Check the folder:
+
+```
+dir web\fonts
+```
+
+**Route 2 — if that laptop cannot reach Google.** Run the same script on any
+machine that can — a home laptop, a phone hotspot — and carry the resulting
+`web\fonts` folder across. It is 348 KB, which fits anywhere. Unlike Ripple's
+own code, these are somebody else's published files and carrying them is the
+normal way to get them.
+
+**Route 3 — go without them, and know exactly what you lose.** Delete this line
+from `web/index.html`:
+
+```
+<link rel="stylesheet" href="/static/fonts/fonts.css">
+```
+
+Everything works. Every number, every rule, every answer is identical, because
+the fonts are only shapes. The screens use Segoe UI and Consolas instead, which
+is why those two are named as the fallbacks. Headings sit slightly wider and
+table columns line up slightly differently. Nothing is broken, and nobody who has
+not seen both would know.
+
+**Delete the line if you skip them — do not just leave the folder empty.** Left
+in, the browser asks for a stylesheet that is not there, gets a 404 on every
+single page load, and puts a red line in the browser's console. Harmless, and it
+sits there for ever looking like a fault somebody should investigate.
 
 Components to define, because the script uses these class names:
   .card .pad .pad.lg .clip .chead      cards and their tinted header strip
