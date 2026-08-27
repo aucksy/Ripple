@@ -42,11 +42,55 @@ CODE = ROOT / "Codebase"
 # Two copies of this folder is two copies that drift, so there is normally one.
 OUT = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "RIPPLE COPILOT DEMO"
 
-# The four lines the kit tells somebody to put in start-ripple.bat. Written
-# here rather than copied from Codebase\start-ripple.bat, which carries extra
-# lines for finding this repository's virtual environment -- a folder built
-# from the kit has no virtual environment to find.
-BAT = "@echo off\r\ncd /d \"%~dp0\"\r\npython run.py\r\nif errorlevel 1 pause\r\n"
+# The batch file the kit tells somebody to write. Kept here rather than copied
+# from Codebase\start-ripple.bat, which looks for this repository's virtual
+# environment -- a folder built from the kit has none.
+#
+# It was four lines once: cd, then `python run.py`. That trusted `python` to
+# mean the Python the packages were installed into, and on 27 Aug 2026 it did
+# not: this machine answers to that name three times over -- 3.12 with the
+# packages in it, a 3.14 shim in AppData\Local\Python\bin without them, and a
+# zero-byte Microsoft Store stub. A double-click reached one of the wrong two
+# and printed a Python traceback about uvicorn, which tells somebody who does
+# not write code nothing they can act on.
+#
+# So it asks each candidate whether it can actually load Ripple's packages, and
+# uses the first that can. If none can, it says which one line to run.
+BAT = "\r\n".join([
+    "@echo off",
+    "cd /d \"%~dp0\"",
+    "",
+    "REM Windows can answer to \"python\" more than once, and only the one",
+    "REM Ripple's packages were installed into can start it. Ask each.",
+    "set \"PY=\"",
+    "for %%P in (\"python\" \"py -3.12\" \"py -3\" \"py\") do (",
+    "  if not defined PY (",
+    "    %%~P -c \"import uvicorn, fastapi, sqlglot\" >nul 2>nul && set \"PY=%%~P\"",
+    "  )",
+    ")",
+    "",
+    "if not defined PY goto nothing_installed",
+    "",
+    "echo Starting Ripple. It prints the address to open, and opens your browser.",
+    "echo Leave this window open. Closing it stops Ripple.",
+    "echo.",
+    "%PY% run.py",
+    "if errorlevel 1 pause",
+    "exit /b",
+    "",
+    ":nothing_installed",
+    "echo.",
+    "echo Ripple's building blocks are not installed on this machine yet.",
+    "echo Nothing is broken - this is the one step that has to happen first.",
+    "echo.",
+    "echo Open a Command Prompt, run the line below, then double-click this again:",
+    "echo.",
+    "echo     python -m pip install --user -r \"%~dp0requirements.txt\"",
+    "echo.",
+    "pause",
+    "exit /b 1",
+    "",
+])
 
 # Tests left behind, each for a reason that is about this folder and not about
 # the test. Named one by one, because silently dropping a test is how a suite

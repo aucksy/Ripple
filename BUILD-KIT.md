@@ -6061,25 +6061,71 @@ type nul > C:\ripple-build\start-ripple.bat
 notepad C:\ripple-build\start-ripple.bat
 ```
 
-Put these four lines in it, save, and close:
+Put this in it, save, and close:
 
 ```
 @echo off
 cd /d "%~dp0"
-python run.py
+
+REM Windows can answer to "python" more than once, and only the one
+REM Ripple's packages were installed into can start it. Ask each.
+set "PY="
+for %%P in ("python" "py -3.12" "py -3" "py") do (
+  if not defined PY (
+    %%~P -c "import uvicorn, fastapi, sqlglot" >nul 2>nul && set "PY=%%~P"
+  )
+)
+
+if not defined PY goto nothing_installed
+
+echo Starting Ripple. It prints the address to open, and opens your browser.
+echo Leave this window open. Closing it stops Ripple.
+echo.
+%PY% run.py
 if errorlevel 1 pause
+exit /b
+
+:nothing_installed
+echo.
+echo Ripple's building blocks are not installed on this machine yet.
+echo Nothing is broken - this is the one step that has to happen first.
+echo.
+echo Open a Command Prompt, run the line below, then double-click this again:
+echo.
+echo     python -m pip install --user -r "%~dp0requirements.txt"
+echo.
+pause
+exit /b 1
 ```
 
 Now double-clicking **start-ripple.bat** starts Ripple and opens the browser. To
 have it on your desktop, right-click it and choose *Send to → Desktop (create
 shortcut)*. To stop Ripple, close the black window that opened with it.
 
-**What those four lines do.** `@echo off` stops the window printing each command
-back at you. `cd /d "%~dp0"` moves to the folder the batch file is sitting in —
-which means you can move or rename the whole folder and it still works, where a
-written-out path would break. `python run.py` is the same command you have been
-typing all along. The last line keeps the window open if Python failed, so you
-can read the reason instead of watching it vanish.
+**Why it is not just two lines.** It nearly was: move to the folder, then
+`python run.py`. That trusts the word `python` to mean the Python you installed
+the packages into — and on Windows that is not safe. Measured on 27 Aug 2026,
+one ordinary laptop answered to `python` three separate times: a real 3.12 with
+the packages in it, a shim for a 3.14 that had none, and a zero-byte Microsoft
+Store stub that is not Python at all. Which one a double-click reaches depends
+on the order of a setting most people have never opened.
+
+It reached a wrong one, and what came up was seven lines of Python traceback
+ending in `ModuleNotFoundError: No module named 'uvicorn'`. Nothing was broken
+and nothing in that message said so.
+
+So the batch file asks each candidate whether it can actually load Ripple's
+packages, and uses the first that can. `>nul 2>nul` throws away the noise from
+the ones that cannot, and `&&` only sets the name when the question came back
+yes. If none can, it says the one line to run instead of showing a traceback —
+because the person reading it may not write code, and "not installed yet" and
+"broken" have to look different.
+
+The rest is small. `@echo off` stops the window printing each command back at
+you. `cd /d "%~dp0"` moves to the folder the batch file is sitting in, so you
+can move or rename the whole folder and it still works, where a written-out
+path would break. `if errorlevel 1 pause` keeps the window open when something
+did go wrong, so you can read it instead of watching it vanish.
 
 **This is where most people should stop.** The batch file gives you the
 double-click, and Ripple is finished. There is one more phase below that turns

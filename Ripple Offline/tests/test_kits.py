@@ -349,6 +349,44 @@ def test_the_folder_tool_leaves_nothing_out_silently():
     assert all(len(r) > 15 for r in reasons), f"a reason is too short to be one: {reasons}"
 
 
+def test_the_batch_file_never_trusts_the_word_python():
+    """`python run.py` in a batch file is a guess about which Python answers.
+
+    Measured on 27 Aug 2026, one ordinary Windows laptop answered to `python`
+    three times: a 3.12 with Ripple's packages in it, a shim for a 3.14 with
+    none, and a zero-byte Microsoft Store stub. A double-click reached a wrong
+    one and printed `ModuleNotFoundError: No module named 'uvicorn'` at somebody
+    who does not write code. Nothing was broken, and nothing said so.
+
+    Both batch files -- the generated one and this repository's own -- have to
+    ask each candidate whether it can load the packages, and say the one line to
+    run when none can. The build kit has to teach the same thing, or the next
+    person builds the fragile one straight back.
+    """
+    generated = re.search(r"BAT = (.*?)\n\]\)", BUILD_FOLDER_TOOL.read_text(encoding="utf-8"),
+                          re.DOTALL)
+    assert generated, "make_build_folder.py no longer writes a batch file"
+
+    here = (ROOT / "Codebase" / "start-ripple.bat").read_text(encoding="utf-8")
+    kit = read(BUILD_KIT)
+
+    for where, body in (("the generated batch file", generated.group(1)),
+                        ("Codebase/start-ripple.bat", here),
+                        ("BUILD-KIT.md", kit)):
+        assert "import uvicorn" in body, (
+            f"{where} does not check that the Python it picked can actually load "
+            f"Ripple. It is trusting whichever one answers first."
+        )
+        assert "py -3" in body, f"{where} tries only one Python and gives up"
+        assert "pip install --user -r" in body, (
+            f"{where} has no plain sentence for somebody whose packages are not "
+            f"installed - they get a Python traceback instead."
+        )
+        assert "not installed on this machine yet" in body, (
+            f"{where} never says, in words, that nothing is broken"
+        )
+
+
 def test_the_folder_tool_refuses_to_ship_a_packaged_program():
     """The whole point of the folder is that it looks like something built by
     hand in a chat window. An .exe, a virtual environment or a .git folder in
