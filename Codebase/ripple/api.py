@@ -291,6 +291,10 @@ class ProductionIn(BaseModel):
     text: str = ""
 
 
+class FolderIn(BaseModel):
+    path: str = ""          # a folder on this machine, holding the SQL to read
+
+
 class ConnectIn(BaseModel):
     repo: str = ""          # owner/repository, or the address pasted from GitHub
     branch: str = ""        # blank means the repository's default branch
@@ -571,6 +575,54 @@ def production_set(payload: ProductionIn) -> dict:
     """
     settings.set_production(payload.text or "")
     _state["prodEntered"] = bool((payload.text or "").strip())
+    return health()
+
+
+@app.post("/api/repo/folder")
+def repo_folder(payload: "FolderIn") -> dict:
+    """Read this folder on this machine from now on.
+
+    RIPPLE_REPO decides which folder Ripple starts on, and that is right for a
+    server somebody administers. It is wrong for a laptop: it meant the only way
+    to point Ripple at your own SQL was to edit a file and restart, and until you
+    did, every answer described the small practice pipeline -- confidently,
+    correctly, and about nothing anybody cares about.
+
+    Held in this process, exactly like the published-table list, the GitHub token
+    and the AI key. The screen says so rather than letting somebody believe a
+    folder they chose will still be chosen tomorrow.
+
+    Everything read from the previous folder is thrown away first. A repository
+    half read from one folder and half from another would answer questions about
+    neither, and nothing on screen could show that had happened.
+    """
+    raw = (payload.path or "").strip().strip('"')
+    if not raw:
+        raise HTTPException(status_code=400, detail="Type the folder Ripple should read.")
+    folder = Path(raw).expanduser()
+    try:
+        folder = folder.resolve()
+    except OSError:
+        raise HTTPException(status_code=400, detail=f"That is not a folder Windows can open: {raw}") from None
+    if not folder.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"There is no folder at {folder}. Check the path - a typo here is not "
+                   f"an empty repository, and Ripple will not treat it as one.")
+    if not folder.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"{folder} is a file, not a folder. Choose the folder that holds the SQL.")
+
+    settings.repo_path = folder
+    settings.repo_label = folder.name or str(folder)
+    settings.repo_source = "folder"
+    _state.update({"index": None, "parsed": None, "catalog": None,
+                   "conn": None, "source": "folder", "error": ""})
+    try:
+        _use_folder()
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"That folder could not be read: {exc}") from None
     return health()
 
 

@@ -1003,14 +1003,18 @@ practice pipeline from Phase 12, which exists only to prove the machinery runs.
 A Ripple pointed at the practice pipeline answers questions about the practice
 pipeline, confidently and correctly and about nothing anybody cares about.
 
-There is **no box on any screen** for this, and that is deliberate rather than
-missing: the folder is read once when Ripple starts, so that a scan can never be
-half-read from one folder and half from another. The settings screen shows which
-folder it is using and says where that came from. Read that line before trusting
-any answer.
+**There is also a box for it on the settings screen**, and Phase 10 builds it —
+type a folder, press *Read this folder*, and Ripple reads that one instead. It
+was not there at first, and the build was very nearly useless without it: on a
+laptop, "edit a file and restart" is not a way to choose anything.
 
-So set it before starting. In the batch file from the end of this kit, one line
-above the rest:
+That box holds the choice only while Ripple is running. There is nowhere for
+this build to write it down — the same is true of the published-table list, the
+GitHub token and the AI key — and the line under the button says so rather than
+letting somebody believe tomorrow's Ripple will still be reading their folder.
+
+So `RIPPLE_REPO` is the one that lasts. In the batch file from the end of this
+kit, one line above the rest:
 
 ```
 set "RIPPLE_REPO=C:\work\our-pipeline"
@@ -4831,6 +4835,37 @@ POST /api/production/read       read a pasted list WITHOUT saving it, and
                                 this is what the settings box calls as it is
                                 typed into
 POST /api/production            use this list from now on
+POST /api/repo/folder           {path} — read THIS folder on this machine from
+                                now on, and answer with the whole health block
+                                so the screen repaints from one reply.
+
+                                THIS ROUTE IS WHY THE BUILD IS USABLE. Without
+                                it the only way to point Ripple at real SQL is
+                                to set RIPPLE_REPO and restart, and until
+                                somebody does, every answer describes the small
+                                practice pipeline — confidently, correctly, and
+                                about nothing anybody cares about.
+
+                                REFUSE A PATH THAT IS NOT THERE. A folder that
+                                does not exist is a typo, and a typo is not an
+                                empty repository. Accepted quietly it indexes
+                                zero files, and zero files found reads on every
+                                screen after it as "no impact" — the one
+                                sentence this tool may never get wrong. Say
+                                which path, and say a typo is what this
+                                probably is. Refuse a file that is not a folder
+                                too, and an empty box.
+
+                                Strip quotation marks off the path first.
+                                Windows Explorer's "Copy as path" wraps it in
+                                them, and pasting that in is the single most
+                                likely thing anybody will do.
+
+                                THROW AWAY EVERYTHING READ FROM THE OLD FOLDER
+                                before reading the new one — the index, the
+                                parse, the catalogue. Half of one repository and
+                                half of another answers about neither, and
+                                nothing on screen could show that had happened.
 POST /api/read-email  (file upload — .msg, .eml or a plain text file)
 
 THE AI ROUTES, IF THIS BUILD HAS AN AI READER AT ALL. The settings screen in
@@ -6020,6 +6055,29 @@ Build it as one function used by the whole app:
 The rest of the settings screen: what is connected, and a note explaining that
 this one setting decides whether "no production table is impacted" is a result
 or an accident.
+
+THE FOLDER BOX, and it is the difference between a demo and a tool. Under the
+Repository facts, a single-line box holding the folder Ripple is reading now,
+and a button that says "Read this folder". It POSTs to /api/repo/folder and
+repaints from the health block that comes back.
+
+  Without it, the only way to point Ripple at real SQL is to set RIPPLE_REPO and
+  restart it. On a laptop that is not a way of choosing anything, and until
+  somebody does it every answer describes the practice pipeline — confidently,
+  correctly, and about nothing anybody cares about.
+
+  Under the button, one plain line: the choice is held only while Ripple is
+  running, and RIPPLE_REPO is what keeps it. There is nowhere for this build to
+  write it down. Saying nothing lets somebody believe tomorrow's Ripple will
+  still be reading their folder.
+
+  On success, CLEAR ANY RESULT ON SCREEN — the scan and the summary both. A
+  finding left up after the folder changes looks entirely right and is about a
+  repository nobody is reading any more. Say so in the confirmation: how many
+  files were read, and that the earlier result was cleared and why.
+
+  On failure, show the reason where the button is and change nothing else. The
+  folder in force must still be the one that was working.
 
   Two more states that box can be in, and both change what a scan means:
     Nothing in the paste was read as a table name — say so in red, and say what

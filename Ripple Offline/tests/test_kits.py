@@ -417,8 +417,12 @@ TRAVELS_BADLY = {
     ],
     "reading YOUR folder rather than the practice one": [
         "RIPPLE_REPO is the one that decides whether this was worth building",
-        'set "RIPPLE_REPO=',            # how, in the batch file
-        "no box on any screen",         # and why there is not one
+        'set "RIPPLE_REPO=',            # what makes the choice last
+        "POST /api/repo/folder",        # the route that makes it choosable at all
+        "THE FOLDER BOX",               # and the control on the screen
+        "Read this folder",             # the words on the button
+        "a typo is not an empty repository",   # why a wrong path must be refused
+        "CLEAR ANY RESULT ON SCREEN",   # or a finding outlives its repository
     ],
     "getting the two typefaces, which no chat can produce": [
         "The two typefaces, which no chat can hand you",

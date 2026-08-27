@@ -133,7 +133,7 @@ file, give both.
       but the web service is ripple_offline\app.py, not ripple\api.py
 
 THE CATALOGUE — every file, what it decides, and what it touches
-29 Python files and the three screen files, 13,380 lines in all.
+29 Python files and the three screen files, 13,432 lines in all.
 
 ### ripple/ai.py   (305 lines, normal build only)
 WHAT IT DECIDES: The optional AI layer.
@@ -147,11 +147,11 @@ WHY IT IS LIKE THIS, in the file's own words:
 
     If there is no key, or the call fails, every function here falls back to a
     written-out version. Ripple must work with the AI switched off.
-### ripple/api.py   (854 lines, normal build only)
+### ripple/api.py   (906 lines, normal build only)
 WHAT IT DECIDES: The web service.
 IT NEEDS      : ripple/ai.py, ripple/build_info.py, ripple/catalog.py, ripple/config.py, ripple/narrative.py, ripple/notification.py, ripple/production.py, ripple/progress.py, ripple/providers.py, ripple/scanner/github.py, ripple/scanner/lineage.py, ripple/scanner/repo.py, ripple/scanner/sqlread.py, ripple/store.py
 NEEDED BY     : nothing else in Ripple
-CALLABLE      : repo_state(), reindex(), UpstreamIn, ScanIn, SummaryIn, SaveIn, StatusIn, AIKeyIn, ProductionIn, ConnectIn, health(), progress_now(), catalog(), ai_check() and 17 more
+CALLABLE      : repo_state(), reindex(), UpstreamIn, ScanIn, SummaryIn, SaveIn, StatusIn, AIKeyIn, ProductionIn, FolderIn, ConnectIn, health(), progress_now(), catalog() and 19 more
 WHY IT IS LIKE THIS, in the file's own words:
     Thin on purpose: every route is a few lines that call the scanner, the reader
     or the writer. All of the thinking lives in those modules, so the same logic
@@ -636,7 +636,7 @@ WHY IT IS LIKE THIS, in the file's own words:
     the stripped script rather than loaded separately, because JavaScript hoists
     every function declaration in a file before running any of it, which is what
     lets it replace the online settings screen cleanly.
-### web/app.js   (3,235 lines, both builds)
+### web/app.js   (3,291 lines, both builds)
 WHAT IT DECIDES: Every screen. All seven steps, every card, every table and every word on them. No Python file draws anything.
 IT NEEDS      : reads the JSON that ripple/api.py (or ripple_offline/app.py) returns
 NEEDED BY     : nothing imports it — the page loads it

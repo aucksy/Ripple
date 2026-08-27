@@ -2917,15 +2917,71 @@ function settingsView(root) {
     left.append(el('div', { className: 'factrow' },
       el('span', { className: 'small muted', textContent: k }),
       el('span', { className: 'small', textContent: v }))));
+  left.append(folderBox(h));
+
   left.append(el('div', { className: 'note info', style: 'margin-top:14px' },
-    'Set on the host with environment variables — ',
-    el('span', { className: 'mono', textContent: 'RIPPLE_REPO' }), ', ',
+    'The rest are set before Ripple starts, with ',
     el('span', { className: 'mono', textContent: 'RIPPLE_SQL_DIALECT' }), ', ',
-    el('span', { className: 'mono', textContent: 'RIPPLE_PROD_TABLES' }), ', ',
+    el('span', { className: 'mono', textContent: 'RIPPLE_PROD_TABLES' }), ' and ',
     el('span', { className: 'mono', textContent: 'RIPPLE_AI_KEY' }), '. See the README.'));
 
   grid.append(left, el('div', {}, aiCard(h), buildCard(h)));
   root.append(grid);
+}
+
+/* Choosing which folder Ripple reads, from the screen.
+
+   RIPPLE_REPO decides which folder Ripple starts on, which is right for a server
+   somebody administers and wrong for a laptop: it meant the only way to point
+   Ripple at your own SQL was to edit a file and restart it. Until you did, every
+   answer described the small practice pipeline — confidently, correctly, and
+   about nothing anybody cares about.
+
+   The choice lasts until Ripple is restarted, and the line underneath says so.
+   Anything else would be a promise this build cannot keep: there is nowhere for
+   it to write the choice down, exactly as with the published-table list, the
+   GitHub token and the AI key. */
+function folderBox(h) {
+  const wrap = el('div', { style: 'margin-top:16px' });
+  wrap.append(el('span', { className: 'lbl', textContent: 'The folder Ripple reads' }));
+
+  const box = el('input', {
+    className: 'mono', type: 'text', value: (h.repo && h.repo.path) || '',
+    placeholder: 'C:\\work\\our-pipeline',
+    style: 'margin-top:8px;width:100%;font-size:12.5px',
+  });
+  wrap.append(box);
+
+  const msg = el('div', { style: 'margin-top:10px' });
+  const row = el('div', { className: 'foot', style: 'margin-top:12px' });
+  const go = el('button', { className: 'pri', textContent: 'Read this folder' });
+
+  go.onclick = () => run(async () => {
+    msg.innerHTML = '';
+    try {
+      S.health = await api('/api/repo/folder', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: box.value }),
+      });
+      // Everything read from the previous folder is gone, so anything on screen
+      // that was worked out from it has to go with it. A scan left showing from
+      // the folder before is the worst possible thing this screen could leave
+      // behind: right-looking, and about a repository nobody is now reading.
+      S.scan = null; S.summary = null; S.vals = S.vals || {};
+      msg.append(el('div', { className: 'note good' },
+        'Reading ' + ((S.health.repo && S.health.repo.path) || box.value) + ' — '
+        + ((S.health.repo && S.health.repo.files) || 0) + ' files. Any earlier '
+        + 'result on screen has been cleared, because it was about the other folder.'));
+    } catch (e) {
+      msg.append(el('div', { className: 'note bad' }, e.message));
+    }
+  }, 'Reading that folder…');
+
+  row.append(go);
+  row.append(el('span', { className: 'small faint',
+    textContent: 'Held by this server while it runs. Set RIPPLE_REPO to keep it after a restart.' }));
+  wrap.append(row, msg);
+  return wrap;
 }
 
 /* Turning the AI on from the screen. Same rules as the GitHub token: the key
