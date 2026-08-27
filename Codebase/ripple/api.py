@@ -109,7 +109,7 @@ def _still_reading() -> dict:
         "repo": {
             "label": settings.repo_label,
             "path": str(settings.repo_path),
-            "branch": settings.repo_branch,
+            "branch": settings.branch(),
             "files": 0, "statements": 0, "unreadable": 0, "kinds": [],
             "heldOnline": 0, "pathTooLong": 0, "inSkippedDirs": 0,
             "skippedDirNames": [], "unknownExt": [],
@@ -375,7 +375,7 @@ def health() -> dict:
         },
         "repo": {
             "label": gh["slug"] if on_github else settings.repo_label,
-            "branch": gh["branch"] if on_github else settings.repo_branch,
+            "branch": gh["branch"] if on_github else settings.branch(),
             "path": gh["webUrl"] if on_github else str(settings.repo_path),
             "files": len(idx.files),
             "statements": len(parsed.statements),
@@ -790,7 +790,7 @@ def scan(payload: ScanIn) -> dict:
     # has moved on to since.
     out["repo"] = {
         "label": conn.ref.slug if on_github else settings.repo_label,
-        "branch": conn.branch if on_github else settings.repo_branch,
+        "branch": conn.branch if on_github else settings.branch(),
         "urlTemplate": conn.url_template() if on_github else settings.repo_url_template,
     }
     return out

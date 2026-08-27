@@ -190,7 +190,7 @@ def apply(values: dict[str, Any]) -> None:
     key, and no serverless limits, because this runs on a real machine with a
     real disk.
     """
-    from ripple.config import settings
+    from ripple.config import git_branch, settings
 
     settings.repo_path = Path(str(values.get("repoPath") or ""))
     settings.repo_label = str(values.get("repoLabel") or "") or folder_label(settings.repo_path)
@@ -211,22 +211,6 @@ def apply(values: dict[str, Any]) -> None:
     settings.github_repo = ""
     settings.github_branch = ""
     settings.github_token = ""
-
-
-def git_branch(path: Path | str) -> str:
-    """The branch a copied-out repository was on, read from the folder itself.
-
-    A real fact when the folder is a git checkout, and nothing at all when it is
-    not — better than showing "main" because that is the usual answer.
-    """
-    head = Path(str(path or "")) / ".git" / "HEAD"
-    try:
-        text = head.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-    if text.startswith("ref:"):
-        return text.split("/")[-1].strip()
-    return text[:7] if text else ""     # a detached checkout: the commit itself
 
 
 # ── is the folder still there, and does it hold anything? ──────────────────

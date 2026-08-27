@@ -49,6 +49,28 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # the larger models, and any model the provider offers can still be chosen.
 
 
+def git_branch(path: Path | str) -> str:
+    """The branch a copied-out repository was on, read from the folder itself.
+
+    A real fact when the folder is a git checkout, and nothing at all when it is
+    not -- better than showing "main" because that is the usual answer.
+
+    This lived only in the packaged build for a while, and the two builds then
+    disagreed on screen about the same folder: the packaged one read the folder
+    and said nothing when there was nothing to say, and this one printed
+    "Branch main" over every folder on earth. One copy, here, where both reach
+    it.
+    """
+    head = Path(str(path or "")) / ".git" / "HEAD"
+    try:
+        text = head.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if text.startswith("ref:"):
+        return text.split("/")[-1].strip()
+    return text[:7] if text else ""     # a detached checkout: the commit itself
+
+
 def _env(name: str, default: str) -> str:
     return os.environ.get(name, default).strip()
 
@@ -92,7 +114,11 @@ class Settings:
         default_factory=lambda: Path(_env("RIPPLE_REPO", str(BASE_DIR / "mockrepo")))
     )
     repo_label: str = field(default_factory=lambda: _env("RIPPLE_REPO_LABEL", "mockrepo"))
-    repo_branch: str = field(default_factory=lambda: _env("RIPPLE_REPO_BRANCH", "main"))
+    # Empty means "read it off the folder". It used to default to "main", so a
+    # plain folder on somebody's disk showed "Branch main" on the Repository
+    # step -- a specific, checkable-looking fact about a folder that has no
+    # branch at all. See branch() below.
+    repo_branch: str = field(default_factory=lambda: _env("RIPPLE_REPO_BRANCH", ""))
 
     # ── GitHub mode ────────────────────────────────────────────────────────
     # The token is a secret. It is only ever sent to GitHub as a header; it is
@@ -233,6 +259,16 @@ class Settings:
     # Serverless hosts give you a read-only filesystem apart from /tmp, and even
     # that is wiped between runs -- so on Vercel, history is per-session only.
     db_path: Path = field(default_factory=lambda: Path(_default_db()))
+
+    def branch(self) -> str:
+        """Which branch this folder is on, or nothing at all.
+
+        Worked out each time rather than stored, because the folder can change
+        while Ripple is running -- somebody chooses a different one on the
+        settings screen -- and a branch left over from the folder before is a
+        fact about a repository nobody is reading any more.
+        """
+        return self.repo_branch or git_branch(self.repo_path)
 
     def ai_available(self) -> bool:
         return bool(self.ai_key)

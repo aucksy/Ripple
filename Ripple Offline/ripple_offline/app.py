@@ -143,7 +143,7 @@ def _still_reading(values: dict, folder: dict) -> dict:
         "repo": {
             "label": str(values.get("repoLabel") or ""),
             "path": str(values.get("repoPath") or ""),
-            "branch": settings.repo_branch,
+            "branch": settings.branch(),
             "files": 0, "statements": 0, "unreadable": 0,
             "heldOnline": 0, "pathTooLong": 0, "inSkippedDirs": 0,
             "skippedDirNames": [], "runsSqlFrom": 0,
@@ -209,7 +209,7 @@ def _health() -> dict:
         },
         "repo": {
             "label": prefs.folder_label(values["repoPath"]) or "no folder chosen",
-            "branch": settings.repo_branch,
+            "branch": settings.branch(),
             "path": values["repoPath"],
             "files": len(idx.files),
             "statements": len(parsed.statements),
@@ -528,7 +528,7 @@ def scan(payload: ScanIn) -> dict:
     out = res.to_dict()
     # No link template: the files are on this machine, and there is no address
     # to send anyone to. The screen offers no link rather than a broken one.
-    out["repo"] = {"label": settings.repo_label, "branch": settings.repo_branch,
+    out["repo"] = {"label": settings.repo_label, "branch": settings.branch(),
                    "urlTemplate": ""}
     return out
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 
+import pathlib
+
 import pytest
 
 from conftest import MOCKREPO
@@ -222,18 +224,19 @@ def test_history_is_kept_beside_the_program(clean_home):
     assert settings.serverless is False
 
 
-@pytest.mark.parametrize("head,expected", [
-    ("ref: refs/heads/main\n", "main"),
-    ("ref: refs/heads/release-2026\n", "release-2026"),
-    ("9f8c1a2b3c4d5e6f\n", "9f8c1a2"),       # a detached checkout
-])
-def test_the_branch_is_read_from_the_folder_itself(tmp_path, head, expected):
-    """A copied-out repository still knows which branch it came from, and that
-    is a real fact rather than a guess of "main"."""
-    (tmp_path / ".git").mkdir()
-    (tmp_path / ".git" / "HEAD").write_text(head, encoding="utf-8")
-    assert prefs.git_branch(tmp_path) == expected
+def test_the_branch_reader_is_the_shared_one_and_not_a_second_copy():
+    """It lived here once and the online build kept its own default of "main",
+    so the two builds disagreed on screen about the same folder: this one read
+    the folder and said nothing when there was nothing to say, and the other
+    printed "Branch main" over every folder on earth.
 
-
-def test_a_folder_that_was_never_a_checkout_claims_no_branch(tmp_path):
-    assert prefs.git_branch(tmp_path) == ""
+    One copy now, in the engine both builds import. The tests for what it reads
+    moved with it, into Codebase/tests/test_reading_the_branch.py.
+    """
+    from ripple.config import git_branch
+    src = pathlib.Path(prefs.__file__).read_text(encoding="utf-8")
+    assert "def git_branch(" not in src, (
+        "prefs.py has its own git_branch again. Two copies of this drifted once "
+        "and put a made-up branch name on one of the two screens."
+    )
+    assert callable(git_branch), "the shared branch reader is gone"
