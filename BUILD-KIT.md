@@ -429,14 +429,18 @@ files it produces:
 ```
 C:\ripple-build\
   run.py                   <- the one you type to start Ripple
+  start-ripple.bat         <- so you can double-click it instead (near the end)
   ripple\
     __init__.py            <- empty, but it must exist
-    config.py  production.py  catalog.py  notification.py
-    narrative.py  progress.py  store.py  api.py
+    paths.py  config.py  production.py  catalog.py
+    notification.py  narrative.py  progress.py  store.py
+    api.py  build_info.py
     providers.py  ai.py      <- the optional AI reader (Phase 11a)
     scanner\
       __init__.py          <- empty, but it must exist
       repo.py  templating.py  sqlread.py  lineage.py
+      rescue.py            <- reading SQL the parser choked on
+      dialectcompat.py     <- one place that knows the parser's own key names
       github.py            <- reading a repository over the network
   web\
     index.html  styles.css  app.js
@@ -446,6 +450,10 @@ C:\ripple-build\
     test_narrative.py
   mockrepo\                <- a small fake pipeline to test against (Phase 12)
 ```
+
+That is the whole of it. Nothing else appears in that folder, and nothing else
+needs to. If you do the optional Phase 13 at the very end, one more file joins
+it — `build.py` — along with the folders the packaging tool writes for itself.
 
 **Those three are the only ones that reach the network**, and the only ones this
 kit treats as optional. Ripple answers every question without them: they add a
@@ -6023,7 +6031,7 @@ back and insist on.
 
 ---
 
-## Starting it with a double-click, before it is packaged
+## Starting it with a double-click
 
 Once it all works you will not want to open a Command Prompt every time. Two
 commands, once:
@@ -6036,27 +6044,45 @@ type nul > C:\ripple-build\start-ripple.bat
 notepad C:\ripple-build\start-ripple.bat
 ```
 
-Put these two lines in it, save, and close:
+Put these four lines in it, save, and close:
 
 ```
-cd /d C:\ripple-build
+@echo off
+cd /d "%~dp0"
 python run.py
+if errorlevel 1 pause
 ```
 
 Now double-clicking **start-ripple.bat** starts Ripple and opens the browser. To
 have it on your desktop, right-click it and choose *Send to → Desktop (create
 shortcut)*. To stop Ripple, close the black window that opened with it.
 
-**Why not a packaged .exe?** It can be done, and it is deliberately not in this
-kit. On a managed laptop, an unsigned program you built yourself, which then opens
-a network port, is close to the worst possible shape as far as endpoint security is
-concerned — it tends to be quarantined, and explaining it afterwards costs more
-time than it ever saved. The batch file gives you the same double-click and none of
-that.
+**What those four lines do.** `@echo off` stops the window printing each command
+back at you. `cd /d "%~dp0"` moves to the folder the batch file is sitting in —
+which means you can move or rename the whole folder and it still works, where a
+written-out path would break. `python run.py` is the same command you have been
+typing all along. The last line keeps the window open if Python failed, so you
+can read the reason instead of watching it vanish.
+
+**This is where most people should stop.** The batch file gives you the
+double-click, and Ripple is finished. There is one more phase below that turns
+the folder into a single program for a machine with no Python on it at all.
+Whether to do it is a real decision, and Phase 13 opens by laying out both
+sides — on a managed laptop, a program you built yourself that then opens a
+network port is the shape endpoint security likes least.
 
 ---
 
 # PHASE 13 — packaging it as a program
+
+**This phase is optional, and skipping it is a fair choice.** Ripple is finished
+without it. Do this phase only if you have to hand Ripple to somebody whose
+machine has no Python on it and who is not allowed to install any. If everyone
+who needs it can run `python run.py`, the batch file above is the better answer,
+for one reason: on a managed laptop, a program you built yourself that then opens
+a network port is the shape endpoint security likes least. It tends to be
+quarantined, and explaining it afterwards costs more time than the packaging ever
+saved. Nothing later in this kit depends on this phase.
 
 **Saves to:** `C:\ripple-build\build.py` (new). Nothing else changes — Phases 1
 and 8 already wrote the three things a packaged program needs.
