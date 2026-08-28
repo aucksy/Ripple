@@ -915,12 +915,20 @@ parse_repo", never "from .sqlread import parse_repo".
 
   ripple/scanner/repo.py
     class SourceFile           path abs_path text lang;  lines()
+                               lang is one of: sql sqlx ddl hql py scala java
+                               sh xml yaml — the extension without its dot
+    class Match                file, line_no (1-based), line, name
     class RepoIndex            files skipped root held_online too_long
                                in_skipped_dirs unknown_ext skipped_dir_names
-      methods  build(cfg, on_progress=None) search(name)
-               files_mentioning(names) get(path)
+      methods  build(root, cfg=None, on_progress=None)   a classmethod
+               search(names: list[str]) -> list[Match]
+               files_mentioning(names: list[str]) -> list[SourceFile]
+               get(path) -> SourceFile | None
+      skipped[] entries are {"file": path, "reason": plain English}
+      held_online[], too_long[], in_skipped_dirs[] hold plain paths
+      unknown_ext is {extension: count}
     statements_for(f) -> list[(sql, line_offset)]     line_offset is 0-based
-    sql_file_refs(f) -> list[dict]
+    sql_file_refs(f) -> list[dict]   each {"name": path named, "line": 1-based}
     looks_like_unread_sql(f, blocks) -> bool
     written_tables(f) -> list[str]
     unopened_code_types(unknown_ext) -> dict
@@ -986,7 +994,23 @@ parse_repo", never "from .sqlread import parse_repo".
 
   ripple/progress.py
     start(job, label="")  step(done, total, label="")  finish()
-    snapshot() -> dict    reader(job)
+    snapshot() -> dict
+    reader(job) -> on_progress    the callback every slow call is handed
+
+  ON_PROGRESS — ONE SHAPE, EVERYWHERE, AND IT IS NOT OBVIOUS
+    on_progress(done: int, total: int, label: str = "")
+  Three arguments, in that order, from every caller: repo.py while it walks the
+  folder, sqlread.py while it parses, lineage.py while it follows the column.
+  total is 0 where there is genuinely no total to give — never a guess, and
+  never a path.
+
+  Measured on a build made from this kit: the window that walks the folder
+  called on_progress(files_read, path) and the window that made the callback
+  expected (done, total, label). The path landed in the total slot,
+  int() blew up on it, and /api/health answered 500 — so the very first screen
+  showed nothing at all, over a repository that read perfectly well. A callback
+  is a name that crosses a window like any other, and its ARGUMENT ORDER
+  crosses with it.
 
   ripple/store.py
     save(vals, scan, summary, mode, cfg=None) -> int
@@ -1022,28 +1046,61 @@ The window that writes api.py and the two that write the screens cannot see
 each other. A screen calling an address the server does not serve is a button
 that does nothing, and no test catches it.
 
+EVERY BODY IS WRITTEN OUT. The window that writes api.py turns these into its
+request models; the windows that write the screens send exactly these keys. A
+body the server does not recognise comes back 422 with a wall of validation
+text, and the screen shows nothing at all.
+
   GET   /                       the page
   GET   /api/health             settings, catalogue summary, build, ai block
   GET   /api/progress           what the engine is doing this second
   GET   /api/catalog            tables and columns learned from the repository
-  POST  /api/reindex            read the folder again
+  POST  /api/reindex            read the folder again.        no body
   GET   /api/production         the published-table rule in force
-  POST  /api/production         set it                    {text}
-  POST  /api/production/read    read a pasted list without setting it  {text}
-  POST  /api/repo/folder        point at a local folder   {path}
-  POST  /api/repo/connect       point at a GitHub repository      (optional)
-  POST  /api/repo/disconnect    go back to the local folder       (optional)
-  POST  /api/read-email         upload or paste the notification. multipart
-                                field name "file", or {text}
-  POST  /api/scan               run the analysis -> the scan result JSON
-  POST  /api/summary            the summary and the drafted reply
-  POST  /api/history            save an analysis
+  POST  /api/production         set it.                       {text}
+  POST  /api/production/read    read a pasted list without setting it.  {text}
+  POST  /api/repo/folder        point at a local folder.      {path}
+  POST  /api/repo/connect       a GitHub repository (optional).
+                                {repo, branch, token} — blank branch means the
+                                default one, blank token means keep the one set
+  POST  /api/repo/disconnect    back to the local folder.     no body
+  POST  /api/read-email         the notification. multipart with the field
+                                named "file", or {text} for a paste
+  POST  /api/scan               run the analysis.
+                                {upstream: [{table, attrs: []}],
+                                 changeKind: str,
+                                 maxHops: int | null}
+                                UPSTREAM IS A LIST OF OBJECTS, NOT A LIST OF
+                                STRINGS. One entry per upstream table, each
+                                carrying the attributes being changed on it.
+                                maxHops is null for the setting in force, and
+                                a number only for the "follow it deeper" button
+                                on a trail that was cut short.
+                                -> the scan result JSON above
+  POST  /api/summary            {scan, vals, useAI: bool}
+                                -> {summary, reply}
+  POST  /api/history            save one.  {vals, scan, summary, mode}
   GET   /api/history            list saved analyses
   GET   /api/history/{id}       open one
-  GET   /api/file               one file's text, for the code snippet
-  POST  /api/ai/check           really call the selected model     (optional)
-  POST  /api/ai/connect         {key, model}                       (optional)
-  POST  /api/ai/forget          forget the key                     (optional)
+  PATCH /api/history/{id}       change its status.            {status}
+  GET   /api/file               one file's text, for the code snippet.
+                                ?path= and the line to centre on
+  POST  /api/ai/check           really call the selected model.  no body
+  POST  /api/ai/connect         {key, model} — blank key means keep the one
+                                already set, blank model likewise
+  POST  /api/ai/forget          forget the key.               no body
+
+THESE THREE ARE ALWAYS BUILT, even in a build with no AI reader in it. What is
+optional is ripple/ai.py, the thing behind them. Without it the three routes
+still exist and answer "there is no reader in this build", and /api/health
+reports ai.available false so the settings screen hides the key box before
+anybody presses anything.
+
+Written that way round because "optional" is the one thing two windows that
+cannot see each other are guaranteed to disagree about. Measured: the window
+building the server took the "leave it out" branch and the window building the
+screens built the key box, so three addresses were called that nothing served,
+and the only sign of it was a button that did nothing.
 
 There is no /api/notification, no /api/analyses, no /api/ai/key and no
 /api/ai/providers. The provider prefixes come down inside /api/health.
@@ -1077,6 +1134,36 @@ so the two halves only have to agree on this list. Reach for an element with
   const x = (root, name) => root.querySelector(`[data-x="${name}"]`);
 and give every field the page owns a data-x name, so Phase 9 and Phase 10 are
 naming the same things in the same way.
+
+HOW web/app.js IS WRITTEN — Phase 10 starts the file, Phase 11 appends to it,
+and they are two windows that cannot see each other. So the way the file is
+written is fixed here, not decided twice.
+
+  BUILD DOM NODES. NEVER ASSEMBLE HTML STRINGS. No innerHTML, no
+  '<div class="...">' + value + '</div>', anywhere, in either half. It is not
+  only the escaping: measured on a build made from this kit, Phase 10 wrote
+  node builders and Phase 11 wrote string builders, so one file held two
+  different programs, Phase 11 used Phase 10's element helper zero times out of
+  2,060 lines, and a single unclosed bracket inside one of those long
+  concatenations stopped the whole file parsing.
+
+  PHASE 10 DEFINES THESE, AT THE TOP, AND PHASE 11 USES THEM RATHER THAN
+  WRITING ITS OWN:
+    el(tag, opts, ...children)   opts: {class, text, html?, data:{}, on:{}}
+    x(root, name)                the data-x lookup above
+    api(path, body)              fetch wrapper, returns the parsed JSON
+    render()                     redraw the current step
+    S                            the one state object
+  Phase 11: if you find yourself about to write esc(), say(), str() or any
+  other helper of your own, it is because you are building strings. Build nodes
+  and you do not need any of them - textContent escapes by itself.
+
+  AFTER PASTING PHASE 11's PART, RUN THIS. It takes a second and it is the only
+  check in this kit that catches a broken bracket before the browser does:
+      node --check web/app.js
+  If Node is not on the machine, open the page and look at the browser's
+  console instead - an unparsed file shows there as one red line on load, and
+  every screen stays blank.
 
 HOUSE STYLE
 - Comments explain WHY, not what. A comment restating the code is noise; a
@@ -1471,7 +1558,8 @@ Write these tests, using only invented table names:
   every pattern still does exactly what it did before (parametrised)
   an exact name matches only that table — stg_sales_daily is NOT sales_daily
   names and patterns work side by side
-  an empty box falls back rather than meaning no table is production
+  an empty box stays empty, has_production() answers false, and NOTHING
+    falls back to _PROD, _PRD or _PUBLISHED
   the one-line form counts a long list instead of printing it
 ````
 
@@ -5290,9 +5378,17 @@ same call. If a provider refuses the optional response_format field, send the
 request again without it rather than losing the whole call; the prompt asks for
 JSON in words as well.
 
-If you are NOT building the reader: omit the three routes, omit ai.py, still
-build providers.py, and report `ai.available` false in /api/health so the screen
-can say "no key set — rules alone" rather than guess.
+IF YOU ARE NOT BUILDING THE READER, STILL BUILD ALL THREE ROUTES. Omit ai.py,
+build providers.py as always, and have each route answer plainly that there is
+no reader in this build. Report `ai.available` false in /api/health, and the
+settings screen hides the key box on that alone.
+
+Do NOT omit the routes. Phase 11 is a different window and cannot be told what
+you chose. Measured on a build made from this kit: this window took the "leave
+it out" branch, Phase 11 built the key box anyway, and three addresses were
+called that nothing served — with no error anywhere, just buttons that did
+nothing. A route that exists and says "not in this build" is the only version
+of this that two strangers can both get right.
 
 POST /api/ai/check      really call the model that is really selected, and say
                         which one. A key that is present is not a key that

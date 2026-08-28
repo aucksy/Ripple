@@ -419,6 +419,36 @@ def test_the_contract_card_names_the_functions_that_cross_a_window():
         "the ROUTE MAP no longer rules out the addresses the screens invented"
     )
 
+    # An address without its request body is half a contract. Measured on the
+    # second clean-room run: the map named POST /api/scan and not what to send,
+    # so the server window made upstream a flat list of strings - which cannot
+    # say "column X on table Y" at all - and every scan came back 422.
+    assert "upstream: [{table, attrs: []}]" in body, (
+        "the ROUTE MAP no longer gives the body of POST /api/scan. Without it "
+        "the server window and the screen windows invent different shapes and "
+        "every scan is refused."
+    )
+    assert "NOT A LIST OF" in body, (
+        "the ROUTE MAP no longer says outright that upstream is a list of "
+        "objects. It was made a list of strings once already."
+    )
+
+    # A callback is a name that crosses a window, and its argument ORDER
+    # crosses with it. Measured: repo.py called on_progress(files_read, path)
+    # while the callback expected (done, total, label). int() threw on the path
+    # and /api/health answered 500, so the first screen was blank.
+    assert "on_progress(done: int, total: int, label: str" in body, (
+        "the FUNCTION MAP no longer pins the on_progress argument order"
+    )
+
+    # node --check is the only check in the kit that catches a broken bracket
+    # before the browser does, and one unclosed bracket blanks every screen.
+    assert "node --check web/app.js" in body, (
+        "the kit no longer tells anybody to check app.js parses. One unclosed "
+        "bracket in a 3,700-line file leaves every screen blank with a clean "
+        "console."
+    )
+
 
 def test_the_folder_tool_leaves_nothing_out_silently():
     """Two tests and a hosting file are deliberately not copied into the folder.
