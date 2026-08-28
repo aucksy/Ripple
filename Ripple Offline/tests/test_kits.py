@@ -988,3 +988,58 @@ def test_every_grey_box_says_which_of_the_three_things_it_is():
         "has to guess from the sentence above: "
         + "; ".join(f"line {s} (above it: {p!r})" for s, p in unlabelled[:12])
     )
+
+
+SHELL_CLASSES = ("side", "main", "head", "scroll", "col", "shell", "wrap")
+
+
+def test_the_card_reserves_the_page_shells_class_names():
+    """An id that clashes draws nothing. A CLASS that clashes draws the wrong
+    thing, in the wrong place, over something else.
+
+    Measured on 28 Aug 2026, on a Ripple built by thirteen windows that could
+    not see each other: window 9 styled `.side` as the navy sidebar --
+    position:fixed, top 0, left 0, full height -- and window 10, meaning "a card
+    at the side of this step", wrote `<section class="card side">` inside a
+    screen. It became a fixed panel 288 pixels wide over the whole left edge and
+    covered the numbered rail completely. Seven step numbers gone, on the very
+    first screen, with no error in the console, no broken seam any checker could
+    see, and every test green.
+
+    The PAGE MAP already stops two windows disagreeing about an id. This is the
+    same failure one level down, in the class names, and it is worse because it
+    is silent AND it draws something.
+    """
+    body = read(BUILD_KIT)
+    card = re.search(r"^# PHASE 0 .*?^````text\n(.*?)^````", body,
+                     re.DOTALL | re.MULTILINE)
+    assert card, "BUILD-KIT.md no longer has a contract card"
+    text = card.group(1)
+
+    # The block itself shouts a sentence or two, so "the next all-capitals line"
+    # ends it far too early. Take what follows the marker up to the next card
+    # heading, which is a whole line of capitals and nothing else.
+    block = re.search(
+        r"CLASS NAMES THE PAGE SHELL OWNS(.*?)(?:\n[A-Z][A-Z /.]+$|\Z)",
+        text, re.DOTALL | re.MULTILINE)
+    assert block, (
+        "the contract card no longer reserves the page shell's class names, so "
+        "nothing stops the window that writes a screen from reusing one and "
+        "drawing a fixed panel over the rail"
+    )
+    # The words have to be on the indented LIST, not merely somewhere in the
+    # paragraph explaining it. "side" appears four times in that prose, so
+    # searching the whole block passes even with the list emptied out.
+    listing = re.search(r"^\s{4,}((?:[a-z]+\s+){3,}[a-z]+)\s*$",
+                        block.group(1), re.MULTILINE)
+    assert listing, "the reserved class names are described but never listed"
+    named = listing.group(1).split()
+    missing = [c for c in SHELL_CLASSES if c not in named]
+    assert not missing, f"the reserved list no longer names {missing}"
+
+    # And the window that writes the stylesheet has to scope them, or reserving
+    # the words is not enough on its own.
+    assert "body > .side" in text or "body > .side" in body, (
+        "nothing tells the window that writes the stylesheet to scope the shell "
+        "rules, so a bare .side still catches a card inside a screen"
+    )

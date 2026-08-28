@@ -1314,6 +1314,26 @@ so the two halves only have to agree on this list. Reach for an element with
 and give every field the page owns a data-x name, so Phase 9 and Phase 10 are
 naming the same things in the same way.
 
+CLASS NAMES THE PAGE SHELL OWNS. These belong to the frame the page is drawn
+in, not to anything inside a screen. NOTHING BUILT BY THE SCRIPT MAY CARRY ONE
+OF THEM, and no rule for them may be written so that it can reach inside the
+screen:
+
+    side  main  head  scroll  col  shell  wrap
+
+Measured, on a build made by thirteen windows that could not see each other:
+one window styled .side as the navy sidebar -- position:fixed, top 0, left 0,
+full height -- and another window, meaning "a card at the side of this step",
+wrote <section class="card side"> inside a screen. It became a fixed panel over
+the whole left edge and covered the numbered rail completely. Every step number
+gone, on the first screen, with no error anywhere and every test still passing.
+An id that clashes draws nothing and is obvious. A CLASS that clashes draws the
+wrong thing, in the wrong place, over something else.
+
+So: the window that writes the stylesheet scopes every shell rule to the shell
+itself -- body > .side, never a bare .side -- and the windows that write the
+screens pick a different word. A card beside something is .aside or .beside.
+
 HOW web/app.js IS WRITTEN — Phase 10 starts the file, Phase 11 appends to it,
 and they are two windows that cannot see each other. So the way the file is
 written is fixed here, not decided twice.
@@ -6536,6 +6556,15 @@ Cards are white with a 1px --line border, 12px radius and --shadow. Body text
 is 14px with line height 1.5. The sans family is 'Public Sans' falling back to
 Segoe UI and system-ui. The monospace family, used for every table and column
 name on screen, is 'IBM Plex Mono' falling back to Consolas.
+
+SCOPE THE SHELL RULES OR THEY REACH INSIDE A SCREEN. The frame -- the navy
+sidebar, the header strip, the scrolling middle -- is yours. The screens inside
+it are written by two other windows that cannot see this stylesheet. Write every
+shell rule against the shell itself, `body > .side`, never a bare `.side`, and
+the same for main, head, scroll, col, shell and wrap. Measured: a bare
+`.side{position:fixed;top:0;left:0;bottom:0}` also caught a card another window
+had called "card side", turned it into a fixed panel over the whole left edge,
+and hid the numbered rail. No error, and every test still green.
 
 Components to define, because the script uses these class names:
   .card .pad .pad.lg .clip .chead      cards and their tinted header strip
