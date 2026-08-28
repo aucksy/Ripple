@@ -4193,6 +4193,33 @@ OF THEM.
            sentence this tool may not print. See referencedHere.
   none     nothing found, nothing unread, and nothing naming the column.
 
+  TWO DIFFERENT QUESTIONS, AND THEY ARE MEANT TO DIFFER. coverage.complete
+  asks "did I see everything in this repository", and the risk badge asks "did
+  I see everything ABOUT THIS COLUMN". So risk "none" beside coverage
+  complete:false is legitimate — a repository always has some file the reader
+  cannot make sense of, and a badge reading "not sure" on every scan ever run
+  is one nobody reads. That is why the gap test above is narrow.
+
+  WHAT IS NOT LEGITIMATE, and it is the failure to write a test for: risk
+  "none" when a gap ON THE SUBJECT exists — a file that could not be read AND
+  mentions one of the names, a file never opened at all, a file held online or
+  path-too-long, or a whole file type never opened. Measured on a build made
+  from this kit: a scan for a column not in the repository came back risk
+  "none" where the same folder and the same question gave the shipped answer
+  "unknown", because the build had found ONE unreadable file where there were
+  three. It had not detected the gap, so the gate never fired. The badge was
+  not lying about the rule; the rule was being asked about a repository the
+  build had only half read.
+
+  So the test that catches it is not "none never appears beside an incomplete
+  coverage block" — that would fail on an honest answer. It is: count the files
+  this scan could not read, and if any of them mentions one of the names being
+  followed, risk may not be "none". Assert that against a fixture that holds
+  such a file, so the test goes red if the detection ever weakens.
+
+  And on screen, never put a tick or the words "everything was read" beside a
+  coverage block that is not complete, whatever the badge says.
+
 With no findings at all the answer is "none" — EXCEPT where there is a gap
 Ripple knows about, and then it is "unknown", worded on screen as "Not sure —
 needs a person". "No impact" is the only thing this tool sells, so it is the
@@ -4250,6 +4277,17 @@ THE HONEST HALF. After the walk, for every file the word search matched:
   report naming one line sends somebody to fix one line out of sixty.
   Otherwise, if the file could not be parsed, say "mentions the name, but
   Ripple could not read it as SQL — check by hand".
+
+  THE ORDER OF THOSE THREE TESTS IS THE WHOLE RULE, and it is easy to write
+  them the other way round without noticing. mentionsOnly is the REASSURING
+  case — "the name appears but carries nowhere" — so anything that lands there
+  by mistake is a warning turned into a comfort. Test for the quoted string
+  FIRST, then for the file that would not parse, and only then fall through to
+  mentionsOnly. Measured on a build made from this kit: a Python file naming
+  the column on four lines as text was filed under mentionsOnly, the answer
+  reported one file it could not read where the repository held three, and the
+  risk badge printed "none" — over a coverage block on the same screen that
+  said it was not complete.
   Otherwise it goes in mentionsOnly: the name appears but carries nowhere,
   which is the reassuring case and must be told apart from the others.
 
