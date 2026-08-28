@@ -6,15 +6,28 @@ enough to work out **which files you need to open**, so you do not have to.
 You do not need to read Python. You need to find a file, paste it, paste back
 what you get, and run one command.
 
-**If you have not built Ripple yet**, this is the wrong document. Use
-`START-HERE.md` to pick the right one.
+**If you have not built Ripple yet**, this is the wrong document. Open
+`START-HERE.md` instead — it is in the same folder as this file, beside
+`BUILD-KIT.md` — and it picks the right one for you.
+
+**Two builds, and this page uses the same two names all the way through.** The
+**normal build** is the one BUILD-KIT.md makes: a folder with `run.py` in it,
+started by typing `python run.py` or by double-clicking `start-ripple.bat`. The
+**packaged build** is the single program made at the end of the kit, the one
+you can hand to somebody else: the same Ripple, wrapped up, for a machine with
+no internet. Wherever you see the words **Ripple Offline**, that is the packaged
+build. The file list further down tags every file with the build it belongs to,
+in exactly those two words.
 
 ---
 
 ## How this works
 
-**Step 1.** Copy everything in the grey box below — the whole thing, from
-`YOU ARE REPAIRING RIPPLE` to the last line. Paste it into a new chat window.
+**Step 1.** Copy the whole prompt below and paste it into a new chat window. It
+starts at `YOU ARE REPAIRING RIPPLE` and ends at the line
+`NOW READ WHAT I WANT CHANGED, BELOW, AND ANSWER WITH THE FILE LIST ONLY.` It is
+about 650 lines, and a safe way to take all of it is printed just above the
+prompt itself.
 
 **Step 2.** Underneath it, in your own words, type what is wrong.
 
@@ -28,7 +41,7 @@ support"*.
 
 ---
 
-## Three rules. Break these and you lose an evening.
+## Four rules. Break these and you lose an evening.
 
 **1. Copy the file before you change it.** Right-click, Copy, Paste in the same
 folder. Windows makes `sqlread - Copy.py`. That is your way back.
@@ -36,12 +49,45 @@ folder. Windows makes `sqlread - Copy.py`. That is your way back.
 **2. One change at a time.** Ask for one thing, check it, then ask for the next.
 Two changes in one window and you cannot tell which one broke it.
 
-**3. Run the check before you believe it.** Every change ends with a command. If
-it does not say `passed`, the change is not done, whatever the chat told you.
+**3. Run the check before you believe it.** Every change ends with a command you
+type yourself, in the black window. Until that command has printed the right
+last line — **When the chat has named your files**, below, gives you the exact
+words, and they are not the same words on every machine — the change is not
+done, whatever the chat told you.
+
+**4. Some of these files are enormous.** The three biggest:
+
+* `ripple/scanner/sqlread.py` — 3,720 lines
+* `web/app.js` — 3,291 lines
+* `ripple/scanner/lineage.py` — 1,726 lines
+
+Pasting one of those into a chat, and catching the new one coming back, is a
+whole evening on its own — and the reply will usually arrive in two or three
+parts, because no chat writes that much in one go. That is normal, not a
+failure: when it stops in the middle, send the wording under **It stopped in the
+middle of a long file**, near the end of this page. Before you start, look your
+file up in the list further down. It gives the size of every one, so you know
+what you are in for.
 
 ---
 
 ## THE PROMPT — copy all of this
+
+**It is about 650 lines, so do not drag your mouse down it** — you will lose
+the end and never notice. Two ways to take all of it:
+
+* **If whatever you are reading this in draws a grey box round the prompt, with
+  a Copy button in the corner of it**, click that button. One click takes the
+  lot.
+* **In Notepad there is no grey box and no button** — only a line of backtick
+  characters above the prompt and another below it. Click once just before the
+  `Y` of `YOU ARE REPAIRING RIPPLE`. Scroll down to the bottom of the prompt.
+  Hold **Shift** and click once just after `FILE LIST ONLY.` Everything between
+  your two clicks turns blue. Press **Ctrl+C**.
+
+**Then check that what you copied ends with `ANSWER WITH THE FILE LIST ONLY.`**
+That line is what makes the chat answer with a list of files instead of writing
+code at you. Lose it and nothing warns you.
 
 ````text
 YOU ARE REPAIRING RIPPLE. Read all of this before you answer.
@@ -123,11 +169,11 @@ WHERE THE FILES LIVE
 Two builds, and a file can sit in a different place in each. When you name a
 file, give both.
 
-  Built from BUILD-KIT.md (normal laptop, pip works):
+  The normal build, built from BUILD-KIT.md (normal laptop, pip works):
       the project root holds run.py, and folders ripple\ , web\ and tests\
       example: ripple\scanner\sqlread.py
 
-  The packaged program (Ripple Offline):
+  The packaged build, also called Ripple Offline:
       the same, plus a folder ripple_offline\ and a copied folder sqlglot\
       example: ripple\scanner\sqlread.py   (the same place)
       but the web service is ripple_offline\app.py, not ripple\api.py
@@ -730,30 +776,62 @@ NOW READ WHAT I WANT CHANGED, BELOW, AND ANSWER WITH THE FILE LIST ONLY.
 
 ## When the chat has named your files
 
-Open each one, copy all of it, and paste it in. When it gives files back:
+**Open each one in Notepad.** Right-click the file, choose **Open with**, then
+**Notepad**. Never double-click a `.py` file: Windows either runs it, or throws
+up a "How do you want to open this file?" list, and a wrong pick from that list
+changes what happens to every `.py` file you open afterwards. If Notepad is not
+offered, choose **Choose another app**, pick Notepad there, and leave **Always
+use this app** unticked.
 
-* Save each one over the original, keeping the name exactly.
+With the file open, press **Ctrl+A** to select all of it, then **Ctrl+C** to
+copy, and paste it into the chat. When it gives files back:
+
+* Save each one over the original with **Ctrl+S**, keeping the name exactly. The
+  file already exists, so Notepad cannot add `.txt` to the name this time.
 * Do not tidy the indentation. In Python the spaces at the start of a line
   decide which lines belong inside which.
-* Run the command it gave you. From the project root:
+
+**Now run the check it gave you.** Not in the chat — in the black Command
+Prompt window. If you have not got one open: press the **Windows key**, type
+`cmd`, press **Enter**. A black window opens.
+
+**First, stand in the Ripple folder.** That is the folder with `run.py` in
+it — `C:\ripple-build` if you followed BUILD-KIT.md. That folder is what "the
+project root" means, here and everywhere else in the kit. TYPE THIS INTO THE
+BLACK WINDOW, then press Enter:
+
+```
+cd /d C:\ripple-build
+```
+
+If your Ripple lives somewhere else, type `cd /d` and a space, then drag that
+folder out of File Explorer and drop it on the black window. It writes the path
+in for you. Then press Enter.
+
+**Now the check itself. TYPE THIS INTO THE BLACK WINDOW.** It is a command, not
+something to paste into the chat:
 
 ```
 python -m pytest tests -q
 ```
 
-**You are looking for a last line like this**, and the numbers will differ:
+**Read the last line it prints.** Done looks like this, and your numbers will
+differ:
 
 ```
 694 passed in 23.42s
 ```
 
-On the locked-down build the command is different, and so is the answer:
+**If instead it answers `No module named pytest`,** that machine has not got
+pytest, and the command below is yours rather than the one above. Nothing is
+broken, and nothing was harmed by trying the first. TYPE THIS INTO THE BLACK
+WINDOW:
 
 ```
 python -m unittest discover tests -v
 ```
 
-**That one does not print the word "passed" at all.** It scrolls a long list and
+**That one never prints the word "passed" at all.** It scrolls a long list and
 ends with these two lines:
 
 ```
@@ -810,8 +888,20 @@ window with nothing else except:
 
 ---
 
-*Generated from the live code by `Ripple Offline/tools/make_repair_kit.py`, which
-reads each file's own first sentence, counts its lines, and works out the import
-graph with `ast`. Do not edit this by hand -- run that again instead. The version
-this replaced was hand-written, and by the time anybody read it every size in it
-was wrong and the dependency list did not exist at all.*
+## About this page
+
+**There is nothing on this page for you to run.** It writes itself out of
+Ripple's own code: every file name, every size and every "what it touches" line
+above was read off the code, not typed by a person.
+
+What that means for you: **the moment you change a file, the sizes above go
+slightly out of date.** That is harmless — the file names and the routing are
+still right. If it ever looks badly wrong, say so in the chat and ask for this
+page to be written out again.
+
+*For whoever maintains Ripple: this file is generated by
+`Ripple Offline/tools/make_repair_kit.py`, which reads each file's own first
+sentence, counts its lines, and works out the import graph with `ast`. Do not
+edit it by hand -- run that again instead. The version this replaced was
+hand-written, and by the time anybody read it every size in it was wrong and the
+dependency list did not exist at all.*

@@ -727,3 +727,264 @@ def test_the_snapshot_only_lists_files_that_exist():
             f"is no such file in {folder.name}/. The snapshot would ship a Ripple "
             f"that cannot import."
         )
+
+
+# ── the shape of the page he actually looks at ────────────────────────────
+
+FENCE = re.compile(r"^(`{3,})(.*)$")
+
+
+def fenced_blocks(body: str) -> list[tuple[int, int, str]]:
+    """Every rendered grey box, as (first line, last line, info string).
+
+    A fence carrying an info string never CLOSES a block -- only a bare fence of
+    the same length does. That one rule of markdown is what broke Phase 9, so it
+    is written out here rather than assumed.
+    """
+    lines = body.splitlines()
+    out: list[tuple[int, int, str]] = []
+    opened: tuple[int, str, str] | None = None
+    for i, line in enumerate(lines, 1):
+        m = FENCE.match(line)
+        if not m:
+            continue
+        ticks, info = m.group(1), m.group(2).strip()
+        if opened is None:
+            opened = (i, ticks, info)
+        elif ticks == opened[1] and not info:
+            out.append((opened[0], i, opened[2]))
+            opened = None
+    if opened is not None:
+        pytest.fail(
+            f"BUILD-KIT.md opens a grey box at line {opened[0]} and never closes "
+            f"it. Everything below it renders as one enormous box."
+        )
+    return out
+
+
+def test_no_heading_is_swallowed_by_a_grey_box():
+    """A heading inside a code fence is not a heading. It is grey text.
+
+    Measured on 28 Aug 2026: Phase 9's box was opened with four backticks and
+    the word text, and the next such fence further down did not close it,
+    because a fence carrying an info string closes nothing. One box then ran for
+    a hundred lines and swallowed both the typefaces heading and, further on,
+    the whole of "# PHASE 10".
+
+    Three things broke at once and none of them was visible. The copy button on
+    Phase 9 handed over Phase 9 plus an unrelated second request. Phase 10 had
+    no heading anywhere on the page, so scrolling for it went straight past. And
+    Phase 9's own check command sat inside a box, so the one line he was meant
+    to type looked like something to paste.
+
+    Nothing failed. The document simply rendered wrong, and only a person
+    reading it as a page would ever have noticed.
+    """
+    body = read(BUILD_KIT)
+    lines = body.splitlines()
+    trapped = [
+        (start, j, lines[j - 1][:60])
+        for start, end, _ in fenced_blocks(body)
+        for j in range(start + 1, end)
+        if re.match(r"^#{1,3} \S", lines[j - 1])
+    ]
+    assert not trapped, (
+        "these headings are inside a grey box, so they do not render as "
+        "headings and the copy button above them hands over the wrong thing: "
+        + "; ".join(f"line {j} ({h}) inside the box opened at {s}"
+                    for s, j, h in trapped)
+    )
+
+
+def test_every_ctrl_f_pointer_lands_somewhere():
+    """The document is navigated by Ctrl+F, so a pointer is a promise.
+
+    There is no page numbering and no clickable index: the contents list tells
+    him to search for bold phrases, and the phases send him to other pages the
+    same way. A bold phrase that appears nowhere else leaves him searching a
+    seven-thousand-line file at ten o'clock at night for something that is not
+    there -- and the failure is silent, because a dead pointer looks exactly
+    like a working one.
+
+    Pointers wrap across lines, so whitespace is flattened before matching.
+    """
+    body = read(BUILD_KIT)
+    flat = re.sub(r"\s+", " ", body)
+    # Find the bold spans first. Hunting for a navigation verb and then the next
+    # "**" mistakes the CLOSING marks of a bold span for the opening ones, which
+    # captures a sentence fragment and reports it as a dead pointer.
+    verb = re.compile(
+        r"(?:Ctrl\+F|[Ss]earch for|see|under|is at|listed in|the page|the section)"
+        r"[^.]{0,60}$"
+    )
+    # Every "Search for" cell of the contents list is a pointer too, and the
+    # busiest one: it is the map. A row there carried "**What you are actually
+    # running**" for a while after that page had been renamed and moved, and no
+    # navigation verb sits next to a table cell, so nothing caught it.
+    contents = re.search(
+        r"## What is in here, and where(.*?)\n## ", body, re.DOTALL)
+    assert contents, "BUILD-KIT.md no longer has a contents list"
+    targets = {
+        m.group(1).strip()
+        for m in re.finditer(r"\|\s*\*\*([^*|]{4,70})\*\*\s*\|",
+                             re.sub(r"\s+", " ", contents.group(1)))
+    }
+
+    dead = [t for t in sorted(targets)
+            if len(re.findall(re.escape(t), flat)) < 2]
+
+    seen: set[str] = set(targets)
+    for m in re.finditer(r"\*\*([^*]{4,70})\*\*", flat):
+        target = m.group(1).strip()
+        # A pointer names a section, never a sentence, so it never ends in a
+        # full stop. That is what separates "**When Phase 4 goes wrong**" from
+        # the bold sub-headings of the contents list itself.
+        if target in seen or not re.match(r"^[A-Z]", target) or target.endswith("."):
+            continue
+        if not verb.search(flat[max(0, m.start() - 70):m.start()]):
+            continue
+        seen.add(target)
+        if len(re.findall(re.escape(target), flat)) < 2:
+            dead.append(target)
+    assert not dead, (
+        f"these Ctrl+F pointers name text that appears nowhere else in "
+        f"BUILD-KIT.md: {dead}"
+    )
+
+
+def test_the_contract_card_draws_every_file_it_commissions():
+    """The card tells twelve strangers what to build and where to put it.
+
+    Its FILE MAP commissions the files. Its folder picture, further down the
+    same card, shows where each one goes. They disagreed: six commissioned files
+    -- rescue.py, dialectcompat.py, github.py, build_info.py, providers.py and
+    ai.py -- were never drawn in the picture at all.
+
+    A window that reads the picture to decide where its own file belongs cannot
+    find its own file there, so it guesses. A guessed path is the failure this
+    whole card exists to stop, and it surfaces as ModuleNotFoundError on a build
+    that looked finished.
+
+    The kit's own folder picture is guarded by another test. This guards the
+    card's, which twelve chat windows read and he never does.
+    """
+    body = read(BUILD_KIT)
+    card = re.search(r"^# PHASE 0 .*?^````text\n(.*?)^````", body,
+                     re.DOTALL | re.MULTILINE)
+    assert card, "BUILD-KIT.md no longer has a contract card to check"
+    text = card.group(1)
+
+    file_map = re.search(r"^FILE MAP.*?\n(.*?)\n[A-Z][A-Z ]{6,}", text,
+                         re.DOTALL | re.MULTILINE)
+    picture = re.search(r"^WHERE THINGS GO.*?\n(.*?)\n[A-Z][A-Z ]{6,}", text,
+                        re.DOTALL | re.MULTILINE)
+    assert file_map, "the card no longer has a FILE MAP"
+    assert picture, "the card no longer draws the folder"
+
+    commissioned = {
+        m.rsplit("/", 1)[-1]
+        for m in re.findall(r"[a-z_/]*[a-z_]+\.py", file_map.group(1))
+    }
+    drawn = picture.group(1)
+    missing = sorted(f for f in commissioned if f not in drawn)
+    assert not missing, (
+        f"the card's FILE MAP commissions {missing}, and its own folder picture "
+        f"never draws them. The window that writes one of those files has "
+        f"nowhere to be told to put it."
+    )
+
+
+def test_nothing_written_for_the_chat_is_left_outside_a_grey_box():
+    """He hands the chat whatever is in a grey box, and only that.
+
+    Measured on 28 Aug 2026: 149 lines of Phases 10 and 11 were written plainly
+    for the chat -- element names, the four words the server may send, the rules
+    for every card that qualifies an answer -- and sat outside every box. He read
+    them as writing to him, understood none of it, and moved on. The chat never
+    saw them.
+
+    What was in that stretch is not decoration. It carries the rule the product
+    rests on: a caveat may never live on a different screen from the answer it
+    qualifies. Handed over, it gets built. Skipped, every test still passes and
+    the screens are quietly dishonest.
+
+    A run of prose outside every box, inside a phase, carrying the shape of code
+    -- a camelCase name or an /api/ address -- is that mistake happening again.
+    """
+    body = read(BUILD_KIT)
+    lines = body.splitlines()
+    inside = [False] * (len(lines) + 2)
+    for start, end, _ in fenced_blocks(body):
+        for j in range(start, end + 1):
+            inside[j] = True
+
+    phases = [i for i, ln in enumerate(lines, 1) if re.match(r"^# PHASE \d", ln)]
+    looks_like_spec = re.compile(r"\b[a-z]+[A-Z][A-Za-z]+\b|/api/")
+    offenders: list[tuple[int, int]] = []
+    for k, first in enumerate(phases):
+        last = phases[k + 1] if k + 1 < len(phases) else len(lines)
+        run: list[int] = []
+        for j in range(first, last):
+            if inside[j] or lines[j - 1].startswith("#"):
+                run = []
+                continue
+            if lines[j - 1].strip():
+                run.append(j)
+            if len(run) >= 12 and sum(
+                    1 for r in run if looks_like_spec.search(lines[r - 1])) >= 3:
+                offenders.append((run[0], run[-1]))
+                run = []
+    assert not offenders, (
+        "these stretches sit outside every grey box but read as instructions "
+        "for the chat, so they are never handed over: "
+        + "; ".join(f"lines {a}-{b}" for a, b in offenders)
+    )
+
+
+LABELS = (
+    "**Paste this into the chat.**",
+    "**Type this into the black window.**",
+    "**Type this into the blue PowerShell window.**",
+    "**Read this — there is nothing to type.**",
+    "**Paste this into Notepad and save it.**",
+    "**Open this in your browser.**",
+    "**This is the line to find and delete.**",
+)
+
+
+def test_every_grey_box_says_which_of_the_three_things_it_is():
+    """He does three things in this kit and nothing else: paste into the chat,
+    type into the black window, read.
+
+    Once the page is rendered nothing tells the boxes apart -- the ```text tag
+    is invisible. Counted on 28 Aug 2026: 120 boxes, and the tag was the only
+    thing distinguishing them. Most of the time the sentence above carried it.
+    Where it did not he had to guess, and the guesses are not harmless ones:
+    typing a folder picture into the black window, or pasting a phase heading
+    into a chat.
+
+    A run of boxes with nothing but blank lines between them is one instruction
+    given as several commands, so only the first of a run needs the label.
+    """
+    body = read(BUILD_KIT)
+    lines = body.splitlines()
+    blocks = fenced_blocks(body)
+    ends = {e for _, e, _ in blocks}
+
+    unlabelled = []
+    for start, _, _ in blocks:
+        prev_no, prev = 0, ""
+        for j in range(start - 1, 0, -1):
+            if lines[j - 1].strip():
+                prev_no, prev = j, lines[j - 1]
+                break
+        if prev_no in ends:
+            continue                      # same run as the box above it
+        if prev.strip() not in LABELS:
+            unlabelled.append((start, prev[:60]))
+
+    assert not unlabelled, (
+        "these grey boxes do not say which of the three things they are, so he "
+        "has to guess from the sentence above: "
+        + "; ".join(f"line {s} (above it: {p!r})" for s, p in unlabelled[:12])
+    )
