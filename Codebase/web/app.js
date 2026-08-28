@@ -319,9 +319,9 @@ function productionReport(p, opts = {}) {
   if (!r.entries.length) {
     box.append(el('div', { className: 'note bad' },
       el('b', { textContent: 'Nothing in that box was read as a table name. ' }),
-      'Ripple falls back to its own guess — names ending _PROD, _PRD or _PUBLISHED — which '
-      + 'is almost certainly not how your tables are named. Paste the list again, one table '
-      + 'per line.'));
+      'So nothing can be scanned yet. Ripple does not guess a rule — a list nobody '
+      + 'chose produces an answer that looks exactly like a real one. Paste the list '
+      + 'again, one table per line.'));
     if (r.notes.length) box.append(productionNotes(r));
     return box;
   }

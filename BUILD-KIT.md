@@ -864,6 +864,14 @@ A scan result, as JSON sent to the browser:
               These must never be thrown away: a real breaking impact shown
               as a clean result because the tables are not called _PROD is
               the exact failure this tool exists to prevent.
+              THE SAME SHAPE AS groups[], and for the same reason:
+              {prod, note, cut, rows[]} with the FULL rows, every finding,
+              file, line, code snippet and impact sentence. A list of bare
+              table names is not "kept" -- it tells somebody six tables are
+              hit and nothing whatever about how, which is a list nobody can
+              act on. note says why it is here, in words: "Last table in the
+              chain - not matched by your production naming rule". cut is
+              true only where the hop limit stopped the trail.
   other[]   = real usages in code that builds no table Ripple can name
   productionStopsLoading and feedsBroken are counted APART from
   productionTables. Three different kinds of impact, and one number covering
@@ -4214,6 +4222,18 @@ Order groups WORST FIRST — most impacts, then by name. On a real repository
 this list is hundreds of tables long, and alphabetical order means the first
 thing somebody reads is decided by the alphabet rather than by how much of it
 is broken.
+
+A QUERY RIPPLE HAS NEVER READ IS NOT A QUERY WITH NO IMPACT. Phase 2 fills
+parsed.runs_sql_from[] with every program that runs a .sql file which is not in
+this repository. THIS PHASE MUST CARRY THAT ONTO THE ANSWER, because it is the
+quietest hole of the lot: the program is perfectly readable, so nothing about it
+looks unreadable, and the query it runs was never seen by anybody. Put each one
+on the check-by-hand list with the file, the line and the name of the file it
+wanted, worded as "runs the SQL in <path>, which is not in this repository".
+Count it as a gap, so coverage stops reading complete and risk cannot read
+"none". Measured: a build that filed these under "mentions only" -- the
+reassuring case -- reported one file it could not read where the same repository
+really held three.
 
 THE HONEST HALF. After the walk, for every file the word search matched:
   If the name is inside an opaque statement, or appears as a QUOTED STRING

@@ -306,3 +306,46 @@ def test_the_scan_button_state_is_decided_in_exactly_one_place():
     line = js[where:js.index("\n", where)]
     assert "productionSet" in line, line
     assert "repoOk" in line, line
+
+
+def test_the_screen_never_claims_a_fallback_the_engine_refuses():
+    """The settings screen said Ripple would guess. It will not.
+
+    Found on 28 Aug 2026 while following BUILD-KIT.md by hand. Paste a list that
+    yields no table names and the screen printed:
+
+        "Nothing in that box was read as a table name. Ripple falls back to its
+        own guess - names ending _PROD, _PRD or _PUBLISHED"
+
+    while the yellow banner directly beneath it said "Nothing can be scanned
+    until this list is set", and /api/scan refuses outright with a 400. Two
+    sentences on one screen saying opposite things, and the wrong one is the one
+    that sounds reassuring.
+
+    That fallback was taken out of the engine because it was, in the kit's own
+    words, the most expensive thing this tool has ever done: on a warehouse that
+    names its published tables anything else it matches NOTHING, and matching
+    nothing reads as "no production table is affected", in green. The screen copy
+    was simply left behind.
+
+    So: config.py must still refuse an empty list, api.py must still block the
+    scan, and no screen may describe a fallback that no longer happens.
+    """
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    config = (WEB.parent / "ripple" / "config.py").read_text(encoding="utf-8")
+    api = (WEB.parent / "ripple" / "api.py").read_text(encoding="utf-8")
+
+    # The behaviour the copy has to agree with.
+    assert "def has_production" in config, "the empty-list gate has gone from config.py"
+    assert "if not settings.has_production():" in api, \
+        "api.py no longer blocks a scan when nobody has said which tables are published"
+
+    for claim in ("falls back to its own guess",
+                  "Ripple falls back",
+                  "falls back to the shipped default"):
+        assert claim not in js, (
+            f"web/app.js tells somebody {claim!r}. It does not fall back - "
+            f"has_production() returns False and /api/scan refuses with a 400. "
+            f"A screen describing a guess the engine will not make is the same "
+            f"failure as the guess itself: the reader plans around it."
+        )
