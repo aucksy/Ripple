@@ -329,6 +329,97 @@ def test_the_kits_picture_of_the_folder_names_every_file_it_will_contain():
         assert named in picture, f"the folder picture never names {named}"
 
 
+def test_every_file_in_the_picture_is_actually_commissioned_by_a_phase():
+    """Drawing a file is not the same as asking anybody to write it.
+
+    The test above checks one direction: every shipped engine file appears in
+    the picture. Nothing checked the other, and three files fell through it.
+    Measured by running the whole kit through fresh chat windows on 27 Aug 2026:
+    providers.py, ai.py and scanner/github.py were drawn in the picture, listed
+    in the contract card's FILE MAP, and described in the "what each file is
+    for" table -- and no phase anywhere carried a "Saves to:" line for any of
+    them. api.py imported ripple.ai, which nobody had been asked to write, so
+    the finished build died on `python run.py` with ModuleNotFoundError before
+    a single screen was drawn.
+
+    The front matter even said providers.py was "written out in full later in
+    this kit, under THE AI KEY BOX" -- a section that describes the settings
+    SCREEN, in a different window, and never says to save a Python file.
+    """
+    body = read(BUILD_KIT)
+
+    block = re.search(r"^C:\\ripple-build\\\n(.*?)^```", body, re.DOTALL | re.MULTILINE)
+    assert block, "BUILD-KIT.md no longer draws the finished folder"
+    # Hyphens matter: start-ripple.bat and getfonts.py both live in the picture.
+    NAME = r"([a-z_][a-z0-9_-]*\.(?:py|js|css|html|bat|txt))"
+    drawn = set(re.findall(r"(?<![\w.-])" + NAME + r"\b", block.group(1)))
+    drawn -= {"__init__.py"}          # the kit tells the PERSON to make these
+
+    # ONLY the places that actually ask somebody to produce a file. Naming a
+    # file in the FILE MAP or in the "what each file is for" table is not
+    # commissioning it -- that is exactly how three files went missing, so this
+    # must not be a search of the whole document.
+    commissioned: set[str] = set()
+
+    # 1. every "**Saves to:** ..." block, which runs to the next blank line
+    for chunk in re.findall(r"\*\*Saves to:\*\*(.*?)\n\n", body, re.DOTALL):
+        commissioned |= set(re.findall(NAME, chunk))
+    # 2. "**Optional, and only if...:** `ripple-build/ripple/ai.py`" style blocks
+    for chunk in re.findall(r"\*\*Optional[^\n]*\*\*(.*?)\n\n", body, re.DOTALL):
+        commissioned |= set(re.findall(NAME, chunk))
+    # 3. files the PERSON creates from the command line, e.g. start-ripple.bat
+    commissioned |= set(re.findall(r"type nul > [^\n]*?" + NAME, body))
+    # 4. files a pasted prompt asks the chat for, e.g. "Write me ripple-build/getfonts.py"
+    commissioned |= set(re.findall(r"Write me [^\n]*?" + NAME, body))
+
+    orphans = sorted(drawn - commissioned)
+
+    assert not orphans, (
+        f"BUILD-KIT.md draws {orphans} in the finished-folder picture, but no "
+        f"phase says 'Saves to:' for them. Somebody following the kit ends up "
+        f"without those files, and whichever window imports one of them "
+        f"produces a build that will not start."
+    )
+
+
+def test_the_contract_card_names_the_functions_that_cross_a_window():
+    """Twelve strangers cannot agree on a name nobody wrote down.
+
+    The card fixed every FILE that crosses a window boundary and every DATA
+    SHAPE, and not one function name. Measured on a full clean-room run,
+    27 Aug 2026: nine of nine guessed names were wrong -- api.py wanted
+    get_settings, write_summary, read_message_bytes, parse_rule and check_rule;
+    lineage.py wanted is_production and wildcard_match; sqlread.py wanted
+    rescue_sql. Ten broken links in one build, and re-running one window
+    changed WHICH ten, so it is not a list of typos anybody can fix once.
+
+    The same run showed the screens calling four addresses the server does not
+    serve, so the route names have to be on the card too.
+    """
+    body = read(BUILD_KIT)
+    for heading in ("FUNCTION MAP", "ROUTE MAP", "PAGE MAP"):
+        assert heading in body, (
+            f"the contract card no longer carries a {heading}. Without it every "
+            f"window guesses the names it calls in another window's file, and "
+            f"nothing fails until the whole build is assembled."
+        )
+    # The blank-screen one: the page and the script have to agree on these.
+    for element in ('id="view"', '"t-step1"', "'t-step' + n"):
+        assert element in body, (
+            f"the PAGE MAP no longer pins {element}. An element id that does not "
+            f"match produces no error at all - the screen simply draws nothing."
+        )
+    # The seams that actually broke, each one measured.
+    for name in ("rescue_text", "summarise", "read_upload", "wildcard_match",
+                 "parse_repo", "trace", "build_catalog", "has_production"):
+        assert name in body, f"the FUNCTION MAP no longer names {name}"
+    for route in ("/api/read-email", "/api/history", "/api/scan", "/api/health"):
+        assert route in body, f"the ROUTE MAP no longer names {route}"
+    assert "There is no /api/notification" in body, (
+        "the ROUTE MAP no longer rules out the addresses the screens invented"
+    )
+
+
 def test_the_folder_tool_leaves_nothing_out_silently():
     """Two tests and a hosting file are deliberately not copied into the folder.
     Dropping a test quietly is how a suite stops proving anything, so each one
@@ -416,7 +507,11 @@ TRAVELS_BADLY = {
         "git ls-files --error-unmatch",
     ],
     "reading the SQL as the right language": [
-        "ONE default, and set it to the warehouse",
+        # The kit used to say "set it to the warehouse this is being built for",
+        # which a chat window cannot answer, having seen nothing else. Measured:
+        # the phase text names bigquery only inside a war story about two wrong
+        # builds. Now the value itself is written out, so require the value.
+        'ONE default, and it is the literal string "bigquery"',
         "comes back CLEANER than",      # why a wrong dialect is the worst setting
         "two different languages",      # what happened when two builds disagreed
     ],

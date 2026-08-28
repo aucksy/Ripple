@@ -1,7 +1,7 @@
 # Building Ripple, one chat window at a time
 
 **What this is.** A kit for building a working piece of software using nothing but
-a chat assistant — Copilot chat on your own laptop — and about two evenings. You
+a chat assistant — Copilot chat on your own laptop — and three or four evenings. You
 do not need to know how to code. The chat writes the code; you save it into files
 and type one command to check it worked. This document is every prompt you will
 paste, in order, and every command you will type, in order.
@@ -17,8 +17,9 @@ properly, follows the renames from one table to the next, and reports what actua
 breaks, in which file, on which line.
 
 **Why twelve chat windows and not one.** A chat can hold only so much at once, and
-what these twelve windows produce is about six thousand lines. So it is built one
-file at a time, twelve windows, each producing one or two finished files. The
+what these twelve windows produce is about twenty-two thousand lines, measured.
+So it is built one file at a time, twelve windows, each producing one or two
+finished files. The
 catch is that every window
 is a stranger: it cannot see the other eleven and has no memory of them. That is
 the whole difficulty of this approach, and the contract card further down is the
@@ -31,7 +32,7 @@ all twelve build the same product.
 
 | File | When |
 |---|---|
-| **BUILD-KIT.md** | You are building Ripple. This document, start to finish, twelve windows, about two evenings. It ends with a working Ripple and a program you can double-click and hand to somebody. |
+| **BUILD-KIT.md** | You are building Ripple. This document, start to finish, twelve windows, three or four evenings. It ends with a working Ripple and a program you can double-click and hand to somebody. |
 | **BUILD-KIT-REPAIR.md** | You have finished building, and now want to change something. One prompt; it answers with which files to open and where they are saved. |
 
 **Everything you need is in this document.** There is nothing else to open and
@@ -281,7 +282,7 @@ https://github.com/tobymao/sqlglot/archive/refs/tags/v30.17.0.zip
 ```
 
 If it downloads, GitHub is reachable and this route works. If it does not, go to
-Route C.
+Route 2.
 
 **2. Unblock and unzip it.** Windows marks anything downloaded as coming from the
 internet, which can make Python refuse to load it:
@@ -461,18 +462,22 @@ files it produces:
 C:\ripple-build\
   run.py                   <- the one you type to start Ripple
   start-ripple.bat         <- so you can double-click it instead (near the end)
+  requirements.txt         <- the pinned versions, so a second machine matches
+  getfonts.py              <- the one-off font fetcher (Phase 9)
   ripple\
     __init__.py            <- empty, but it must exist
     paths.py  config.py  production.py  catalog.py
     notification.py  narrative.py  progress.py  store.py
     api.py  build_info.py
-    providers.py  ai.py      <- the optional AI reader (Phase 11a)
+    providers.py             <- which AI company a key belongs to (Phase 8)
+    ai.py                    <- the optional AI reader (Phase 8)
     scanner\
       __init__.py          <- empty, but it must exist
       repo.py  templating.py  sqlread.py  lineage.py
       rescue.py            <- reading SQL the parser choked on
       dialectcompat.py     <- one place that knows the parser's own key names
-      github.py            <- reading a repository over the network
+      github.py            <- reading a repository over the network (Phase 8,
+                              optional — skip it and skip its two routes)
   web\
     index.html  styles.css  app.js
   tests\
@@ -494,17 +499,16 @@ repository you have no local copy of.
 Two of them are optional, one is not, and the difference is which file imports
 which:
 
-* `providers.py` **is not optional.** `config.py` imports it on line one of its
-  imports, and `config.py` is read by everything. It is a table of which AI
-  company a pasted key belongs to — 140 lines, almost all of it data, and it
-  reaches nothing by itself. Build it even if you never build the reader.
+* `providers.py` **is not optional.** It is a table of which AI company a pasted
+  key belongs to — about 140 lines, almost all of it data, and it reaches
+  nothing by itself. The settings screen names the company as somebody types,
+  reading the prefixes out of `/api/health`, so it is needed even in a build
+  with no reader at all. **Phase 8 writes it, and Phase 8 gives its contents in
+  full.**
 * `ai.py` and `scanner/github.py` **are optional.** Only `api.py` imports them.
-  Leave them out and you must leave out the routes that use them — which the kit
-  already treats as optional, under "THE AI ROUTES, IF THIS BUILD HAS AN AI
-  READER AT ALL".
-
-What `providers.py` has to contain is written out in full later in this kit,
-under "THE AI KEY BOX".
+  **Phase 8 writes them too, and says exactly which routes to drop if you skip
+  them.** Leave them out and you must leave out those routes — never one
+  without the other.
 
 ---
 
@@ -579,25 +583,32 @@ save space. They are the product.
 
 ## The build order
 
-Two evenings if it goes well. Phases 4, 5 and 8 are the hard ones. If you get only
-as far as Phase 5, you already have the part that no other tool does.
+Three or four evenings, not two, and Phases 4, 5 and 8 are the hard ones. If you
+get only as far as Phase 5, you already have the part that no other tool does.
+
+**The line counts below were measured, not guessed**, by running every phase of
+this kit through a fresh chat and counting what came back. They are larger than
+they look on the page because this document asks for a great many rules and the
+contract card asks for a WHY comment on each — the two multiply. Phase 4 alone
+comes back at about 4,900 lines, which no chat will hand you in one reply, so
+expect to ask for it in parts. The contract card already tells the window how.
 
 | # | The window builds | The files it writes | Roughly |
 |---|---|---|---|
 | 0 | *The contract card — not a build. Paste it at the top of every window.* | — | — |
-| 1 | Settings, and the published-tables list | `ripple/paths.py`, `ripple/config.py`, `ripple/production.py`, `tests/test_production.py` | 400 lines |
-| 2 | Walking the repository folder | `ripple/scanner/repo.py`, `tests/test_repo.py` | 350 lines |
-| 3 | Templated SQL and scripting blocks | `ripple/scanner/templating.py`, `ripple/scanner/rescue.py`, `tests/test_templating.py` | 500 lines |
-| 4 | Reading SQL into statements and usages | `ripple/scanner/dialectcompat.py`, `ripple/scanner/sqlread.py`, `tests/test_sqlread.py` | 950 lines |
-| 5 | The catalogue, and following a column | `ripple/catalog.py`, `ripple/scanner/lineage.py`, `tests/test_lineage.py` | 650 lines |
-| 6 | Reading the notification email | `ripple/notification.py`, `tests/test_notification.py` | 450 lines |
-| 7 | Writing the summary and the reply | `ripple/narrative.py`, `tests/test_narrative.py` | 250 lines |
-| 8 | Progress, saved history, and the web service | `ripple/progress.py`, `ripple/store.py`, `ripple/build_info.py`, `ripple/api.py`, `run.py` | 900 lines |
-| 9 | The page and its styles | `web/index.html`, `web/styles.css` | 550 lines |
-| 10 | The screens: notification, review, repository | `web/app.js` — this window creates it | 600 lines |
-| 11 | The screens: findings, map, summary, reply, settings | `web/app.js` — appended to the same file | 1,000 lines |
+| 1 | Settings, and the published-tables list | `ripple/paths.py`, `ripple/config.py`, `ripple/production.py`, `tests/test_production.py` | 1,100 lines |
+| 2 | Walking the repository folder | `ripple/scanner/repo.py`, `tests/test_repo.py` | 1,450 lines |
+| 3 | Templated SQL and scripting blocks | `ripple/scanner/templating.py`, `ripple/scanner/rescue.py`, `tests/test_templating.py` | 1,550 lines |
+| 4 | Reading SQL into statements and usages | `ripple/scanner/dialectcompat.py`, `ripple/scanner/sqlread.py`, `tests/test_sqlread.py` | 4,900 lines — the big one |
+| 5 | The catalogue, and following a column | `ripple/catalog.py`, `ripple/scanner/lineage.py`, `tests/test_lineage.py` | 2,600 lines |
+| 6 | Reading the notification email | `ripple/notification.py`, `tests/test_notification.py` | 1,750 lines |
+| 7 | Writing the summary and the reply | `ripple/narrative.py`, `tests/test_narrative.py` | 1,950 lines |
+| 8 | Progress, saved history, and the web service | `ripple/progress.py`, `ripple/store.py`, `ripple/build_info.py`, `ripple/api.py`, `run.py` | 1,600 lines |
+| 9 | The page and its styles | `web/index.html`, `web/styles.css` | 1,450 lines |
+| 10 | The screens: notification, review, repository | `web/app.js` — this window creates it | 1,300 lines |
+| 11 | The screens: findings, map, summary, reply, settings | `web/app.js` — appended to the same file | 2,200 lines |
 | 12 | Starting it up, and the checklist that says it works | — | — |
-| 13 | Packaging it as a program you can hand to somebody | `build.py` | 250 lines |
+| 13 | Packaging it as a program you can hand to somebody | `build.py` | 500 lines |
 
 ### What each file is for
 
@@ -789,6 +800,34 @@ A finding, as JSON sent to the browser:
   {inter, from, attr, roots[], alias, logic, mode, impact, breaking,
    noLocalFix, file, lang, lines[{n, t, hit}],
    certain, viaStar, copiedBy, builtAsText, feed, inferredHops}
+  inter         the intermediate table THIS hop builds, as a person reads it.
+                "" when the hop builds no table anybody can name. In Python the
+                field is inter_table; one function maps the whole row to this
+                JSON, and that is where the renaming happens
+  from          the table this hop READS. "from" is a Python reserved word, so
+                the field is from_table in Python and becomes "from" in the same
+                mapping function. Never write from= anywhere
+  attr          the column's name AT THIS HOP, after every rename so far
+  roots[]       the original column names this hop descends from, so a screen
+                can say which of the changed attributes led here
+  alias         the name this hop gives the column onwards, "" if unchanged
+  logic         one of the fifteen Usage kinds above, as the word the screen
+                shows: filter, join_key, ranking, dedup_key, transform,
+                aggregation, sort, layout, pivoted, excluded, renamed, dropped,
+                retyped, select, star
+  mode          how the whole statement uses the column when several usages
+                land on one row, worked out from those usages by one function.
+                Same fifteen words, the most serious one winning
+  impact        one plain-English sentence a non-engineer can act on. Never a
+                code word, never a stack trace
+  breaking      true when the change actually stops this statement working
+  noLocalFix    true when nothing in THIS file can fix it — a ranking or a
+                dedup key. The only route to risk "high"
+  certain       false when anything about this hop was worked out rather than
+                read. Any uncertainty upstream makes every hop past it uncertain
+  lines[]       the few lines of code the screen shows. n is the 1-based line
+                number in the file, t is the text of that line, hit is true for
+                the one line the finding points at
   viaStar       this hop is carried by a SELECT *, so the table it builds has
                 no column list Ripple can read
   copiedBy      "" when the file really does say SELECT *; otherwise the word
@@ -835,6 +874,201 @@ A scan result, as JSON sent to the browser:
   tablesNotVisible and inferredFindings are two sizes of the same problem —
   "3 tables Ripple could not see inside" and "40 findings that depend on
   them" — so both are counted.
+
+FUNCTION MAP — the names that cross a window boundary
+Build the insides of your own file however you like. These names are the seams
+between windows, and a window that renames one silently breaks a window it
+cannot see. Nothing raises; the import simply fails, or worse, a different
+function is found. Use them exactly. If you need one that is not here, invent
+it and SAY SO in one line at the top of your reply so I can carry it across.
+
+IMPORT STYLE: absolute, everywhere. "from ripple.scanner.sqlread import
+parse_repo", never "from .sqlread import parse_repo".
+
+  ripple/paths.py
+    web_dir() -> Path          static files, running from source or packaged
+    data_dir() -> Path         where ripple.db is allowed to live
+
+  ripple/config.py
+    settings                   the module-level Settings instance. There is no
+                               get_settings() function; import the object.
+    class Settings
+      fields   repo_path repo_label repo_branch sql_dialect max_hops
+               code_extensions skip_dirs max_file_bytes max_upload_bytes
+               db_path production_text
+      methods  branch() production() set_production(text) has_production()
+               is_production_table(name) production_rule()
+
+  ripple/production.py
+    DEFAULT_PRODUCTION         suggestion text only, NEVER applied
+    parse(text) -> ProductionRule
+    class ProductionRule
+      methods  matches(name) names() patterns() is_empty() one_line() to_dict()
+
+  ripple/scanner/repo.py
+    class SourceFile           path abs_path text lang;  lines()
+    class RepoIndex            files skipped root held_online too_long
+                               in_skipped_dirs unknown_ext skipped_dir_names
+      methods  build(cfg, on_progress=None) search(name)
+               files_mentioning(names) get(path)
+    statements_for(f) -> list[(sql, line_offset)]     line_offset is 0-based
+    sql_file_refs(f) -> list[dict]
+    looks_like_unread_sql(f, blocks) -> bool
+    written_tables(f) -> list[str]
+    unopened_code_types(unknown_ext) -> dict
+    LANG_BY_EXT
+
+  ripple/scanner/templating.py
+    has_placeholders(text) -> bool     describe(text) -> str
+    placeholder_names(text) -> set     fill_placeholders(text) -> str
+    has_blocks(text) -> bool           unwrap_blocks(text) -> str
+    renderings(text) -> list[str]      every way the file runs
+
+  ripple/scanner/rescue.py
+    rescue_text(text) -> str           the one entry point. NOT rescue_sql.
+    export_targets(text) -> list[(line, uri)]
+
+  ripple/scanner/dialectcompat.py     NOTHING ELSE MAY READ A PARSE-TREE KEY
+    RENAME_NODE   SET_OPERATION
+    from_of(select)        star_except(star)     star_replace(star)
+    is_unpivot(pivot)      pivot_fields(pivot)   pivot_columns(pivot)
+    is_temporary(stmt)     merge_whens(merge)    set_branches(node)
+    output_names(query)
+
+  ripple/scanner/sqlread.py
+    short_name(t) dataset_of(t) canonical(t) is_wildcard(t)
+    wildcard_match(pattern, name) -> "shard" | "family" | "both" | ""
+    same_table(a, b) -> bool
+    reads_metadata(stmt) -> bool
+    class Usage        the DATA SHAPES entry above;  label
+    class Statement    the DATA SHAPES entry above
+    class ParsedRepo   the DATA SHAPES entry above
+      methods  reading(table) wildcards_covering(t) wildcards_covering_how(t)
+               ambiguous_names() datasets_for(n) spellings_for(n)
+               display(table) rebuilt_in(t) statements_in(path)
+    parse_repo(index, cfg=None, on_progress=None) -> ParsedRepo
+    suffix_verdict(stmt, table) -> "reads" | "maybe" | "excluded"
+    output_names(stmt, column, limit=6) -> list[str]
+    usages_of(stmt, column, table="") -> list[Usage]
+    mode_of(usages) -> str
+    locate(f, column, kind, line_offset=0, line_end=None) -> int
+    snippet(f, hit_line, note, before=2, after=2) -> list[dict]
+
+  ripple/catalog.py
+    class Catalog      tables defined_in gaps
+      methods  has_table(t) columns(t) has_column(t, c) to_dict()
+    build_catalog(parsed) -> Catalog
+
+  ripple/scanner/lineage.py
+    trace(index, parsed, upstream, change_type="unknown", cfg=None,
+          on_progress=None) -> ScanResult
+    class ScanResult   to_dict() produces exactly the scan-result JSON above
+
+  ripple/notification.py
+    class Notification  subject body from_name from_email attachments
+                        source_kind warnings;  text()
+    read_upload(filename, raw) -> Notification
+    read_pasted(text) -> Notification
+    extract_by_rules(n, catalogue) -> dict
+
+  ripple/narrative.py
+    summarise(scan, vals) -> dict      NOT write_summary
+    draft_reply(scan, vals, summary) -> dict
+    days_until(iso) -> int | None
+
+  ripple/progress.py
+    start(job, label="")  step(done, total, label="")  finish()
+    snapshot() -> dict    reader(job)
+
+  ripple/store.py
+    save(vals, scan, summary, mode, cfg=None) -> int
+    listing(cfg=None, limit=50) -> list[dict]
+    get(analysis_id, cfg=None) -> dict | None
+    set_status(analysis_id, status, cfg=None) -> bool
+    STATUSES = ("New", "In progress", "Verified", "Closed")
+
+  ripple/build_info.py
+    VERSION            build_info() -> dict
+
+  ripple/providers.py                built even if you never build the reader
+    detect(key) -> dict | None        name_of_unsupported(key) -> str
+    by_id(provider_id) -> dict | None is_chat_model(model_id) -> bool
+    rank_models(provider, models) -> list[str]
+
+  ripple/ai.py                                      OPTIONAL - reaches network
+    read_email(text, cfg=None) -> dict
+    write_summary(payload, cfg=None) -> dict
+    write_reply(payload, cfg=None) -> dict
+    check_key(cfg=None) -> dict       list_models(cfg) -> list[str]
+    class AIUnavailable(Exception)
+
+  ripple/scanner/github.py                          OPTIONAL - reaches network
+    parse_repo_ref(text, branch="") -> RepoRef
+    describe(ref, token, cfg=None) -> dict
+    download_archive(ref, token, cfg=None) -> bytes
+    index_from_archive(data, cfg=None) -> (RepoIndex, dict)
+    connect(repo_text, token, branch="", cfg=None) -> dict
+
+ROUTE MAP — every address, and nothing else
+The window that writes api.py and the two that write the screens cannot see
+each other. A screen calling an address the server does not serve is a button
+that does nothing, and no test catches it.
+
+  GET   /                       the page
+  GET   /api/health             settings, catalogue summary, build, ai block
+  GET   /api/progress           what the engine is doing this second
+  GET   /api/catalog            tables and columns learned from the repository
+  POST  /api/reindex            read the folder again
+  GET   /api/production         the published-table rule in force
+  POST  /api/production         set it                    {text}
+  POST  /api/production/read    read a pasted list without setting it  {text}
+  POST  /api/repo/folder        point at a local folder   {path}
+  POST  /api/repo/connect       point at a GitHub repository      (optional)
+  POST  /api/repo/disconnect    go back to the local folder       (optional)
+  POST  /api/read-email         upload or paste the notification. multipart
+                                field name "file", or {text}
+  POST  /api/scan               run the analysis -> the scan result JSON
+  POST  /api/summary            the summary and the drafted reply
+  POST  /api/history            save an analysis
+  GET   /api/history            list saved analyses
+  GET   /api/history/{id}       open one
+  GET   /api/file               one file's text, for the code snippet
+  POST  /api/ai/check           really call the selected model     (optional)
+  POST  /api/ai/connect         {key, model}                       (optional)
+  POST  /api/ai/forget          forget the key                     (optional)
+
+There is no /api/notification, no /api/analyses, no /api/ai/key and no
+/api/ai/providers. The provider prefixes come down inside /api/health.
+
+PAGE MAP — the element ids and templates the screens look up
+Phase 9 writes index.html. Phases 10 and 11 write the JavaScript that reaches
+into it. They are three different windows, and an id that does not match
+produces NO ERROR AT ALL: getElementById returns null, the screen draws
+nothing, and the console stays clean. Measured: a build where the page called
+its templates t-step1 and the script asked for tpl-step-1 came up with a
+perfect sidebar and a completely blank main pane on every screen.
+
+  id="view"          the one element every screen is drawn into
+  id="steps"         the numbered rail down the left
+  id="status"        the small line of dots at the bottom of the rail
+  id="hTitle"        the page heading, rewritten per step
+  id="hSub"          the line under it
+  id="hRight"        the right-hand side of the header strip
+  id="navHistory"    the Past analyses button
+  id="navSettings"   the Settings and checks button
+  id="drop"          the area a notification file is dropped on
+  id="file"          the hidden <input type="file"> behind it
+
+  id="t-step1" ... "t-step7"    ONE <template> PER STEP, named exactly like
+                                that. Not tpl-step-1, not step1, not
+                                template-step-1. The script clones them by
+                                't-step' + n
+
+Everything else inside a template is found by a data-x attribute, not an id,
+so the two halves only have to agree on this list. Reach for an element with
+  const x = (root, name) => root.querySelector(`[data-x="${name}"]`);
+and give every field the page owns a data-x name, so Phase 9 and Phase 10 are
+naming the same things in the same way.
 
 HOUSE STYLE
 - Comments explain WHY, not what. A comment restating the code is noise; a
@@ -985,9 +1219,11 @@ locked-down machine differ only by environment. Fields:
                        Defaulting to "main" put "Branch main" on the Repository
                        step over every folder on earth: specific,
                        checkable-looking, and true of nothing.
-  sql_dialect          ONE default, and set it to the warehouse this is being
-                       built for. Do not leave it generic and do not let any
-                       second copy of Ripple pick its own.
+  sql_dialect          ONE default, and it is the literal string "bigquery".
+                       Write it out: sql_dialect defaults to "bigquery", read
+                       from RIPPLE_SQL_DIALECT if that is set. Do not leave it
+                       generic, do not leave it blank, and do not let any second
+                       copy of Ripple pick its own.
 
                        This is not a cosmetic setting. Read as generic, a
                        BigQuery-ism the parser does not recognise becomes an
@@ -1001,7 +1237,32 @@ locked-down machine differ only by environment. Fields:
                        same folder was read as two different languages
                        depending which one somebody opened. Neither build's
                        tests noticed, because each only ever asked itself.
-  max_hops             default 4 — how many renames deep to follow a column
+  max_hops             DEFAULT ZERO, and zero means follow until the code runs
+                       out. Not "follow nothing" — read that way round and
+                       Ripple stops at the first hop and reports every chain as
+                       ending immediately.
+
+                       A counter here reports itself as a fact about the
+                       warehouse. "The chain ends here and does not reach
+                       production" is a sentence about a setting wearing the
+                       clothes of a sentence about somebody's data, and the two
+                       are indistinguishable on screen. Measured on a 36-hop
+                       chain: ten renames cut the trail short, twenty cut it
+                       short, and twenty-five cut it short as well — three whole
+                       scans, three identical empty answers, and no number a
+                       person could choose that produced one.
+
+                       Following to the end is safe because the walk already
+                       carries a set of every (table, column) pair it has been
+                       through, so a ring of tables closes on itself whatever
+                       any counter says. Measured on a real warehouse of 7,304
+                       files: 10.6 seconds to the end against 10.5 at ten hops,
+                       finding the same tables plus the ones past the limit.
+
+                       A limit somebody sets ON PURPOSE is still obeyed, and a
+                       trail stopped by it is reported as stopped rather than as
+                       a chain that ended. Zero is a REAL request, not a missing
+                       one, so test it with "is not None", never "if value".
   code_extensions      .sql .sqlx .ddl .hql .py .scala .java .sh .xml .yaml
                        .yml  —  .sqlx is Dataform, Google's own way of writing a
                        BigQuery pipeline. Leave it out and a whole Dataform
@@ -1154,9 +1415,34 @@ that is worth knowing before a result from it is believed.
 Do the file scan for missing names in ONE pass over all files, not one pass
 per name: a real repository is tens of megabytes.
 
-An empty list must fall back to the shipped default (_PROD, _PRD,
-_PUBLISHED). An empty rule would mean "no table is ever production", which
-would report every repository on earth as clean.
+AN EMPTY LIST NEVER FALLS BACK TO ANYTHING. This is the single most expensive
+mistake this tool has ever made, so read it twice.
+
+A published table is one people outside the team read. It is the thing every
+finding is measured against, and it is the only setting Ripple cannot work out
+for itself. It used to ship with a default — _PROD, _PRD, _PUBLISHED. On a
+warehouse that names its published tables any other way, that default matches
+NOTHING. And matching nothing does not read as "I do not know which tables are
+yours". It reads as "no production table is affected", in green, over a change
+that breaks all of them. A wrong list and a right list produce answers that look
+identical.
+
+So there is no default, anywhere, and empty means NOT GIVEN rather than
+"nothing is published":
+
+* `set_production` keeps an empty box empty. It does not fall back.
+* `has_production()` is the one question every entry point asks, and it is
+  simply "did anybody give me a list".
+* The scan route REFUSES, with a message naming what to go and do, rather than
+  answering against a rule nobody chose.
+* The screen blocks the scan button and says why on the same screen. A button
+  that runs and comes back with an error is a worse way of being told than a
+  button that says what is missing before it is pressed.
+
+DEFAULT_PRODUCTION (_PROD, _PRD, _PUBLISHED) still exists, as SUGGESTION TEXT
+shown beside the empty box so somebody can see the shape of an answer. It is
+never applied. Any wording on screen that says Ripple "falls back to" it is
+wrong and must not be written.
 
 --- tests/test_production.py
 
@@ -1320,7 +1606,7 @@ Rules that matter, each for a reason:
    passed over. The point is not to read them. It is that the NEXT unlisted
    extension is visible instead of silent.
 
-9. WHICH UNOPENED TYPES REACH THE ANSWER. unknown_ext holds every extension
+8. WHICH UNOPENED TYPES REACH THE ANSWER. unknown_ext holds every extension
    passed over and the repository screen lists all of them. The ANSWER carries
    only the ones that could plausibly hold a pipeline, decided by one function
    that lives beside the walk:
@@ -1356,7 +1642,7 @@ Rules that matter, each for a reason:
    LICENSE would otherwise be tallied under a blank one, and the card beside
    the answer would name a file type that is not a file type.
 
-8. A QUERY KEPT AS A TEMPLATE IS NAMED TWICE: load_final.sql.j2. Python calls
+9. A QUERY KEPT AS A TEMPLATE IS NAMED TWICE: load_final.sql.j2. Python calls
    that file's suffix ".j2", so nothing opens it — and the "runs the SQL in X,
    which is not in this repository" warning cannot fire either, because that
    only matches names ending ".sql". A double miss, and the double is what
@@ -4694,8 +4980,17 @@ rewritten.
 # PHASE 8 — progress, saved history, and the web service
 
 **Saves to:** `ripple-build/ripple/progress.py`, `ripple-build/ripple/store.py`,
-`ripple-build/ripple/build_info.py`, `ripple-build/ripple/api.py`, and
-`ripple-build/run.py` at the project root
+`ripple-build/ripple/build_info.py`, `ripple-build/ripple/providers.py`,
+`ripple-build/ripple/api.py`, `ripple-build/requirements.txt`, and
+`ripple-build/run.py` at the project root.
+
+**Optional, and only if you want the AI reader:** `ripple-build/ripple/ai.py`
+and `ripple-build/ripple/scanner/github.py`. Both reach the network. If you
+skip them, skip their routes too — the prompt below says exactly which — and
+`/api/health` reports `ai.available` false so the screen can say so honestly.
+`providers.py` is NOT optional: it is a table of which company a key belongs
+to, it reaches nothing by itself, and the settings screen reads the key
+prefixes out of `/api/health` whether or not a reader was built
 
 ````text
 [PASTE THE CONTRACT CARD FIRST]
@@ -4891,10 +5186,55 @@ POST /api/repo/folder           {path} — read THIS folder on this machine from
                                 nothing on screen could show that had happened.
 POST /api/read-email  (file upload — .msg, .eml or a plain text file)
 
+RIPPLE/PROVIDERS.PY, WHICH IS NOT OPTIONAL. A small table of which AI company a
+pasted key belongs to, worked out from the key itself. It reaches nothing and it
+is needed even in a build with no reader, because the settings screen names the
+company as somebody types, and it reads that list out of /api/health.
+
+  Three providers, one box, not three. Asking which company is one more thing to
+  get wrong, and a key sent to the wrong one comes back rejected, which reads as
+  "your key is bad" when it is not.
+
+    openai   label "OpenAI"         prefixes ("sk-proj-", "sk-")
+             endpoint https://api.openai.com/v1
+    gemini   label "Google Gemini"  prefixes ("AIza",)
+             endpoint https://generativelanguage.googleapis.com/v1beta/openai
+    groq     label "Groq"           prefixes ("gsk_",)
+             endpoint https://api.groq.com/openai/v1
+
+  Each entry also carries where to get a key, for the screen to link to.
+
+  detect(key) matches the LONGEST prefix, because an Anthropic key begins "sk-"
+  exactly as an OpenAI one does. Keep a second list of shapes you recognise but
+  cannot use — "sk-ant-" is Anthropic — so name_of_unsupported(key) lets the
+  screen say "that is an Anthropic key" instead of "rejected".
+
+  is_chat_model(id) filters out what cannot hold a conversation: embeddings,
+  audio, image, moderation, rerank. rank_models(provider, models) puts the
+  preferred ones first and KEEPS every other one — hiding a model somebody is
+  paying for because you have not heard of it is the worse mistake.
+
+  DO NOT WRITE A LIST OF MODEL NAMES INTO THE CODE. It is wrong within months.
+
 THE AI ROUTES, IF THIS BUILD HAS AN AI READER AT ALL. The settings screen in
 Phase 11 has a key box on it, and a box with no route behind it is a screen that
 looks finished and does nothing. Either build these three routes here, or take
 the key box out of Phase 11 — one or the other, never one of the two.
+
+If you build them you must ALSO write `ripple-build/ripple/ai.py`, because these
+routes import it and nothing else in this kit produces it. It offers
+read_email(text, cfg), write_summary(payload, cfg), write_reply(payload, cfg),
+check_key(cfg), list_models(cfg) and an AIUnavailable exception. All three
+providers speak the same OpenAI-shaped POST /chat/completions, so there is one
+code path and only the address, the key and the model change. Ask the provider
+GET /models with the key — that proves the key and produces the real list in the
+same call. If a provider refuses the optional response_format field, send the
+request again without it rather than losing the whole call; the prompt asks for
+JSON in words as well.
+
+If you are NOT building the reader: omit the three routes, omit ai.py, still
+build providers.py, and report `ai.available` false in /api/health so the screen
+can say "no key set — rules alone" rather than guess.
 
 POST /api/ai/check      really call the model that is really selected, and say
                         which one. A key that is present is not a key that
