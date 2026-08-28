@@ -651,6 +651,31 @@ WHAT IT DECIDES: The empty page the screens are drawn into, and the seven <templ
 IT NEEDS      : loads styles.css, app.js and the fonts
 NEEDED BY     : nothing
 CALLABLE      : not Python
+### ripple/paths.py   (built from the kit only)
+WHAT IT DECIDES: Where things are, whether Ripple is running from source or packaged.
+IT NEEDS      : nothing else in Ripple
+NEEDED BY     : ripple/api.py, ripple/store.py, run.py
+CALLABLE      : web_dir(), data_dir()
+### getfonts.py   (built from the kit only)
+WHAT IT DECIDES: Fetches the two typefaces, once. Run it and never again.
+IT NEEDS      : nothing else in Ripple
+NEEDED BY     : nothing - it is run by hand, once
+CALLABLE      : run as a program, not imported
+### requirements.txt   (built from the kit only)
+WHAT IT DECIDES: The pinned versions, so a second machine gets the same Ripple.
+IT NEEDS      : nothing else in Ripple
+NEEDED BY     : start-ripple.bat names it when nothing is installed yet
+CALLABLE      : not Python
+### start-ripple.bat   (built from the kit only)
+WHAT IT DECIDES: Starting Ripple with a double-click, and finding the right Python.
+IT NEEDS      : run.py
+NEEDED BY     : nothing - it is the way in
+CALLABLE      : not Python
+### build.py   (built from the kit only)
+WHAT IT DECIDES: Packaging the folder into a program you can hand to somebody.
+IT NEEDS      : the whole project folder
+NEEDED BY     : nothing - it is run by hand, last
+CALLABLE      : run as a program, not imported
 
 WHAT PEOPLE USUALLY WANT CHANGED, AND WHERE IT LIVES
 Use this to check your answer, not instead of the catalogue -- a complaint that
@@ -681,6 +706,14 @@ is not on this list is ordinary, and the catalogue is what you reason from.
 | Saved analyses — what is kept, what the table shows | `ripple/store.py` |
 | A new web address, or the shape of what one returns | `ripple/api.py` |
 | The AI reader, or which model it uses | `ripple/ai.py` |
+| Every screen is blank, the sidebar draws, and there is nothing in the browser console | `web/app.js` |
+| Ripple will not start: ModuleNotFoundError naming one of its own files | `ripple/api.py` |
+| A button that does nothing at all, with no error anywhere | `ripple/api.py` |
+| The first screen is empty and /api/health answers 500 | `ripple/progress.py` |
+| The typefaces never arrived, or the screens are in the wrong font | `web/styles.css` |
+| It says nothing can be scanned until the published list is set | `ripple/production.py` |
+| The trail stops after a few renames and says the chain ended | `ripple/config.py` |
+| A file it could not read is not on the check-by-hand list | `ripple/scanner/lineage.py` |
 
 TWO THAT ARE ALWAYS MORE THAN ONE FILE
 * A blank where a number should be. The screen is asking for something the
@@ -708,13 +741,45 @@ Open each one, copy all of it, and paste it in. When it gives files back:
 python -m pytest tests -q
 ```
 
-On the locked-down build:
+**You are looking for a last line like this**, and the numbers will differ:
+
+```
+694 passed in 23.42s
+```
+
+On the locked-down build the command is different, and so is the answer:
 
 ```
 python -m unittest discover tests -v
 ```
 
-`passed` means done. Anything else means not done, whatever you were told.
+**That one does not print the word "passed" at all.** It scrolls a long list and
+ends with these two lines:
+
+```
+Ran 694 tests in 23.421s
+
+OK
+```
+
+**`OK` on its own line is what done looks like there.** If you see `FAILED`
+followed by a count, it is not done — whatever you were told in the chat.
+
+### Then go and look, with your own eyes
+
+**A green test does not mean your change worked.** It means nothing else broke.
+The thing you complained about is on a screen, and only the screen can tell you.
+
+1. **Stop Ripple properly.** Close the black window it is running in. On the
+   packaged build, use the Stop button on the screen — closing the browser tab
+   leaves it running, and you will be looking at the old copy without knowing.
+2. **Start it again.** Double-click `start-ripple.bat`, or run `python run.py`.
+   Ripple loads its code once, when it starts, so a file you saved five minutes
+   ago is not in the copy that is still running.
+3. **Do the exact thing you complained about**, and look at it.
+
+That is the only proof. Somebody has spent an evening reporting a fix that
+worked perfectly, in a copy of Ripple that was never restarted.
 
 ---
 

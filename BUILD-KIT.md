@@ -37,10 +37,62 @@ all twelve build the same product.
 
 **Everything you need is in this document.** There is nothing else to open and
 nothing else to get hold of. Every phase ends with one command, and that command
-tells you either that the phase passed or exactly what is wrong. Two of the
-twelve phases are the ones that usually go wrong, so they have ready-written
-prompts you can paste back into the chat — see "When Phase 4 goes wrong" and
-"When Phase 8 goes wrong", further down.
+tells you either that the phase passed or exactly what is wrong.
+
+---
+
+## What is in here, and where
+
+It is a long document. This is so you can find your way back to a page at ten
+o'clock at night with a red error on the screen. **Use Ctrl+F and search for the
+words in bold** — they are exactly as they are written further down.
+
+**Read these before you touch anything** — about fifteen minutes.
+
+| If you want to know | Search for |
+|---|---|
+| What this is, and what it will and will not do for you | **What this document is** |
+| What the chat can and cannot do, so you stop expecting the wrong things | **What the chat can and cannot do** |
+| Whether this is a server, and what your IT team would ask | **What you are actually running** |
+
+**Do these once, on the machine.** About twenty minutes, before any chat window.
+
+| If you want to | Search for |
+|---|---|
+| Get Python and the pieces Ripple needs installed | **Getting ready** |
+| Get past a laptop that blocks the install completely | **If the install step will not work at all** |
+| Make the folders everything goes into | **Making the folders** |
+
+**Then the building, twelve chat windows.**
+
+| If you want to | Search for |
+|---|---|
+| Know what order to do them in and how long each takes | **The build order** |
+| Copy the page that goes at the top of every window | **PHASE 0** |
+| Save a file the chat gave you, without Notepad ruining the name | **Saving a file the chat gives you** |
+| Save a file that arrived in several parts | **When one file arrives in several parts** |
+| Check a phase worked | **Checking that a phase worked** |
+
+**When something goes wrong.** These are the pages to come back to.
+
+| What happened | Search for |
+|---|---|
+| Phase 4 came back wrong, or trailed off | **When Phase 4 goes wrong** |
+| Phase 8 came back wrong | **When Phase 8 goes wrong** |
+| The chat is arguing, inventing, or writing something you did not ask for | **When the chat goes wrong** |
+| The command window is saying something you do not understand | **When your own machine goes wrong** |
+
+**At the end.**
+
+| If you want to | Search for |
+|---|---|
+| Prove the whole thing works, twelve things to look at on screen | **PHASE 12** |
+| Start it with a double-click instead of a command | **Starting it with a double-click** |
+| Turn it into a program you can hand to somebody | **PHASE 13** |
+
+Two of the twelve phases are the ones that usually go wrong — 4 and 8 — so they
+have ready-written sentences you can paste straight back into the chat. They are
+in the table above.
 
 ---
 
@@ -80,11 +132,17 @@ The things that matter, though, are decided here and not by the chat.
 
 Ripple reads SQL using a free tool called `sqlglot`. It is 183 files and 2.7
 megabytes — far too big to paste into a chat, and no chat could write it. It has
-to be installed onto the machine instead. That is Phase 0, and it is the only
-one of the twelve steps that is not a chat window.
+to be installed onto the machine instead. That happens in **Getting ready**,
+below, before any of the numbered phases start. It is the only part of this
+whole document that is not a chat window.
 
-Without it, Ripple is only a word search. So Phase 0 is not optional, and it is
-not a step anybody skipped. If your laptop blocks the install, the section "If
+**Getting ready is not a numbered phase.** Nothing here is called Phase 0 except
+the contract card, which is a page you copy. If you are ever asking yourself
+"have I done Phase 0?", the answer is about the card, not about this install.
+
+Without the SQL reader, Ripple is only a word search. So this step is not
+optional and it is not one anybody skipped. If your laptop blocks the install,
+the section "If
 the install step will not work at all", further down, gives three other ways to
 get it on.
 
@@ -129,7 +187,11 @@ laptop holding the analyses you chose to save. Both of those stay on the machine
 
 ---
 
-## Before you start — getting the machine ready
+## Getting ready — the machine, before any phase starts
+
+**This has no number.** It is not Phase 0 and it is not Phase 1. It is the
+twenty minutes of setting up that happens before the numbered phases begin.
+
 
 A one-off, about twenty minutes. Five steps, in order.
 
@@ -199,12 +261,23 @@ particular versions behave.
 **If one package alone is refused with a 403** while everything around it downloads
 perfectly, the mirror is not broken. A company mirror routinely holds back a
 version published in the last few days, because nothing has scanned it for security
-yet. Pin that one package a few versions back and run the whole command again:
-whatever asked for it almost always wants a minimum version rather than an exact
-one, so an older release satisfies it just as well. A refusal is not a partial
-install either — pip downloads everything before it installs anything, so one
-refusal near the end means nothing was installed, however much of it you watched
-come down.
+yet. The answer is an older version of that one package, and you do not have to
+work out which. **Open a chat window and paste this, with the red text
+underneath it:**
+
+````text
+This is what my company's package mirror said when I ran the install line
+below. Give me the same line back with an earlier version of ONLY the package
+it refused, and nothing else changed. Then tell me, in one line, what to try if
+that one is refused too.
+````
+
+Copy the line it gives you and run the whole thing again.
+
+**A refusal is not a partial install.** pip downloads everything before it
+installs anything, so one refusal near the end means nothing was installed,
+however much of it you watched come down. You have not made a mess; you can just
+run the corrected line.
 
 **Step 5 — check they all arrived.**
 
@@ -252,15 +325,48 @@ nothing whatsoever was wrong.
 
 Everything above assumes `pip` can reach something. When it cannot — no mirror,
 no route out, and IT cannot help today — one package still has to arrive, and
-only one: **`sqlglot`**. Everything else on that install line can be worked
-around; the SQL parser cannot, and a word search calling itself an impact
-analysis is the exact thing Ripple exists to replace.
+only one: **`sqlglot`**, the SQL reader. Without it Ripple is a word search, and
+a word search calling itself an impact analysis is the exact thing Ripple exists
+to replace.
 
-It is pure Python with no dependencies of its own, so it does not have to be
-*installed*. A copy of the folder sitting beside your code is enough.
+**Be clear about what these routes do and do not rescue.** They get the SQL
+reader on and nothing else. The other eight pieces on that install line are what
+put the screens in front of you, and there is no way to carry those across by
+hand. If `pip` can reach nothing at all, get the reader on with a route below so
+the hard part is proven, and then you still need one of the requests at the end
+of this section before Ripple has screens.
 
-**Whichever route you take, this is the proof.** Run it from `ripple-build`,
-and nowhere else:
+**TWO BLACK WINDOWS, AND THIS IS WHERE THE SECOND ONE ARRIVES.** Up to now
+everything went into the Command Prompt from Step 1. Some of the boxes below are
+marked **powershell** above them, and those will NOT run in that window — they
+are a different program with different words. Open it now and keep both:
+
+> Press the Windows key, type `powershell`, press Enter. A blue window opens.
+
+From here on: **a box marked `powershell` goes in the blue window. Every other
+box goes in the black Command Prompt.** If a command answers with
+`is not recognized as the name of a cmdlet` you are in the blue one and it wanted
+the black one. If it answers `is not recognized as an internal or external
+command` it is the other way round. Neither means anything is broken.
+
+**MAKE THE FOLDER FIRST.** Every route below copies something into
+`C:\ripple-build`, and it does not exist yet. In the black window:
+
+```
+mkdir C:\ripple-build
+```
+
+```
+cd /d C:\ripple-build
+```
+
+The second one moves you into it. `cd` means change directory, and the `/d`
+matters if your window opened on a different drive. Everything below is typed
+while you are standing in that folder — that is what "run it from ripple-build"
+means everywhere in this document.
+
+**Whichever route you take, this is the proof.** Type it in the black window,
+standing in `C:\ripple-build`:
 
 ```
 python -c "import sqlglot; print(sqlglot.__version__)"
@@ -309,7 +415,22 @@ rather than debugging it later. The file that records the version number is not 
 the source code — it is created when the package is built, and the zip is the code
 before that happens. Without it, `import sqlglot` prints a red error line and
 `sqlglot.__version__` does not exist, **even though parsing works perfectly**. The
-fix is one small file. Create `ripple-build\sqlglot\_version.py` containing exactly:
+fix is one small file, and this is the first file in the whole kit you make by
+hand. **Do not use Notepad's File then Save As.** It silently adds `.txt` to
+whatever you name it, so you get `_version.py.txt`, Python cannot see it, and
+the proof below keeps failing for a reason nothing tells you. Make the empty
+file from the black window first, then open that file — the name is then already
+right and Notepad cannot change it:
+
+```
+type nul > C:\ripple-build\sqlglot\_version.py
+```
+
+```
+notepad C:\ripple-build\sqlglot\_version.py
+```
+
+Notepad opens, empty. Paste these two lines into it, press Ctrl+S, close it:
 
 ```python
 __version__ = version = '30.17.0'
@@ -496,19 +617,20 @@ kit treats as optional. Ripple answers every question without them: they add a
 reader that turns a pasted email into a filled-in form, and a way to point at a
 repository you have no local copy of.
 
-Two of them are optional, one is not, and the difference is which file imports
-which:
+Two of them you can leave out. One you cannot. **Phase 8 writes all three, and
+tells the chat what to do about the two you might skip, so there is nothing here
+for you to decide or remember.**
 
-* `providers.py` **is not optional.** It is a table of which AI company a pasted
-  key belongs to — about 140 lines, almost all of it data, and it reaches
-  nothing by itself. The settings screen names the company as somebody types,
-  reading the prefixes out of `/api/health`, so it is needed even in a build
-  with no reader at all. **Phase 8 writes it, and Phase 8 gives its contents in
-  full.**
-* `ai.py` and `scanner/github.py` **are optional.** Only `api.py` imports them.
-  **Phase 8 writes them too, and says exactly which routes to drop if you skip
-  them.** Leave them out and you must leave out those routes — never one
-  without the other.
+* `providers.py` — **always built.** It is a small list of the three AI
+  companies and what their keys look like, so the settings screen can tell you
+  whose key you have pasted before it sends it anywhere. It is a list, not a
+  feature: it never goes near the internet. Build it even if you never turn the
+  AI on.
+* `ai.py` and `scanner/github.py` — **the only two things in Ripple that reach
+  the internet.** One turns a pasted email into a filled-in form; the other
+  reads a repository you have no copy of. Ripple answers every question without
+  them. If your laptop will not allow either, skip them and everything else
+  still works.
 
 ---
 
@@ -543,12 +665,49 @@ close the window. That is one file done.
 indentation. In Python the spacing at the start of a line is not decoration — it is
 what tells the language which lines belong inside which. Paste it exactly as given.
 
+### When one file arrives in several parts
+
+This happens, and it is the fiddliest twenty minutes of the whole evening, so it
+is worth reading before you meet it. Some files are long enough that the chat
+cannot give you the whole thing in one reply. It will say so, and hand you
+"PART 1 OF 4" and so on. **Phase 4 always does this. Nothing else usually does.**
+
+**All the parts go into ONE file, in order, one after another.** Not four files.
+Not four folders. One file, exactly as if the chat had given it to you whole.
+
+Here is the whole method, with your hands:
+
+1. Make the empty file and open it, the same two commands as always:
+   `type nul > C:\ripple-build\ripple\scanner\sqlread.py`
+   then `notepad C:\ripple-build\ripple\scanner\sqlread.py`
+2. Copy PART 1 with the copy button. Paste it into Notepad.
+3. **Do not close Notepad. Do not press Ctrl+S yet.** Leave it open on screen.
+4. Ask the chat for the next part. When it arrives, click into Notepad, press
+   **Ctrl+End** — that jumps to the very bottom of what is already there — press
+   Enter once, and paste the next part underneath.
+5. Repeat until the last part is in.
+6. **Now** press Ctrl+S, and close it.
+
+**Count the parts before you save.** Ask the chat at the start how many there
+will be, and check you have that many. A file missing its last part fails in a
+way that reads exactly like bad code, and you will look for the mistake in the
+wrong place.
+
+**If a part arrives that starts at the top of the file again**, tell the chat:
+*"do not start again from the top — carry on from the last complete line you
+gave me, and tell me which line that was."* Pasting a restarted part underneath
+gives you the same code twice and nothing will run.
+
 ---
 
 ## Checking that a phase worked
 
 Every phase ends with one command, run from `C:\ripple-build`. You are reading it
 for one word.
+
+**Each phase prints its own command at the end of the chat's reply. Use that one.**
+Here is what one of them looks like — this is Phase 1's, and it will not work
+after any other phase, because every phase checks a different file:
 
 ```
 python -m pytest tests/test_production.py -q
@@ -586,12 +745,16 @@ save space. They are the product.
 Three or four evenings, not two, and Phases 4, 5 and 8 are the hard ones. If you
 get only as far as Phase 5, you already have the part that no other tool does.
 
-**The line counts below were measured, not guessed**, by running every phase of
-this kit through a fresh chat and counting what came back. They are larger than
-they look on the page because this document asks for a great many rules and the
-contract card asks for a WHY comment on each — the two multiply. Phase 4 alone
-comes back at about 4,900 lines, which no chat will hand you in one reply, so
-expect to ask for it in parts. The contract card already tells the window how.
+**The sizes below were counted, not guessed.** Every phase in this document was
+pasted into a fresh chat and what came back was measured. They are bigger than
+you would expect, and the reason is simple: this document asks for a great many
+rules, and it asks the chat to explain each one in the code. Both together add up.
+
+**Phase 4 is the big one — about 4,900 lines.** No chat will give you that in
+one go. It will stop part way through. That is normal and it is not broken: ask
+it to carry on and it will, and the contract card already tells it to pick up
+where it left off rather than start again. Expect three or four goes at that one
+phase. Nothing else in the kit behaves like it.
 
 | # | The window builds | The files it writes | Roughly |
 |---|---|---|---|
@@ -657,7 +820,35 @@ makes the next window fail for a reason that looks like bad code.
 
 # PHASE 0 — the contract card
 
-Paste this first in every window. Then paste the phase prompt underneath it.
+**You do not read this page. You copy it.** It is written for the chat, not for
+you, and there is nothing in it you need to understand. It is long on purpose:
+it is the only thing the twelve chat windows have in common, and every line of
+it is there because leaving it out made two windows build things that did not
+fit together.
+
+**Do this once, now, before you start.** It saves you eleven awkward copies:
+
+```
+type nul > C:\ripple-build\card.txt
+```
+
+```
+notepad C:\ripple-build\card.txt
+```
+
+Notepad opens, empty. Come back here, press the **copy button at the top of the
+block below** — the button, not the mouse, because dragging across something
+this long loses the last line more often than you would believe — then paste
+into Notepad, press Ctrl+S and close it.
+
+From now on, every window starts the same way: open `card.txt`, select all
+(Ctrl+A), copy (Ctrl+C), paste into the chat, press Enter. Then paste that
+phase's prompt underneath and press Enter again. That is the whole of your job,
+twelve times.
+
+**How to tell it arrived whole.** The last line of the card is *"...I will put
+it in the wrong place and the next chat will fail."* If the chat's window does
+not end with that, it did not all go in — paste it again.
 
 ````text
 You are helping me build a tool called Ripple, one file at a time, across
@@ -1892,6 +2083,10 @@ twice counts every finding in it twice.
                                   together and never exists as one thing.
 
 A UNION TAKES ITS OUTPUT NAMES FROM ITS FIRST BRANCH, BY POSITION.
+  [ BUILT IN PHASE 4, in scanner/sqlread.py and scanner/dialectcompat.py.
+    Phase 4 carries this rule in full. It is repeated here as background
+    for the walk, and this window builds none of it. ]
+
 
   SQL names a set operation's output columns from the branch written FIRST, and
   applies those names to every other branch by position. The other branches'
@@ -1930,57 +2125,6 @@ A UNION TAKES ITS OUTPUT NAMES FROM ITS FIRST BRANCH, BY POSITION.
   worse than a name not put on at all. Keep each column's own name as well as
   the position name -- it reaches nothing downstream, because no such column
   exists on the table, so a miscount costs a spare row rather than a lost chain.
-
-READ A TEMPLATE THAT USES CONTROL FLOW EVERY WAY IT RUNS, NOT ONE WAY.
-
-  Filling in placeholders treats templating as holes with names in them. Real
-  pipeline SQL also uses it as a small programming language, and three shapes do
-  not survive having their tags blanked and every body kept:
-
-      an if with an else       both branches kept, run on, and no parser takes it
-      set ... endset           a value, left sitting inside the statement
-      a placeholder alone      a whole block of SQL, turned into a bare word that
-        on its own line          welds itself to the statement below
-
-  None of those parse, so the file is not half-read: it is not read at all.
-  Measured on a real BigQuery warehouse of 7,304 files, 329 of its 2,320 .sql
-  files are templated and 176 of them produced no statement, no table and no
-  column anywhere in any answer -- while every one sat on the check-by-hand list
-  saying only that it would not parse.
-
-  So render the file again with its control flow resolved. Walk the tags,
-  keeping a stack of which blocks are open: an if keeps one side and blanks the
-  other, a set or macro block keeps nothing because its body is a value, a for
-  body is kept once. Blank every tag itself. Render it TWICE, once taking every
-  condition and once taking none, and read BOTH -- nothing in the file says
-  which way it runs, that is decided by a variable set somewhere else entirely,
-  and of 103 such files that read more than one way, 26 name DIFFERENT tables in
-  their two branches. Choosing one of those and calling the file read loses a
-  source table with nothing anywhere saying a branch existed.
-
-  De-duplicate the statements on the SQL the parser actually saw. Nearly all of
-  a file is outside its branches, and read once per rendering it comes back as
-  the same table built twice -- which reads on screen as "this table is built in
-  two places", a warning about something that is not there.
-
-  Try a rendering only on a file that did NOT parse as it stands. That is what
-  makes this safe: a file that reads today cannot start reading differently.
-  Order matters for the same reason. A placeholder alone on its line is blanked
-  LAST, because a source table written on its own line under a FROM is exactly
-  that shape, and blanking it on a file that already parses throws a real table
-  away with nothing said.
-
-  Keep the line count. Every replacement puts back the newlines it swallowed, so
-  a finding still points at the real line of the real file -- the only line
-  anybody can go and open. And allow a carriage return before the end of a line
-  when matching a placeholder that stands alone: a repository cloned on Windows
-  has CRLF endings, and a pattern that ends at the newline leaves the CR sitting
-  there, so the same file reads one way on one machine and another way on the
-  next with nothing saying so.
-
-  A file that still will not parse any way round stays on the check-by-hand
-  list. The renderings are a second chance, never a way of claiming a file was
-  read.
 
 ONE STATEMENT WRITTEN AS SEVERAL STRINGS IS STILL ONE STATEMENT.
 
@@ -2053,6 +2197,10 @@ WHAT COUNTS AS SQL INSIDE A PROGRAM INCLUDES THE STATEMENTS WITH NO SELECT.
   persuade somebody to go and open a file.
 
 THE TRAIL ENDS WHERE THE CODE ENDS, NOT WHERE A COUNTER DOES.
+  [ BUILT IN PHASE 1, as the max_hops default in config.py, and obeyed in
+    PHASE 5's walk. Phase 1 carries the rule and the measurements. It is
+    repeated here as background, and this window builds none of it. ]
+
 
   A limit on how many renames deep to follow a column reports itself as a fact
   about the warehouse. "The chain ends here and does not reach production" is a
@@ -2092,6 +2240,11 @@ THE TRAIL ENDS WHERE THE CODE ENDS, NOT WHERE A COUNTER DOES.
   is the downstream cap, and THAT one is reported.
 
 NOTHING IS SCANNED UNTIL SOMEBODY SAYS WHICH TABLES THEY PUBLISH.
+  [ BUILT IN PHASE 1 (production.py and config.py: no default,
+    has_production), PHASE 8 (the scan route refuses) and PHASE 11 (the
+    button says why before it is pressed). Each of those phases carries
+    it. Repeated here as background; this window builds none of it. ]
+
 
   A published table is one people outside the team read. It is the thing every
   finding is measured against, it is the only setting Ripple cannot work out for
@@ -2128,6 +2281,9 @@ NOTHING IS SCANNED UNTIL SOMEBODY SAYS WHICH TABLES THEY PUBLISH.
   reading the code, which is how the second one got there.
 
 READING THE REPOSITORY MUST NOT HOLD THE FIRST SCREEN BLANK.
+  [ BUILT IN PHASE 8, in api.py, and shown by PHASE 11. Phase 8 carries
+    it. Repeated here as background; this window builds none of it. ]
+
 
   Reading a repository the size of a real warehouse takes minutes, and the
   health request is the one the screen makes before it can paint anything at
@@ -2295,6 +2451,57 @@ config header to a readable dbt model took it from a full chain to 100%
 unreadable, in every spelling tried. Every dbt model in the world opens with
 one. Return an empty string for those, and make sure the "which words came out
 of a hole" set skips the empties rather than collecting a blank name.
+
+READ A TEMPLATE THAT USES CONTROL FLOW EVERY WAY IT RUNS, NOT ONE WAY.
+
+  Filling in placeholders treats templating as holes with names in them. Real
+  pipeline SQL also uses it as a small programming language, and three shapes do
+  not survive having their tags blanked and every body kept:
+
+      an if with an else       both branches kept, run on, and no parser takes it
+      set ... endset           a value, left sitting inside the statement
+      a placeholder alone      a whole block of SQL, turned into a bare word that
+        on its own line          welds itself to the statement below
+
+  None of those parse, so the file is not half-read: it is not read at all.
+  Measured on a real BigQuery warehouse of 7,304 files, 329 of its 2,320 .sql
+  files are templated and 176 of them produced no statement, no table and no
+  column anywhere in any answer -- while every one sat on the check-by-hand list
+  saying only that it would not parse.
+
+  So render the file again with its control flow resolved. Walk the tags,
+  keeping a stack of which blocks are open: an if keeps one side and blanks the
+  other, a set or macro block keeps nothing because its body is a value, a for
+  body is kept once. Blank every tag itself. Render it TWICE, once taking every
+  condition and once taking none, and read BOTH -- nothing in the file says
+  which way it runs, that is decided by a variable set somewhere else entirely,
+  and of 103 such files that read more than one way, 26 name DIFFERENT tables in
+  their two branches. Choosing one of those and calling the file read loses a
+  source table with nothing anywhere saying a branch existed.
+
+  De-duplicate the statements on the SQL the parser actually saw. Nearly all of
+  a file is outside its branches, and read once per rendering it comes back as
+  the same table built twice -- which reads on screen as "this table is built in
+  two places", a warning about something that is not there.
+
+  Try a rendering only on a file that did NOT parse as it stands. That is what
+  makes this safe: a file that reads today cannot start reading differently.
+  Order matters for the same reason. A placeholder alone on its line is blanked
+  LAST, because a source table written on its own line under a FROM is exactly
+  that shape, and blanking it on a file that already parses throws a real table
+  away with nothing said.
+
+  Keep the line count. Every replacement puts back the newlines it swallowed, so
+  a finding still points at the real line of the real file -- the only line
+  anybody can go and open. And allow a carriage return before the end of a line
+  when matching a placeholder that stands alone: a repository cloned on Windows
+  has CRLF endings, and a pattern that ends at the newline leaves the CR sitting
+  there, so the same file reads one way on one machine and another way on the
+  next with nothing saying so.
+
+  A file that still will not parse any way round stays on the check-by-hand
+  list. The renderings are a second chance, never a way of claiming a file was
+  read.
 
 NAME THAT SET AND HAND IT OUT, because Phase 4 cannot work without it.
 
@@ -5132,11 +5339,33 @@ rewritten.
 
 **Optional, and only if you want the AI reader:** `ripple-build/ripple/ai.py`
 and `ripple-build/ripple/scanner/github.py`. Both reach the network. If you
-skip them, skip their routes too — the prompt below says exactly which — and
-`/api/health` reports `ai.available` false so the screen can say so honestly.
-`providers.py` is NOT optional: it is a table of which company a key belongs
-to, it reaches nothing by itself, and the settings screen reads the key
-prefixes out of `/api/health` whether or not a reader was built
+skip them, **still build all three AI routes** — the prompt below says what
+they answer — and `/api/health` reports `ai.available` false so the screen can
+say so honestly. `providers.py` is NOT optional: it is a table of which company
+a key belongs to, it reaches nothing by itself, and the settings screen reads
+the key prefixes out of `/api/health` whether or not a reader was built.
+
+**`requirements.txt` is six lines and it is the whole of it.** The same pins as
+the install command at the top of this document, so a second machine gets the
+same Ripple rather than whatever was published this morning, and so the batch
+file's "not installed yet" message has something to point at:
+
+```
+sqlglot==30.17.0
+fastapi==0.115.0
+uvicorn==0.30.6
+pydantic==2.13.4
+typing-inspection==0.4.2
+python-multipart==0.0.9
+extract-msg==0.48.7
+httpx==0.27.2
+pytest==8.3.3
+```
+
+`httpx` only matters if you built the AI reader, and `extract-msg` only if you
+want Outlook `.msg` files opened. Leave them in anyway: a pinned line nobody
+uses costs nothing, and a missing one is discovered by somebody else, later,
+on a machine you cannot see
 
 ````text
 [PASTE THE CONTRACT CARD FIRST]
@@ -6817,6 +7046,18 @@ purpose:
   a CREATE TABLE built with SELECT *
 Give me every file complete, and end with the SAVE THESE FILES block giving
 the full path of each one under ripple-build/mockrepo/.
+
+THEN, LAST OF ALL, under a heading THE NAMES I WILL NEED, list in plain text:
+  the exact column name I should scan for, spelled as it is in the source table
+  the upstream table that column starts in
+  the published table the chain should reach
+  the table the chain ends at that is NOT on the published list
+  the file with the deliberate syntax error
+  the file where the column name is only a quoted string
+  the Python job that names a .sql file which is not there
+  the full list of published table names, one per line, ready to paste
+I am going to type these into a checklist by hand. I cannot read your files and
+I have no way of knowing what you called anything.
 ````
 
 **Then run everything.** First the whole test suite, from `C:\ripple-build`:

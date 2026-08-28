@@ -29,6 +29,7 @@ so the chat asks for the whole set before writing a line.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 ROOT = Path(r"D:\Apps\Ripple")
@@ -76,6 +77,26 @@ SYMPTOMS: list[tuple[str, str]] = [
     ("Saved analyses — what is kept, what the table shows", "ripple/store.py"),
     ("A new web address, or the shape of what one returns", "ripple/api.py"),
     ("The AI reader, or which model it uses", "ripple/ai.py"),
+
+    # Everything below was earned by following BUILD-KIT.md by hand, twice, on
+    # 28 Aug 2026. Every one of these is what a build made from the kit actually
+    # did, and none of them was in this table -- so somebody hitting them had
+    # nowhere to be sent. They are symptoms as they LOOK, not as they are, which
+    # is the only form somebody stuck can search for.
+    ("Every screen is blank, the sidebar draws, and there is nothing in the "
+     "browser console", "web/app.js"),
+    ("Ripple will not start: ModuleNotFoundError naming one of its own files",
+     "ripple/api.py"),
+    ("A button that does nothing at all, with no error anywhere", "ripple/api.py"),
+    ("The first screen is empty and /api/health answers 500", "ripple/progress.py"),
+    ("The typefaces never arrived, or the screens are in the wrong font",
+     "web/styles.css"),
+    ("It says nothing can be scanned until the published list is set",
+     "ripple/production.py"),
+    ("The trail stops after a few renames and says the chain ended",
+     "ripple/config.py"),
+    ("A file it could not read is not on the check-by-hand list",
+     "ripple/scanner/lineage.py"),
 ]
 
 # The screens are not Python and have no imports to read, so they are described
@@ -237,6 +258,92 @@ def main() -> None:
             f"NEEDED BY     : {', '.join(n_by)}\n"
             f"CALLABLE      : not Python"
         )
+
+    # ── the files only a Ripple BUILT FROM THE KIT has ───────────────────────
+    # A catalogue that does not name a file cannot send anybody to it. Somebody
+    # who built their Ripple by following BUILD-KIT.md has five files this
+    # repository does not: measured 28 Aug 2026, they were paths.py, getfonts.py,
+    # requirements.txt, start-ripple.bat and build.py, and none was catalogued.
+    #
+    # The list is READ OUT OF THE KIT'S OWN FOLDER PICTURE, never typed here, so
+    # a file added to the kit cannot go missing from this catalogue quietly. A
+    # picture file with no description below is printed as NOT DESCRIBED YET
+    # rather than dropped, because a silent gap is what this is fixing.
+    # Keyed by the path as it should APPEAR, because ripple/paths.py and
+    # ripple_offline/paths.py are two different files with one basename.
+    KIT_ONLY_WHAT = {
+        "ripple/paths.py": (
+            "Where things are, whether Ripple is running from source or packaged.",
+            "nothing else in Ripple",
+            "ripple/api.py, ripple/store.py, run.py",
+            "web_dir(), data_dir()",
+        ),
+        "getfonts.py": (
+            "Fetches the two typefaces, once. Run it and never again.",
+            "nothing else in Ripple",
+            "nothing - it is run by hand, once",
+            "run as a program, not imported",
+        ),
+        "requirements.txt": (
+            "The pinned versions, so a second machine gets the same Ripple.",
+            "nothing else in Ripple",
+            "start-ripple.bat names it when nothing is installed yet",
+            "not Python",
+        ),
+        "start-ripple.bat": (
+            "Starting Ripple with a double-click, and finding the right Python.",
+            "run.py",
+            "nothing - it is the way in",
+            "not Python",
+        ),
+        "build.py": (
+            "Packaging the folder into a program you can hand to somebody.",
+            "the whole project folder",
+            "nothing - it is run by hand, last",
+            "run as a program, not imported",
+        ),
+    }
+
+    kit_md = (ROOT / "BUILD-KIT.md").read_text(encoding="utf-8")
+    picture = re.search(r"^C:\\ripple-build\\\n(.*?)^```", kit_md,
+                        re.DOTALL | re.MULTILINE)
+    kit_only: list[str] = []
+    if picture:
+        # Every file the kit says it builds, by basename. Tests are left out:
+        # they are not files anybody repairs, and each phase already names its
+        # own. build.py is named in the prose beside the picture, not inside it.
+        drawn = {f for f in re.findall(
+            r"(?<![\w.-])([a-z_][a-z0-9_-]*\.(?:py|txt|bat))\b", picture.group(1))
+            if not f.startswith("test_") and f != "__init__.py"}
+        if "build.py" in kit_md:
+            drawn.add("build.py")
+
+        catalogued_names = {n.rsplit("/", 1)[-1] for n in files}
+        catalogued_names |= {n.rsplit("/", 1)[-1] for n, *_ in WEB}
+        catalogued_paths = set(files) | {n for n, *_ in WEB}
+
+        for want, what in KIT_ONLY_WHAT.items():
+            if want.rsplit("/", 1)[-1] not in drawn or want in catalogued_paths:
+                continue
+            head, n_needs, n_by, callable_ = what
+            kit_only.append(
+                f"### {want}   (built from the kit only)\n"
+                f"WHAT IT DECIDES: {head}\n"
+                f"IT NEEDS      : {n_needs}\n"
+                f"NEEDED BY     : {n_by}\n"
+                f"CALLABLE      : {callable_}"
+            )
+
+        described = {w.rsplit("/", 1)[-1] for w in KIT_ONLY_WHAT}
+        for fname in sorted(drawn - catalogued_names - described):
+            kit_only.append(
+                f"### {fname}   (built from the kit only)\n"
+                f"WHAT IT DECIDES: NOT DESCRIBED YET - BUILD-KIT.md draws this "
+                f"file and tools/make_repair_kit.py has no description for it. "
+                f"Add one to KIT_ONLY_WHAT."
+            )
+            print(f"  !! {fname} is drawn in the kit and described nowhere here")
+    catalogue.extend(kit_only)
 
     rows = "\n".join(f"| {sym} | `{f}` |" for sym, f in SYMPTOMS)
     total_py = sum(1 for n, p in files.items() if p.stat().st_size)
@@ -414,13 +521,45 @@ Open each one, copy all of it, and paste it in. When it gives files back:
 python -m pytest tests -q
 ```
 
-On the locked-down build:
+**You are looking for a last line like this**, and the numbers will differ:
+
+```
+694 passed in 23.42s
+```
+
+On the locked-down build the command is different, and so is the answer:
 
 ```
 python -m unittest discover tests -v
 ```
 
-`passed` means done. Anything else means not done, whatever you were told.
+**That one does not print the word "passed" at all.** It scrolls a long list and
+ends with these two lines:
+
+```
+Ran 694 tests in 23.421s
+
+OK
+```
+
+**`OK` on its own line is what done looks like there.** If you see `FAILED`
+followed by a count, it is not done — whatever you were told in the chat.
+
+### Then go and look, with your own eyes
+
+**A green test does not mean your change worked.** It means nothing else broke.
+The thing you complained about is on a screen, and only the screen can tell you.
+
+1. **Stop Ripple properly.** Close the black window it is running in. On the
+   packaged build, use the Stop button on the screen — closing the browser tab
+   leaves it running, and you will be looking at the old copy without knowing.
+2. **Start it again.** Double-click `start-ripple.bat`, or run `python run.py`.
+   Ripple loads its code once, when it starts, so a file you saved five minutes
+   ago is not in the copy that is still running.
+3. **Do the exact thing you complained about**, and look at it.
+
+That is the only proof. Somebody has spent an evening reporting a fix that
+worked perfectly, in a copy of Ripple that was never restarted.
 
 ---
 

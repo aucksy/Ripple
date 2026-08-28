@@ -450,6 +450,74 @@ def test_the_contract_card_names_the_functions_that_cross_a_window():
     )
 
 
+def test_the_repair_kit_can_route_every_file_the_build_kit_produces():
+    """A catalogue that does not name a file cannot send anybody to it.
+
+    The repair kit is generated from this repository. Somebody who built their
+    Ripple by following BUILD-KIT.md has a slightly different set of files, and
+    measured on 28 Aug 2026 five of them were in nobody's catalogue: paths.py,
+    getfonts.py, requirements.txt, start-ripple.bat and build.py. Ask the repair
+    prompt "the fonts did not arrive" and it had nowhere to send you.
+
+    The generator now reads the kit's own folder picture, so a file added to the
+    kit cannot go missing from the catalogue quietly. This checks the two ends
+    still agree.
+    """
+    kit = read(BUILD_KIT)
+    repair = read(REPAIR_KIT)
+
+    block = re.search(r"^C:\\ripple-build\\\n(.*?)^```", kit, re.DOTALL | re.MULTILINE)
+    assert block, "BUILD-KIT.md no longer draws the finished folder"
+
+    drawn = {f for f in re.findall(
+        r"(?<![\w.-])([a-z_][a-z0-9_-]*\.(?:py|txt|bat))\b", block.group(1))
+        if not f.startswith("test_") and f != "__init__.py"}
+
+    catalogued = {n.rsplit("/", 1)[-1] for n in re.findall(r"^### (\S+)", repair, re.M)}
+    missing = sorted(drawn - catalogued)
+    assert not missing, (
+        f"BUILD-KIT.md builds {missing} and BUILD-KIT-REPAIR.md's catalogue never "
+        f"names them. Somebody who followed the kit and now wants to change one "
+        f"of those files gets sent nowhere. Rerun "
+        f"Ripple Offline/tools/make_repair_kit.py, and add a description to "
+        f"KIT_ONLY_WHAT if it says one is missing."
+    )
+
+    assert "NOT DESCRIBED YET" not in repair, (
+        "the repair catalogue is carrying a file it cannot describe. The "
+        "generator prints which one; add it to KIT_ONLY_WHAT in "
+        "tools/make_repair_kit.py."
+    )
+
+
+def test_the_repair_prompt_makes_the_chat_ask_for_the_files_first():
+    """The whole design: paste one block, say what is wrong, and the chat replies
+    with which files to send -- because the person doing this cannot work out
+    which files a change touches, and that is the entire point of the catalogue.
+
+    Guarded because it is the part somebody would "tidy up" first: it reads like
+    ceremony until you watch a chat answer confidently from the one file it was
+    given and miss the two that had to change with it.
+    """
+    body = read(REPAIR_KIT)
+    for phrase in (
+        "tell me WHICH FILES TO SEND YOU",
+        "ASK FOR EVERY FILE THAT MIGHT HAVE TO CHANGE TOGETHER",
+        "IT NEEDS",
+        "NEEDED BY",
+        "Then stop and wait. Do not write any code yet.",
+    ):
+        assert phrase in body, (
+            f"BUILD-KIT-REPAIR.md no longer says {phrase!r}. Without it the chat "
+            f"answers from whatever single file it was handed, and the files that "
+            f"had to change with it are never asked for."
+        )
+    # Both directions, or it is half a routing decision.
+    assert body.count("NEEDED BY") >= 20, (
+        "the catalogue has stopped giving the reverse dependency for most files"
+    )
+
+
 def test_the_folder_tool_leaves_nothing_out_silently():
     """Two tests and a hosting file are deliberately not copied into the folder.
     Dropping a test quietly is how a suite stops proving anything, so each one
