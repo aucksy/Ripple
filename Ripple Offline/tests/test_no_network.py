@@ -10,6 +10,7 @@ because this machine happened to be online.
 """
 from __future__ import annotations
 
+import os
 import socket
 import threading
 import time
@@ -63,6 +64,44 @@ def test_an_http_client_cannot_get_out(blocked):
     with pytest.raises(Exception) as caught:
         httpx.get("https://api.groq.com/openai/v1/models", timeout=2)
     assert "groq" in str(caught.value).lower() or "blocked" in str(caught.value).lower()
+
+
+def test_a_proxy_cannot_carry_the_call_out_instead(monkeypatch):
+    """The one way out that allowing loopback left open.
+
+    A corporate proxy listens on this machine, so a client pointed at it never
+    connects to the internet itself: it connects to 127.0.0.1, which the guard
+    has to allow because Ripple talks to itself, and the proxy makes the call.
+    The address the guard would have refused is never handed to it. Measured
+    before this was closed, with a proxy on 127.0.0.1: the same request that was
+    refused directly came back 200 with the page in it.
+    """
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    import httpx
+
+    before = urllib.request.getproxies()
+    assert before, "this test is meaningless unless a proxy is there to be taken away"
+
+    nonet.attempts.clear()
+    nonet.install()
+    try:
+        # Both places a proxy can be named, gone: what anything reading the
+        # environment would find, and what httpx and requests actually ask.
+        assert "HTTPS_PROXY" not in os.environ
+        assert urllib.request.getproxies() == {}
+        with pytest.raises(Exception) as caught:
+            httpx.get("https://api.groq.com/openai/v1/models", timeout=2)
+        assert "groq" in str(caught.value).lower() or "blocked" in str(caught.value).lower()
+    finally:
+        nonet.uninstall()
+
+    # Taken away for as long as the guard is on, and no longer: removing it
+    # leaves the machine set up exactly the way it was found. Compared against
+    # what was really there rather than against a written-in address, so this
+    # says the same thing on a machine that has its own proxy set.
+    assert os.environ["HTTPS_PROXY"] == "http://127.0.0.1:9"
+    assert urllib.request.getproxies() == before
 
 
 def test_loopback_still_works(blocked):

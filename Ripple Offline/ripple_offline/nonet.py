@@ -10,11 +10,21 @@ the tests. Loopback is allowed, because Ripple talks to itself: the web server
 listens on 127.0.0.1 and the browser connects to it. Anything else raises, and
 the message says what was attempted, so a reach-out is a loud failure with an
 address in it rather than a silent success.
+
+Allowing loopback left one way out, and it is the way the machines this build is
+for are actually set up: a proxy. A corporate proxy usually listens on 127.0.0.1
+and is named in the environment or in the Windows internet settings, so a client
+that reads it never connects to the internet itself - it connects to this
+machine, which loopback allows, and the proxy makes the call. The address the
+guard would have refused is never passed to it. So installing the guard also
+takes every proxy away from this process, and puts them back when it is removed.
 """
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
+import urllib.request
 
 LOOPBACK_NAMES = {"localhost", "localhost.localdomain", "ip6-localhost", ""}
 
@@ -25,6 +35,7 @@ class OutboundBlocked(RuntimeError):
 
 _installed = False
 _original: dict[str, object] = {}
+_saved_proxy_env: dict[str, str] = {}  # the proxy settings taken away, to put back
 attempts: list[str] = []              # every address that was refused
 
 
@@ -65,11 +76,34 @@ def _refuse(address: object) -> OutboundBlocked:
     )
 
 
+def _take_the_proxies_away() -> None:
+    """Leave this process with no proxy it could be sent through.
+
+    Both places one can be named are closed: the environment, which anything
+    reading it directly would find, and urllib's lookup, which is what httpx and
+    requests ask - and which, on Windows, reads the system internet settings
+    even when the environment says nothing.
+    """
+    for name in list(os.environ):
+        if name.lower().endswith("_proxy"):
+            _saved_proxy_env[name] = os.environ.pop(name)
+    _original["getproxies"] = urllib.request.getproxies
+    urllib.request.getproxies = lambda: {}
+
+
+def _put_the_proxies_back() -> None:
+    if "getproxies" in _original:
+        urllib.request.getproxies = _original.pop("getproxies")
+    os.environ.update(_saved_proxy_env)
+    _saved_proxy_env.clear()
+
+
 def install() -> None:
     """Block every outbound connection from this process. Loopback still works."""
     global _installed
     if _installed:
         return
+    _take_the_proxies_away()
     _original.update({
         "connect": socket.socket.connect,
         "connect_ex": socket.socket.connect_ex,
@@ -115,6 +149,7 @@ def uninstall() -> None:
     socket.socket.connect_ex = _original["connect_ex"]
     socket.create_connection = _original["create_connection"]
     socket.getaddrinfo = _original["getaddrinfo"]
+    _put_the_proxies_back()
     _installed = False
 
 

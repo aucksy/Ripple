@@ -276,6 +276,11 @@ def test_a_failed_connection_leaves_the_old_one_alone(client, monkeypatch):
 
 
 def test_disconnecting_goes_back_to_the_folder(client, monkeypatch):
+    # What disconnecting forgets is the token that was typed in. A token set in
+    # the environment is a separate thing and stays, so it is cleared here --
+    # otherwise this passes or fails on whether the machine running the tests
+    # happens to have GITHUB_TOKEN set, which says nothing about disconnecting.
+    monkeypatch.setattr(settings, "github_token", "", raising=False)
     _stub_github(monkeypatch)
     client.post("/api/repo/connect", json={"repo": "aucksy/Ripple", "token": SECRET})
     out = client.post("/api/repo/disconnect").json()
