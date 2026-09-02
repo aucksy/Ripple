@@ -1170,6 +1170,25 @@ function step3(root) {
         el('div', { className: 'small faint', textContent: 'tables found' })),
       el('div', {}, el('div', { textContent: String(cat.columnCount), style: 'font-size:26px;font-weight:800;font-variant-numeric:tabular-nums' }),
         el('div', { className: 'small faint', textContent: 'columns found' }))));
+    // Tables built with SELECT * whose list Ripple filled in from the table
+    // they copy. Said here, so the count above is not read as "N tables with
+    // a list, and the SELECT * ones unknown".
+    if ((cat.derived || []).length) {
+      const n = cat.derived.length;
+      const line = el('div', { className: 'small muted', style: 'margin-top:12px;line-height:1.55' });
+      line.append(why(
+        el('span', { textContent: `${n} of these ${n === 1 ? 'is' : 'are'} built with SELECT * and `
+          + `${n === 1 ? 'has its' : 'have their'} column list read from the table ${n === 1 ? 'it copies' : 'they copy'}.` }),
+        'column lists read through a SELECT *',
+        'A SELECT * publishes every column of the table it reads. Where that table’s columns '
+        + 'are written down, the new table’s list is known too, and a scan reads it rather '
+        + 'than guessing.'));
+      const chips = el('div', { className: 'chips', style: 'margin-top:8px' });
+      cat.derived.forEach(d => chips.append(el('span', { className: 'chip mono',
+        textContent: `${d.table} ← ${(d.from || []).join(', ')} (${d.columns} column${d.columns === 1 ? '' : 's'})` })));
+      line.append(chips);
+      c.append(line);
+    }
     const g = x(root, 'gaps'); g.innerHTML = '';
     if (cat.gaps.length) {
       // This list used to be headed "tables Ripple could not fully read", which
@@ -1566,8 +1585,8 @@ function step4(root) {
     // renamed into another. This card used to say SELECT * about all of them,
     // one card above the card that said "copied or renamed", so the screen
     // contradicted itself about the same two tables.
-    const anyCopy = (sc.starTables || []).some(t => t.how);
-    const anyStar = (sc.starTables || []).some(t => !t.how);
+    const anyCopy = (sc.starTables || []).some(t => t.how && !t.known);
+    const anyStar = (sc.starTables || []).some(t => !t.how && !t.known);
     uncovered.push(['Tables not fully readable', st.tablesNotVisible, 'var(--amber)',
       anyCopy && anyStar ? 'Copied whole, or SELECT * — no column list'
         : anyCopy ? 'Copied or renamed whole — no column list'
@@ -1826,6 +1845,12 @@ function groupCard(g, key, tag, tagStyle) {
           ? el('span', { className: 'badge sm amber', style: 'margin-left:6px',
               textContent: r.viaStar ? 'column list not visible' : 'inferred' })
           : null,
+        // A SELECT * whose column list is written down after all. Read, not
+        // inferred, and the badge says so where the amber one would have been.
+        r.starKnown
+          ? el('span', { className: 'badge sm grey', style: 'margin-left:6px',
+              textContent: 'SELECT * — column list known' })
+          : null,
         // The line holds a quoted string, not the statement this row describes.
         r.builtAsText
           ? el('span', { className: 'badge sm amber', style: 'margin-left:6px',
@@ -2042,6 +2067,15 @@ function detailFor(r) {
   // How much of the path to this row was read and how much was worked out. A
   // row two hops past a SELECT * is exactly as real as the code below it, and
   // exactly as uncertain about what the column is called by the time it lands.
+  // A SELECT * whose column list is written down after all: the table it
+  // copies has its columns listed, so this hop was read rather than guessed.
+  if (r.viaStar && r.starKnown) {
+    d.append(el('div', { className: 'note info', style: 'margin-top:10px' },
+      el('b', { textContent: 'This step is a SELECT *, and the column list is known. ' }),
+      `The statement takes every column of ${r.from}, whose columns are written down in the `
+      + `code, so Ripple read the list rather than guessing — ${r.attr} is on it. Nothing past `
+      + 'this point is inferred.'));
+  }
   if (r.inferredHops) {
     d.append(el('div', { className: 'note warn', style: 'margin-top:10px' },
       el('b', { textContent: r.viaStar
@@ -2221,18 +2255,22 @@ function renderTrailGaps(box, sc) {
   }
 
   // 2. A table built with SELECT * carries every column and names none of them.
-  if (sc.starTables?.length) {
-    const n = sc.starTables.length;
+  //    Only the ones whose list really is nowhere. A star over a table whose
+  //    columns are written down was READ, and gets its own calm card below.
+  const unknownStars = (sc.starTables || []).filter(s => !s.known);
+  const knownStars = (sc.starTables || []).filter(s => s.known);
+  if (unknownStars.length) {
+    const n = unknownStars.length;
     // Some of these are not SELECT * at all — they are a staging table promoted
     // into a published one with COPY, CLONE, LIKE or RENAME. Ripple follows them
     // the same way, because they do the same thing, but the card has to name the
     // word the file actually uses or it describes a statement that is not there.
-    const copies = sc.starTables.filter(s => s.how);
+    const copies = unknownStars.filter(s => s.how);
     // Not a star in the file either — a placeholder where the column list goes,
     // filled in by the job at run time. Ripple used to read it as a column
     // called "cols" and report the published table as having exactly that one.
-    const holes = sc.starTables.filter(s => s.filledIn);
-    const stars = sc.starTables.length - copies.length - holes.length;
+    const holes = unknownStars.filter(s => s.filledIn);
+    const stars = unknownStars.length - copies.length - holes.length;
     const card = el('div', { className: 'card pad lg', style: 'margin-top:20px;border-color:var(--amberln)' });
     card.append(why(
       el('b', { style: 'font-size:14px', textContent:
@@ -2257,14 +2295,45 @@ function renderTrailGaps(box, sc) {
           + 'to read.'
         : null));
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:12px' });
-    sc.starTables.forEach(s => chips.append(el('span', { className: 'chip mono',
+    // The chip says WHY the list is not there, so nobody reads this card as
+    // Ripple having failed to read a file: the table it copies has no written
+    // column list either — or has one, and the column asked about is not on it.
+    unknownStars.forEach(s => chips.append(el('span', { className: 'chip mono',
       textContent: s.how
         ? `${s.table} — ${s.how} of ${s.from}`
         : s.filledIn
         ? `${s.table} — column list filled in at run time, from ${s.from}`
-        : `${s.table} — from ${s.from}` })));
+        : (s.listedWithout || []).length
+        ? `${s.table} — from ${s.from}, whose written column list has no ${s.listedWithout.join(', ')} — followed anyway`
+        : `${s.table} — from ${s.from}, whose own column list is not written down here` })));
     card.append(chips);
     box.append(foldFrom('star-tables', card, { count: n, badge: 'amber', tone: 'amber' }));
+  }
+
+  // 2a. A SELECT * from a table whose columns ARE written down. The built
+  //     table's list was filled in from there, so the hop was read, not
+  //     inferred. Said calmly, apart from the ones above. Measured on a real
+  //     file: `select distinct a.*` from a stage table built with a full
+  //     projection two files earlier was listed among the tables Ripple could
+  //     not see inside, and read as Ripple failing to read a file.
+  if (knownStars.length) {
+    const n = knownStars.length;
+    const card = el('div', { className: 'card pad lg', style: 'margin-top:20px' });
+    card.append(why(
+      el('span', { className: 'lbl', textContent:
+        `${n} table${n === 1 ? '' : 's'} built with SELECT * ${n === 1 ? 'has' : 'have'} a column list Ripple could read` }),
+      'SELECT * tables whose column list is known',
+      'These take every column of a table whose columns are written down in the code — a '
+      + 'CREATE TABLE with the columns listed, or a query that names them — so Ripple read the '
+      + 'list from there instead of guessing. Your attribute is on it. Nothing past these '
+      + 'tables is inferred.'));
+    const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
+    knownStars.forEach(s => chips.append(el('span', { className: 'chip mono',
+      textContent: `${s.table} — every column of ${s.from}`
+        + (s.columns ? ` (${s.columns} column${s.columns === 1 ? '' : 's'}`
+          + (s.listedIn ? `, listed in ${s.listedIn}` : '') + ')' : '') })));
+    card.append(chips);
+    box.append(foldFrom('star-tables-known', card, { count: n }));
   }
 
   // 3. One name, more than one table, and nothing in the SQL to tell them apart.
@@ -2785,7 +2854,8 @@ function treeOf(branches) {
   branches.forEach(br => {
     let at = root;
     br.forEach(n => {
-      const key = [n.name, n.alias || '', n.prod ? 'p' : '', n.cut ? 'c' : '', n.inferred ? 'i' : ''].join('|');
+      const key = [n.name, n.alias || '', n.prod ? 'p' : '', n.cut ? 'c' : '', n.inferred ? 'i' : '',
+        n.starKnown ? 'k' : ''].join('|');
       let next = at.index.get(key);
       if (!next) {
         next = { node: n, kids: [], index: new Map() };
@@ -2831,6 +2901,11 @@ function nodeEl(n) {
     d.append(el('div', { className: 'small muted', style: 'margin-top:5px;line-height:1.4',
       textContent: (n.how ? `${n.how} of a whole table` : 'built with SELECT *')
         + ' — column list not visible' }));
+  }
+  if (n.starKnown) {
+    d.append(el('div', { className: 'small muted', style: 'margin-top:5px;line-height:1.4',
+      textContent: (n.how ? `${n.how} of a whole table` : 'built with SELECT *')
+        + ' — column list known' }));
   }
   if (n.cut) {
     d.append(el('div', { className: 'small', style: 'margin-top:5px;line-height:1.4;color:var(--red)',

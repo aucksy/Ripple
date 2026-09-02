@@ -978,7 +978,8 @@ Usage       : kind, column, alias, detail, certain, via_star
 A finding, as JSON sent to the browser:
   {inter, from, attr, roots[], alias, logic, mode, impact, breaking,
    noLocalFix, file, lang, lines[{n, t, hit}],
-   certain, viaStar, copiedBy, builtAsText, feed, inferredHops, whole}
+   certain, viaStar, copiedBy, builtAsText, feed, inferredHops, whole,
+   starKnown}
   inter         the intermediate table THIS hop builds, as a person reads it.
                 "" when the hop builds no table anybody can name. In Python the
                 field is inter_table; one function maps the whole row to this
@@ -1026,6 +1027,11 @@ A finding, as JSON sent to the browser:
                 takes the table ("Reads this table", "Joined to this table",
                 "Copied whole by COPY", "Exported from this table") and mode
                 is "Whole table"
+  starKnown     true when this hop is a SELECT * whose column list is written
+                down after all — the table it copies has its columns listed,
+                so the built table's list was filled in from there (see
+                catalog.derived in Phase 5). Read, not inferred: inferredHops
+                does not count it, and viaStar stays true
 
 A scan result, as JSON sent to the browser:
   {attributes[], groups[], reached[], other[], graphs[], unreadable[],
@@ -1170,18 +1176,24 @@ parse_repo", never "from .sqlread import parse_repo".
     suffix_verdict(stmt, table) -> "reads" | "maybe" | "excluded"
     output_names(stmt, column, limit=6) -> list[str]
     usages_of(stmt, column, table="") -> list[Usage]
+    star_sources(stmt) -> list[(star, tables[])]   each star in the statement's
+                                                    own projection, with the
+                                                    tables it covers
     mode_of(usages) -> str
     locate(f, column, kind, line_offset=0, line_end=None) -> int
     snippet(f, hit_line, note, before=2, after=2) -> list[dict]
 
   ripple/catalog.py
-    class Catalog      tables defined_in gaps
-      methods  has_table(t) columns(t) has_column(t, c) to_dict()
+    class Catalog      tables defined_in gaps derived
+      methods  has_table(t) columns(t) has_column(t, c) listed_in(t) to_dict()
     build_catalog(parsed) -> Catalog
 
   ripple/scanner/lineage.py
     trace(index, parsed, upstream, change_type="unknown", cfg=None,
-          on_progress=None) -> ScanResult
+          on_progress=None, catalog=None) -> ScanResult
+    catalog is the Catalog the service already built; built inside when it
+    is not handed in. It is what says whether a SELECT * hop has a column
+    list Ripple can read.
     WHOLE_TABLE = "whole table"     the attr every whole-table row carries
     upstream entries are {table, attrs[], whole}; whole: true walks the
     table itself — see WHOLE TABLES in Phase 5
@@ -4666,8 +4678,26 @@ find and builds one. build_catalog(parsed) -> Catalog with tables
 {TABLE: [columns]}, defined_in {TABLE: file}, and gaps[].
 CREATE TABLE x (col type, ...) gives the columns directly. CREATE TABLE x AS
 SELECT gives them from the projection. A table created without a readable
-column list, or built with SELECT *, goes in gaps with a plain reason — the
-real column list is not visible there and pretending otherwise is a lie.
+column list goes in gaps with a plain reason.
+
+A STAR IS FILLED IN FROM THE TABLE IT COPIES. CREATE TABLE x AS SELECT * FROM
+y publishes every column y has. When y's columns are written down — a CREATE
+TABLE with the list, a query that names them, or a star filled in the same
+way one step earlier — x's list is known too: y's columns, minus any named in
+EXCEPT (REPLACE keeps the names), plus any other projected columns, in order.
+`a.*` takes only the table the alias stands for; a bare `*` over a JOIN takes
+every table the SELECT reads directly, and needs ALL their lists. Pass over
+the star statements more than once, so a chain of stars fills in from its
+root. Record each one in derived {TABLE: {table, from[], columns, file,
+listedIn[]}} — listedIn being the files that write the copied lists down,
+which is where a person can READ the list, not the file with the star in it —
+and give Catalog a listed_in(table) that answers that for any table.
+Measured on a real file: `select distinct a.*` from a stage table built with a
+full projection two files earlier was reported as a table with no column list
+to read, and read as Ripple failing to read a file. A star whose source has
+no written list anywhere goes in gaps, with from[] and a reason that names
+the source and says its own list is not written down — so this table's is
+not either, and a scan still follows the column through it.
 
 --- ripple/scanner/lineage.py
 
@@ -5051,13 +5081,32 @@ it qualifies and never on another screen:
                      the file says SELECT * when it does not.
 
                      Full shape: {table, file, from, attr, roots[], how,
-                     filledIn}. Built WHILE THE WALK IS HAPPENING, not read
+                     filledIn, known, columns, listedIn, listedWithout[]}.
+                     Built WHILE THE WALK IS HAPPENING, not read
                      off the repository screen afterwards, so it travels with
                      the answer it qualifies. "how" is the word the file used
                      to copy a whole table — COPY, CLONE, LIKE or RENAME — and
                      is empty when the file really does say SELECT *.
                      "filledIn" is set when the column list is a placeholder
                      the job fills in at run time.
+
+                     "known" is true when the built table's column list IS
+                     written down after all — the catalogue filled it in from
+                     the table the star copies (catalog.derived), or the built
+                     table has a CREATE TABLE of its own — AND the column
+                     being followed is on that list. Then the hop is READ:
+                     the finding carries starKnown instead of adding to
+                     inferredHops, the box on the map carries starKnown
+                     rather than inferred, and the entry says how many
+                     columns and which file lists them ("listedIn", from
+                     Catalog.listed_in). tablesNotVisible, the coverage gap
+                     and notVisible count only the entries whose known is
+                     false. When the list is written down WITHOUT the column
+                     being followed, the star is still followed — excluding
+                     on a list that may be stale is the catastrophic
+                     direction — and the column's name goes in
+                     listedWithout[], said on screen, so a gap nobody could
+                     see becomes a sentence somebody can check.
 
                      THE STAR HOP ITSELF IS NEVER BREAKING. Mark it breaking
                      and you put a red badge on the one row in the chain that
@@ -5631,8 +5680,10 @@ repository one key column reaches hundreds of tables, and joining them all
 into a sentence produces a paragraph nobody reads, in the one place on the
 screen written to be read.
 
-Whenever starTables[] is not empty, end the narrative with one more sentence -
-in the no-findings branch and in the nothing-published branch alike:
+Whenever starTables[] holds an entry whose known is false, end the narrative
+with one more sentence, counting only those - in the no-findings branch and in
+the nothing-published branch alike. A star whose list was filled in was read,
+and a letter saying it "could not be read" says something false:
 
   "2 tables on the way are built with SELECT *, so the column list could not be
    read and the steps past them are worked out rather than read."
@@ -7081,6 +7132,11 @@ When the counts arrive, that card has four answers, and three of them are not
     past one is marked on the result as worked out rather than read. This is a
     fact about how the code is written, not a gap in the scan. List each table
     with its reason.
+  Under the two counts, when the catalogue's derived[] is not empty, one calm
+    line: "N of these are built with SELECT * and have their column list read
+    from the table they copy", with a chip per table reading "<table> ← <from>
+    (N columns)". Without it the count reads as "N tables with a list, and the
+    SELECT * ones unknown".
   No tables read at all — "No table definitions were read, so there is no
     catalogue to check." "Every table definition was readable" is technically
     true of nothing at all, and reads as a clean bill of health for a repository
@@ -7331,10 +7387,20 @@ others:
   Without that button the only way past the limit is a setting on another screen
   that the person reading the answer has no reason to visit.
 
-  Tables whose column list is not readable (starTables). Say which kind each is
-  — built with SELECT *, a whole table copied or renamed with COPY / CLONE /
-  LIKE / RENAME, or a placeholder the job fills in at run time. Never describe a
-  statement the file does not contain.
+  Tables whose column list is not readable (starTables with known false). Say
+  which kind each is — built with SELECT *, a whole table copied or renamed
+  with COPY / CLONE / LIKE / RENAME, or a placeholder the job fills in at run
+  time. Never describe a statement the file does not contain. Each chip says
+  WHY the list is not there — "from <table>, whose own column list is not
+  written down here", or "whose written column list has no <column> —
+  followed anyway" from listedWithout — so nobody reads the card as Ripple
+  having failed to read a file.
+  Then, apart from those and calmly, the ones whose list Ripple COULD read
+  (starTables with known true): "N tables built with SELECT * have a column
+  list Ripple could read", each chip "<table> — every column of <from> (N
+  columns, listed in <listedIn>)", and the explanation that the table copied
+  has its columns written down, so the list was read from there and nothing
+  past these tables is inferred.
   One name standing for more than one table (mergedNames).
   Tables read through a wildcard rather than by name (wildcardNames).
   Tables built from scratch in more than one file (twoDefinitions). Say that
@@ -7596,6 +7662,7 @@ from the answer it qualifies is a caveat nobody reads.
     table not stated        grey,  when the finding's certain is false
     column list not visible amber, when inferredHops is set and viaStar is true
     inferred                amber, when inferredHops is set without viaStar
+    SELECT * — column list known   grey, when starKnown is true
     run as text             amber, when builtAsText is set
 
   Each opens into its own note when the row is expanded:

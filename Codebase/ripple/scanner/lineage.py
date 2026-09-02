@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 
 from sqlglot import exp
 
+from ..catalog import Catalog, build_catalog
 from ..config import Settings, settings as default_settings
 from .dialectcompat import merge_whens
 from .repo import RepoIndex, unopened_code_types
@@ -316,6 +317,11 @@ class Finding:
     # other file's temporary table of the same name -- which is the merge this
     # fence exists to stop, leaking back in one screen further along.
     target_key: str = field(default="", compare=False)
+    # This hop is a SELECT *, and the column list it publishes is written down
+    # after all: the table it copies has its columns listed, so the built
+    # table's list was filled in from there (catalog.derived), or the built
+    # table has a CREATE TABLE of its own. Read, not inferred.
+    star_known: bool = False
 
     def key(self) -> tuple:
         return (self.file, self.at, self.source_table, self.source_column, self.kind)
@@ -503,7 +509,9 @@ class ScanResult:
             # trail", "hop limit" and "worked out rather than read" are Ripple's
             # own vocabulary, and this is the list a person reads to decide
             # whether to believe the answer above it.
-            (len(self.star_tables),
+            # Only the stars whose column list really is nowhere. One filled
+            # in from the table it copies was read, and is not a gap.
+            (len([s for s in self.star_tables if not s.get("known")]),
              "table the column passes through takes every column at once, so your "
              "code never lists what its columns are called",
              "tables the column passes through take every column at once, so your "
@@ -566,7 +574,7 @@ class ScanResult:
             # findings that sit on the far side of one. Both counts, because
             # "3 tables Ripple could not see inside" and "40 findings that
             # depend on them" are different sizes of the same problem.
-            "tablesNotVisible": len(self.star_tables),
+            "tablesNotVisible": len([s for s in self.star_tables if not s.get("known")]),
             "inferredFindings": len([f for f in self.findings if f.inferred_hops]),
             "trailsCutShort": len(self.cut_short),
             # Not added to productionTables: nothing about these tables'
@@ -598,8 +606,13 @@ def trace(
     change_type: str = "unknown",
     cfg: Settings | None = None,
     on_progress=None,
+    catalog: Catalog | None = None,
 ) -> ScanResult:
     """upstream is [{"table": "CUSTOMER_DEMOGRAPHICS", "attrs": ["MARKET_CODE"]}].
+
+    ``catalog`` is the one built from this repository, handed in by the
+    service so it is not built again per scan. Built here when it is not: it
+    is what says whether a SELECT * hop has a column list Ripple can read.
 
     ``on_progress(done, total, label)`` is called as the chain is followed. It
     is deliberately given no total: how many statements a scan will look at
@@ -608,6 +621,7 @@ def trace(
     real thing to show.
     """
     cfg = cfg or default_settings
+    cat = catalog if catalog is not None else build_catalog(parsed)
     res = ScanResult()
     res.max_hops = cfg.max_hops
     res.files_scanned = len(index.files)
@@ -1055,6 +1069,23 @@ def trace(
                     }.get(primary.kind, "Used here")
 
                     carried_by_star = any(u.via_star for u in us)
+                    # A SELECT * from a table whose columns are written down
+                    # publishes a column list Ripple can READ: the catalogue
+                    # filled it in from the table it copies, or the built
+                    # table has a CREATE TABLE of its own. Then this hop is
+                    # read, not inferred. A list that is written down WITHOUT
+                    # this column is said out loud, and followed anyway --
+                    # excluding on it would be the catastrophic direction.
+                    star_known = False
+                    listed_without = ""
+                    listed: list[str] = []
+                    if carried_by_star and stmt.target:
+                        listed = cat.columns(short_name(stmt.target))
+                        if listed:
+                            if cur_col.upper() in {c.upper() for c in listed}:
+                                star_known = True
+                            else:
+                                listed_without = cur_col
                     # A whole-table COPY, CLONE, LIKE or RENAME is followed as
                     # the SELECT * it is, but those two words are nowhere in the
                     # file. A row that says "Carried by SELECT *" sends somebody
@@ -1105,9 +1136,10 @@ def trace(
                         copied_by=stmt.whole_copy,
                         built_as_text=stmt.built_as_text,
                         feed_uri=stmt.export_uri,
-                        inferred_hops=inferred + (1 if carried_by_star else 0),
+                        inferred_hops=inferred + (1 if carried_by_star and not star_known else 0),
                         at=stmt.line_offset,
                         target_key=stmt.target or "",
+                        star_known=star_known,
                     )
                     findings_by_key.setdefault(f.key(), f)
                     f = findings_by_key[f.key()]
@@ -1166,12 +1198,17 @@ def trace(
                         file_named_seen.setdefault(shown, {
                             "table": shown, "file": stmt.file, "how": stmt.named_by})
                     if carried_by_star:
-                        # This table is built with SELECT *, so its column list
-                        # is nowhere in the repository. The hop is real and the
-                        # ones past it are worked out, and both facts travel with
+                        # This table is built with SELECT *. Either its column
+                        # list was filled in from the table it copies (see
+                        # star_known) and the hop was read -- or the list is
+                        # nowhere in the repository, the hop is real and the
+                        # ones past it are worked out. Both facts travel with
                         # the result rather than living on another screen.
-                        node["inferred"] = True
                         node["how"] = stmt.whole_copy
+                        if star_known:
+                            node["starKnown"] = True
+                        else:
+                            node["inferred"] = True
                         entry = star_seen.setdefault(shown, {
                             "table": shown, "file": stmt.file, "from": show(cur_table),
                             "attr": cur_col, "roots": [],
@@ -1184,9 +1221,20 @@ def trace(
                             # Not a star in the file at all, but a hole where
                             # the column list goes. See Statement.star_note.
                             "filledIn": stmt.star_note,
+                            # The list IS written down, and where. See star_known.
+                            "known": star_known,
+                            "columns": len(listed),
+                            "listedIn": cat.listed_in(short_name(stmt.target)) if listed else "",
+                            # Columns asked about that the written list lacks.
+                            "listedWithout": [],
                         })
                         if attr not in entry["roots"]:
                             entry["roots"].append(attr)
+                        # One attribute on the written list and another off it
+                        # is one table, known only for the ones on the list.
+                        entry["known"] = bool(entry["known"] and star_known)
+                        if listed_without and listed_without not in entry["listedWithout"]:
+                            entry["listedWithout"].append(listed_without)
                     # SELECT * EXCEPT(col) drops the column by name. It does not
                     # reach this table, so there is nothing to follow onwards --
                     # but the statement is still broken by the change, which is
@@ -1204,7 +1252,7 @@ def trace(
                     # stopped the chain one table short of the published table
                     # that reads the other, and reported no production impact.
                     onwards = output_names(stmt, cur_col)
-                    onward_inferred = inferred + (1 if carried_by_star else 0)
+                    onward_inferred = inferred + (1 if carried_by_star and not star_known else 0)
                     if cfg.is_production_table(short_name(tgt)):
                         node["prod"] = True
                         branch = path + [node]
@@ -1284,7 +1332,7 @@ def trace(
                     # Hops on this attribute's trail where the column list was
                     # not written down, and findings that sit past one of them.
                     "notVisible": sorted({f.target_table for f in attr_findings
-                                          if f.via_star and f.target_table}),
+                                          if f.via_star and not f.star_known and f.target_table}),
                     "inferred": len([f for f in attr_findings if f.inferred_hops]),
                     # How widely this column name is used as a name. A scan for
                     # a name half the warehouse shares is a different kind of
@@ -1928,6 +1976,8 @@ def _finding_row(f: Finding) -> dict:
         "inferredHops": f.inferred_hops,
         # The row is about the table itself, not a column of it. See WHOLE_TABLE.
         "whole": f.kind == "table",
+        # A SELECT * whose column list is written down after all. See star_known.
+        "starKnown": f.star_known,
     }
 
 

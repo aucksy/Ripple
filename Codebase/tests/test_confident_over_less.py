@@ -693,15 +693,42 @@ def test_a_whole_table_copy_carries_the_chain_into_production(tmp_path, statemen
 def test_a_copied_table_is_marked_worked_out_and_named_by_its_own_word(
         tmp_path, statement, word):
     """A copy carries every column and writes none of them down, which is what
-    SELECT * does -- so it is followed the same way and every step past it is
-    marked worked out rather than read. What it must NOT do is tell the reader
-    the file says SELECT *, because the file says COPY."""
+    SELECT * does -- so it is followed the same way. What it must NOT do is
+    tell the reader the file says SELECT *, because the file says COPY.
+
+    Whether the hop is worked out or read depends on the table copied. Here
+    stage_x is built with its columns named, so the copy's column list is
+    known (see test_star_known.py) and nothing is inferred. The variant below
+    copies a table whose list is written nowhere, and there it IS worked out."""
     out = promote(tmp_path, statement)
-    assert out["stats"]["inferredFindings"] >= 1, "the hop is worked out, not read"
-    assert out["stats"]["tablesNotVisible"] == 1
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert out["stats"]["inferredFindings"] == 0, "stage_x names its columns, so the copy's list is known"
+    assert out["stats"]["tablesNotVisible"] == 0
     star = out["starTables"][0]
     assert star["table"] == "final_published"
     assert star["from"] == "stage_x"
+    assert star["known"] is True and star["columns"] == 1 and star["listedIn"] == "a.sql"
+    assert star["how"] == word, "the card names the word the file actually uses"
+
+
+@pytest.mark.parametrize("statement,word", [
+    ("CREATE OR REPLACE TABLE final_published COPY stage_x;", "COPY"),
+    ("CREATE TABLE final_published CLONE stage_x;", "CLONE"),
+    ("ALTER TABLE stage_x RENAME TO final_published;", "RENAME"),
+])
+def test_a_copy_of_a_table_with_no_written_list_is_worked_out_and_named_by_its_own_word(
+        tmp_path, statement, word):
+    """stage_x is itself a SELECT * from a table nothing here defines, so no
+    column list exists anywhere in the repository. The copy carries every
+    column and every step past it is worked out rather than read."""
+    out = scan(tmp_path, {
+        "a.sql": "CREATE OR REPLACE TABLE stage_x AS SELECT * FROM customer_demographics;",
+        "b.sql": statement})
+    assert [g["prod"] for g in out["groups"]] == ["final_published"]
+    assert out["stats"]["inferredFindings"] >= 1, "the hop is worked out, not read"
+    assert out["stats"]["tablesNotVisible"] == 2, "stage_x and its copy"
+    star = next(s for s in out["starTables"] if s["table"] == "final_published")
+    assert star["from"] == "stage_x" and star["known"] is False
     assert star["how"] == word, "the card names the word the file actually uses"
 
 

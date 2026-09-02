@@ -117,7 +117,10 @@ def summarise(scan: dict, vals: dict) -> dict:
     # one makes "no impact" a sentence about how far Ripple looked rather than
     # about the pipeline -- and this is the paragraph that gets forwarded.
     cut_short = scan.get("cutShort", [])
-    star_tables = scan.get("starTables", [])
+    # Only the stars whose column list really is nowhere. One filled in from
+    # the table it copies was read, and a letter that says "could not be read"
+    # about it is a letter saying something false.
+    star_tables = [s for s in scan.get("starTables", []) if not s.get("known")]
     # Facts this letter used to be written without, every one of them measured
     # as a letter that said the opposite of the screen it was written from.
     feeds = scan.get("feeds", [])

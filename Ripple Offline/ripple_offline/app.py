@@ -497,7 +497,7 @@ async def read_email_file(file: UploadFile = File(...)) -> dict:
 # ── scanning and writing it up ─────────────────────────────────────────────
 @app.post("/api/scan")
 def scan(payload: ScanIn) -> dict:
-    idx, parsed, _ = repo_state()
+    idx, parsed, cat = repo_state()
     upstream = [{"table": u.table, "attrs": u.attrs, "whole": bool(u.whole)}
                 for u in payload.upstream]
     if not upstream:
@@ -536,7 +536,7 @@ def scan(payload: ScanIn) -> dict:
         cfg.max_hops = prefs.clamp_hops(payload.maxHops)
     try:
         res = trace(idx, parsed, upstream, change_type=payload.changeKind, cfg=cfg,
-                    on_progress=progress.reader("scanning"))
+                    on_progress=progress.reader("scanning"), catalog=cat)
     finally:
         progress.finish()
     out = res.to_dict()

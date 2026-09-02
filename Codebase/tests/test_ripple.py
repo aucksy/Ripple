@@ -161,9 +161,16 @@ def test_catalog_reads_column_definitions(repo):
     assert cat.has_column("customer_demographics", "market_code")
 
 
-def test_select_star_is_recorded_as_a_gap(repo):
+def test_select_star_over_a_listed_table_is_filled_in_not_a_gap(repo):
+    """vw_everything is SELECT * FROM customer_demographics, and the DDL lists
+    every column of customer_demographics. So the view's column list is known,
+    read from that DDL -- it used to be reported as a gap, which read as Ripple
+    having failed to read a file."""
     _, _, cat = repo
-    assert any("vw_everything" in g["table"] for g in cat.gaps)
+    assert not any("vw_everything" in g["table"] for g in cat.gaps)
+    assert cat.columns("vw_everything") == cat.columns("customer_demographics")
+    assert cat.derived["VW_EVERYTHING"]["listedIn"] == ["ddl/customer_demographics.sql"]
+    assert cat.listed_in("vw_everything") == "ddl/customer_demographics.sql"
 
 
 # ── the notification ───────────────────────────────────────────────────────

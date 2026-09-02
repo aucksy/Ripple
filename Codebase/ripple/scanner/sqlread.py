@@ -2583,6 +2583,29 @@ def _named_in_except(star: exp.Star, column: str) -> bool:
     return False
 
 
+def star_sources(stmt: Statement) -> list[tuple[exp.Star, list[str]]]:
+    """Every star in this statement's own projection, with the tables it covers.
+
+    ``SELECT *`` covers every table the SELECT reads directly; ``a.*`` covers
+    only the table the alias stands for. Used to fill in the column list of a
+    table built with a star from tables whose columns are written down -- see
+    catalog.build_catalog. Stars inside subqueries are not here: it is the
+    statement's own projection that names the built table's columns.
+    """
+    sel = stmt.select
+    if sel is None:
+        return []
+    direct = _direct_tables(sel)
+    aliases = _sources_of(stmt)
+    out: list[tuple[exp.Star, list[str]]] = []
+    for e in sel.expressions:
+        if isinstance(e, exp.Star):
+            out.append((e, list(direct)))
+        elif isinstance(e, exp.Column) and isinstance(e.this, exp.Star):
+            out.append((e.this, list(aliases.get((e.table or "").upper(), []))))
+    return out
+
+
 def star_carries(stmt: Statement, column: str, table: str,
                  sources: dict[str, list[str]] | None = None) -> bool:
     """Does a ``SELECT *`` carry this column of this table out of the statement?

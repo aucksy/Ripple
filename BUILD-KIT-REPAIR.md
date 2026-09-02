@@ -57,9 +57,9 @@ done, whatever the chat told you.
 
 **4. Some of these files are enormous.** The three biggest:
 
-* `ripple/scanner/sqlread.py` — 3,720 lines
-* `web/app.js` — 3,516 lines
-* `ripple/scanner/lineage.py` — 2,002 lines
+* `ripple/scanner/sqlread.py` — 3,743 lines
+* `web/app.js` — 3,592 lines
+* `ripple/scanner/lineage.py` — 2,052 lines
 
 Pasting one of those into a chat, and catching the new one coming back, is a
 whole evening on its own — and the reply will usually arrive in two or three
@@ -179,7 +179,7 @@ file, give both.
       but the web service is ripple_offline\app.py, not ripple\api.py
 
 THE CATALOGUE — every file, what it decides, and what it touches
-29 Python files and the three screen files, 14,049 lines in all.
+29 Python files and the three screen files, 14,233 lines in all.
 
 ### ripple/ai.py   (312 lines, normal build only)
 WHAT IT DECIDES: The optional AI layer.
@@ -231,10 +231,10 @@ WHY IT IS LIKE THIS, in the file's own words:
       folder copied into a repository inherits its .git by accident, and reporting
       that repository's commit is a confident answer about a copy nobody can check;
     * the dates on its own files, which is a guess, and says so.
-### ripple/catalog.py   (93 lines, both builds)
+### ripple/catalog.py   (201 lines, both builds)
 WHAT IT DECIDES: What tables and columns exist, learned from the repository itself.
-IT NEEDS      : ripple/scanner/sqlread.py
-NEEDED BY     : ripple/api.py, ripple/notification.py, ripple_offline/app.py
+IT NEEDS      : ripple/scanner/dialectcompat.py, ripple/scanner/sqlread.py
+NEEDED BY     : ripple/api.py, ripple/notification.py, ripple/scanner/lineage.py, ripple_offline/app.py
 CALLABLE      : Catalog, build_catalog()
 WHY IT IS LIKE THIS, in the file's own words:
     This is the "mock database" for the demo: rather than being handed a data
@@ -249,7 +249,7 @@ CALLABLE      : git_branch(), Settings
 WHY IT IS LIKE THIS, in the file's own words:
     Everything that would differ between a laptop, a demo host and a real corporate
     network lives here, so nothing has to be hunted for in code.
-### ripple/narrative.py   (592 lines, both builds)
+### ripple/narrative.py   (595 lines, both builds)
 WHAT IT DECIDES: Writing the summary and the reply without any AI.
 IT NEEDS      : nothing else in Ripple
 NEEDED BY     : ripple/api.py, ripple_offline/app.py
@@ -339,7 +339,7 @@ WHY IT IS LIKE THIS, in the file's own words:
 ### ripple/scanner/dialectcompat.py   (138 lines, both builds)
 WHAT IT DECIDES: Reading the parse tree the same way whichever sqlglot is installed.
 IT NEEDS      : nothing else in Ripple
-NEEDED BY     : ripple/scanner/lineage.py, ripple/scanner/sqlread.py
+NEEDED BY     : ripple/catalog.py, ripple/scanner/lineage.py, ripple/scanner/sqlread.py
 CALLABLE      : from_of(), star_except(), star_replace(), is_unpivot(), pivot_fields(), pivot_columns(), is_temporary(), merge_whens(), set_branches(), output_names()
 WHY IT IS LIKE THIS, in the file's own words:
     sqlglot renames the keys inside its own nodes between major versions, and three
@@ -379,9 +379,9 @@ WHY IT IS LIKE THIS, in the file's own words:
 
     The access token is only ever used as an Authorization header. It is never
     written to disk, never logged, and never returned by any route.
-### ripple/scanner/lineage.py   (2,002 lines, both builds)
+### ripple/scanner/lineage.py   (2,052 lines, both builds)
 WHAT IT DECIDES: Following a column through the pipeline, and saying what it means.
-IT NEEDS      : ripple/config.py, ripple/scanner/dialectcompat.py, ripple/scanner/repo.py, ripple/scanner/sqlread.py
+IT NEEDS      : ripple/catalog.py, ripple/config.py, ripple/scanner/dialectcompat.py, ripple/scanner/repo.py, ripple/scanner/sqlread.py
 NEEDED BY     : ripple/api.py, ripple_offline/app.py
 CALLABLE      : Finding, ScanResult, trace()
 WHY IT IS LIKE THIS, in the file's own words:
@@ -433,11 +433,11 @@ WHY IT IS LIKE THIS, in the file's own words:
     The last one is worth a word. An export builds no table, so there is nothing to
     carry the column onwards to -- but it is a real read, and after this it is
     reported as one rather than as a file that could not be read.
-### ripple/scanner/sqlread.py   (3,720 lines, both builds)
+### ripple/scanner/sqlread.py   (3,743 lines, both builds)
 WHAT IT DECIDES: Reading SQL properly, rather than just matching words.
 IT NEEDS      : ripple/config.py, ripple/scanner/dialectcompat.py, ripple/scanner/repo.py, ripple/scanner/rescue.py, ripple/scanner/templating.py
 NEEDED BY     : ripple/api.py, ripple/catalog.py, ripple/scanner/lineage.py, ripple_offline/app.py
-CALLABLE      : short_name(), dataset_of(), canonical(), is_wildcard(), wildcard_match(), wildcard_covers(), is_metadata_read(), session_scope(), is_session_scoped(), same_table(), reads_metadata(), Usage, Statement, ParsedRepo and 14 more
+CALLABLE      : short_name(), dataset_of(), canonical(), is_wildcard(), wildcard_match(), wildcard_covers(), is_metadata_read(), session_scope(), is_session_scoped(), same_table(), reads_metadata(), Usage, Statement, ParsedRepo and 15 more
 WHY IT IS LIKE THIS, in the file's own words:
     The whole value of Ripple is in this file. A word search can tell you that
     MARKET_CODE appears in a file. Only parsing can tell you that it appears
@@ -682,7 +682,7 @@ WHY IT IS LIKE THIS, in the file's own words:
     the stripped script rather than loaded separately, because JavaScript hoists
     every function declaration in a file before running any of it, which is what
     lets it replace the online settings screen cleanly.
-### web/app.js   (3,516 lines, both builds)
+### web/app.js   (3,592 lines, both builds)
 WHAT IT DECIDES: Every screen. All seven steps, every card, every table and every word on them. No Python file draws anything.
 IT NEEDS      : reads the JSON that ripple/api.py (or ripple_offline/app.py) returns
 NEEDED BY     : nothing imports it — the page loads it
