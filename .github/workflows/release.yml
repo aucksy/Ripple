@@ -1,13 +1,23 @@
 # Ripple's cloud build.
 #
-# Every push to main runs both test suites. A version tag (v1.9.0) does that and
-# then builds the packaged program, starts it, drives it through its own API,
-# and publishes the zip to the releases page - keeping only that one. Nothing is
-# built on anybody's machine: the machine this was written on crashes on builds,
-# and a build nobody watched is a download nobody can trust.
+# Every push to main runs both test suites. Releasing does that and then builds
+# the packaged program, starts it, drives it through its own API, and publishes
+# the zip to the releases page - keeping only that one. Nothing is built on
+# anybody's machine: the machine this was written on crashes on builds, and a
+# build nobody watched is a download nobody can trust.
 #
-# The tag has to be the version in ripple/build_info.py. The tag, the zip's
-# filename and the line on the settings screen are one number, written once.
+# There are two ways to release, and both take the version from exactly one
+# place, ripple/build_info.py:
+#
+#   - Push a version tag (v1.9.1). The tag has to be the version in the code,
+#     and the job stops if it is not.
+#   - Run this workflow by hand, from the Actions tab. There is no tag to
+#     disagree with the code, because publishing makes the tag from the version
+#     it finds there. This is the way to release from a phone, or from any
+#     machine that cannot push tags.
+#
+# Either way the tag, the zip's filename and the line on the settings screen are
+# one number, written down once.
 name: Ripple
 
 on:
@@ -44,7 +54,7 @@ jobs:
   release:
     name: Build, prove and publish the download
     needs: tests
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,7 +67,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r Codebase/requirements-dev.txt pyinstaller==6.22.0
+      # Only a tag can disagree with the code. A run started by hand has no tag:
+      # publishing makes it from the version below, so there is nothing to check.
       - name: The tag must be the version in the code
+        if: startsWith(github.ref, 'refs/tags/v')
         run: python -c "import os, sys; sys.path.insert(0, 'Codebase'); from ripple.build_info import VERSION; tag = os.environ['GITHUB_REF_NAME']; assert tag == 'v' + VERSION, f'the tag is {tag} but ripple/build_info.py says {VERSION}'; print('tag', tag, 'matches VERSION', VERSION)"
       - name: Build the folder and the zip
         working-directory: Ripple Offline
