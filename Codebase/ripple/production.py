@@ -35,11 +35,29 @@ _BULLET = re.compile(r"^(?:[-–—•‣·◦*+>]\s+|\(?\d+[.)]\s+|\[\d+\]\s+)"
 _FENCE = re.compile(r"^`{3,}|^~{3,}")
 _SEPARATOR = re.compile(r"^[\s|:+-]*-[\s|:+-]*$")
 _QUOTES = "\"'`‘’“”"
+# Characters that arrive invisibly inside a pasted name: a zero-width space
+# from Confluence, a no-break space from Excel, a byte-order mark from a saved
+# file. Each one made a real table name fail to look like one, and the paste
+# then reported it as "did not look like a table name" -- which sends a person
+# to check a spelling that is right.
+_INVISIBLE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
+_NBSP = "\u00a0"
 
 # A table name, as written anywhere it might be written: bare, dataset-qualified,
 # or fully qualified with a project id (which on BigQuery may contain hyphens).
 _PART = r"[A-Za-z_][A-Za-z0-9_$#-]*"
 _TABLE_NAME = re.compile(rf"^{_PART}(?:\.{_PART}){{0,3}}$")
+# The older BigQuery spelling, project:dataset.table, as the bq command line
+# and older documents write it. The colon is a separator there, not part of a
+# name, and a list copied out of an old page is full of them.
+_LEGACY_COLON = re.compile(rf"^({_PART}):({_PART}(?:\.{_PART}){{0,2}})$")
+# A note in brackets after a name -- "sales_daily (partitioned by day)".
+_BRACKET_NOTE = re.compile(r"^(.*?\S)\s*[\(\[\{][^\)\]\}]*[\)\]\}]\s*$")
+# A description after the name: "sales_daily - daily sales", "sales_daily: the
+# daily sales". The name has to look like a table on its own before either is
+# used at all, because "please - confirm by friday" is exactly this shape.
+_TAILS = (re.compile(r"^(\S+)\s+(?:[-–—|]|->)\s+\S.*$"),
+          re.compile(r"^(\S+?):\s+\S.*$"))
 
 # Column headings a list of tables tends to arrive under. Matched only against
 # the first row, so a table genuinely called "source" is only ever at risk if it
@@ -81,7 +99,13 @@ def _classify(text: str) -> Entry | None:
     a word beginning with an underscore matches the end of one.
     """
     if "*" in text or "?" in text:
-        return Entry(given=text, kind="glob", key=text.upper())
+        # Matched against the table's own name, like everything else here,
+        # because SQL only ever says the last part. Keyed whole, a pattern
+        # pasted as "mart.snap_daily_*" matched nothing at all: no bare name
+        # has a dot in it. The dataset is dropped unless the wildcard is in it.
+        head, _, last = text.rpartition(".")
+        key = last if head and "*" not in head and "?" not in head else text
+        return Entry(given=text, kind="glob", key=key.upper())
     if text.startswith("_"):
         return Entry(given=text, kind="endswith", key=text.upper())
     if _TABLE_NAME.match(text):
@@ -111,7 +135,7 @@ def _strip_cell(cell: str) -> str:
     as it was so it comes back as something that was ignored, with a reason,
     rather than disappearing as if it had been a blank line.
     """
-    out = original = cell.strip()
+    out = original = _INVISIBLE.sub("", cell).replace(_NBSP, " ").strip()
     for _ in range(4):
         before = out
         out = re.sub(r"[,;.]+$", "", out).strip()
@@ -144,6 +168,28 @@ def _looks_like_a_table(cell: str) -> bool:
     if not _looks_like_a_name(cell):
         return False
     return "_" in cell or "." in cell or any(ch.isdigit() for ch in cell)
+
+
+def _tidy(cell: str) -> tuple[str, str]:
+    """A cell made readable as a name, and one word saying what was done to it.
+
+    "" when nothing was. Every other answer goes back as a note, because a
+    name Ripple quietly rewrote is a name nobody can check -- and each of these
+    shapes was measured as a real published table reported "not a table name".
+    """
+    if _looks_like_a_name(cell):
+        return cell, ""
+    m = _LEGACY_COLON.match(cell)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}", "colon"
+    m = _BRACKET_NOTE.match(cell)
+    if m and _looks_like_a_table(_strip_cell(m.group(1))):
+        return _strip_cell(m.group(1)), "bracket"
+    for pattern in _TAILS:
+        m = pattern.match(cell)
+        if m and _looks_like_a_table(_strip_cell(m.group(1))):
+            return _strip_cell(m.group(1)), "tail"
+    return cell, ""
 
 
 def _split_cells(line: str, delimiter: str | None) -> list[str]:
@@ -224,6 +270,16 @@ def parse(text: str) -> "ProductionRule":
     """Read a pasted list, however it arrived, and say what was made of it."""
     raw = str(text or "")
     notes: list[dict] = []
+    # Counted on the raw lines, before anything is tidied: the characters are
+    # taken out on the way in, and this note is the only trace they leave.
+    invisible = sum(1 for ln in raw.splitlines()
+                    if ln.strip() and (_INVISIBLE.search(ln) or _NBSP in ln))
+    if invisible:
+        notes.append({"kind": "tidied", "how": "invisible", "count": invisible, "examples": [],
+                      "text": f"{invisible} line{'' if invisible == 1 else 's'} had invisible "
+                              f"characters in {'it' if invisible == 1 else 'them'} - a zero-width "
+                              f"space or a no-break space, the kind a copy out of Confluence or "
+                              f"Excel brings along. Ripple removed them."})
     fenced = 0
     lines: list[str] = []
     for line in raw.splitlines():
@@ -295,12 +351,16 @@ def parse(text: str) -> "ProductionRule":
     same_table: list[str] = []
     rejected: list[str] = []
     headings_inline = 0
+    tidied: dict[str, list[str]] = {}
     for cell in cells:
         if not cell:
             continue
         if _is_heading(cell) and not _TABLE_NAME.match(cell):
             headings_inline += 1
             continue
+        cell, how = _tidy(cell)
+        if how:
+            tidied.setdefault(how, []).append(cell[:60])
         entry = _classify(cell)
         if entry is None:
             rejected.append(cell[:80])
@@ -324,6 +384,21 @@ def parse(text: str) -> "ProductionRule":
         notes.append({"kind": "heading", "count": headings_inline, "examples": [],
                       "text": f"{headings_inline} more line{'' if headings_inline == 1 else 's'} "
                               f"looked like a heading and {'was' if headings_inline == 1 else 'were'} ignored."})
+    # Names that were read only after something was taken off them. Said out
+    # loud, one line per kind, because a rewrite nobody can see is a rewrite
+    # nobody can correct.
+    for how, kept in tidied.items():
+        n, one = len(kept), len(kept) == 1
+        text_for = {
+            "colon": (f"{n} name{'' if one else 's'} used the older project:dataset.table "
+                      f"form. Ripple read {'it' if one else 'them'} as project.dataset.table."),
+            "bracket": (f"{n} name{'' if one else 's'} had a note in brackets after "
+                        f"{'it' if one else 'them'}. Ripple kept the name and dropped the note."),
+            "tail": (f"{n} line{'' if one else 's'} had a description after the name. "
+                     f"Ripple kept the name and dropped the rest."),
+        }
+        notes.append({"kind": "tidied", "how": how, "count": n, "examples": kept[:6],
+                      "text": text_for[how]})
     if duplicates:
         notes.append({"kind": "duplicate", "count": len(duplicates),
                       "examples": duplicates[:6],
@@ -354,6 +429,48 @@ def parse_production_rule(text: str) -> tuple[str, ...]:
     return tuple(e.given for e in parse(text).entries)
 
 
+# A date-sharded table is written with its day on the end -- events_20260101 --
+# and pasted without it, because the family is what the team publishes. A
+# run-time placeholder glued onto a name is the same shape one step removed:
+# fact_returns_${RUN_DATE} reaches the parser as fact_returns_RUN_DATE. Neither
+# is a different table from the one on the list. Measured before this: both
+# came back "not written anywhere in this repository", one screen away from a
+# scan that then called the same tables safe.
+#
+# Loose on purpose, and in the safe direction. A name matched this way is
+# COUNTED AS PUBLISHED, which can only add a finding, never hide one -- and
+# every such match is reported as the family match it is, never as an exact
+# one. Nothing here ever excludes a table.
+_SHARD = re.compile(r"_(?:\d{8}|\d{6}|\d{4}_\d{2}_\d{2}|\d{8}_\d{2,6}|\d{8}T\d{6})$")
+_DECORATOR = re.compile(r"\$\d+$")
+_RUN_WORDS = frozenset({
+    "DATE", "DT", "DS", "DS_NODASH", "RUN_DATE", "RUNDATE", "RUN_DT", "LOAD_DATE", "LOADDATE",
+    "LOAD_DT", "EXECUTION_DATE", "EXEC_DATE", "NEXT_DS", "PREV_DS", "PARTITION_DATE",
+    "PARTITION_DT", "PARTITIONDATE", "TABLE_SUFFIX", "SUFFIX", "SHARD", "YYYYMMDD", "YYYYMM",
+    "YYYY_MM_DD", "RUN_ID", "RUNID", "BATCH_ID", "BATCHID", "RUN_TS", "SNAPSHOT_DATE",
+    "SNAPSHOT_DT", "AS_OF", "ASOF", "AS_OF_DATE", "TIMESTAMP", "TS", "ENV", "ENVIRONMENT",
+})
+
+
+def family_of(name: str) -> tuple[str, str]:
+    """The family a sharded or placeholder-suffixed name belongs to, and why.
+
+    ("", "") when the name is not one of those. Compared in upper case, on
+    the table's own name: the dataset in front is taken off first.
+    """
+    bare = _DECORATOR.sub("", (name or "").strip().rsplit(".", 1)[-1]).upper()
+    m = _SHARD.search(bare)
+    if m and m.start():
+        return bare[:m.start()], "shard"
+    parts = bare.split("_")
+    # The longer tail first: fact_returns_RUN_DATE belongs to fact_returns,
+    # not to fact_returns_run.
+    for take in (2, 1):
+        if len(parts) > take and "_".join(parts[-take:]) in _RUN_WORDS:
+            return "_".join(parts[:-take]), "placeholder"
+    return "", ""
+
+
 @dataclass
 class ProductionRule:
     """A pasted list, read. Immutable in practice -- rebuilt when the text changes."""
@@ -378,19 +495,32 @@ class ProductionRule:
 
     # ── matching ───────────────────────────────────────────────────────────
     def matches(self, table: str) -> bool:
+        return bool(self.match_how(table))
+
+    def match_how(self, table: str) -> str:
+        """Why this table counts as published -- or "" when it does not.
+
+        "name", "glob" and "suffix" are exact readings of the list. "shard"
+        and "placeholder" are family matches (see family_of): real, in the
+        safe direction, and reported as what they are wherever the answer goes
+        on screen.
+        """
         name = (table or "").strip()
         if not name:
-            return False
-        bare = name.rsplit(".", 1)[-1].upper()
+            return ""
+        bare = _DECORATOR.sub("", name.rsplit(".", 1)[-1]).upper()
         if bare in self._names:
-            return True
+            return "name"
         for pattern in self._globs:
             if fnmatch(bare, pattern):
-                return True
+                return "glob"
         for pattern in self._suffixes:
             if bare.endswith(pattern):
-                return True
-        return False
+                return "suffix"
+        family, how = family_of(bare)
+        if family and family in self._names:
+            return how
+        return ""
 
     # ── what it is made of ─────────────────────────────────────────────────
     @property
@@ -462,9 +592,28 @@ def check_against_repo(rule: ProductionRule, index, parsed) -> dict:
     names = rule.names
     found: list[dict] = []
     unseen: list[Entry] = []
+    # Every sharded or placeholder-suffixed name in the code, by the family it
+    # belongs to. Worked out once here rather than once per pasted name: a
+    # real list is hundreds long and a real repository has thousands of names.
+    families: dict[str, dict[str, list[str]]] = {}
+    for t in known:
+        family, how = family_of(t)
+        if family:
+            families.setdefault(family, {}).setdefault(how, []).append(t)
     for e in names:
         if e.key in known:
-            found.append({"given": e.given, "key": e.key, "state": "found"})
+            found.append({"given": e.given, "key": e.key, "state": "found", "how": "exact",
+                          "as": [], "asCount": 0})
+        elif e.key in families:
+            # The list says order_lines; the code writes order_lines_20260101.
+            # Found -- and said to be found THIS way, because "the table you
+            # pasted is here" and "dated copies of it are here" are different
+            # sentences to the person checking the list.
+            hows = families[e.key]
+            how = "shard" if "shard" in hows else "placeholder"
+            spellings = sorted({t for ts in hows.values() for t in ts})
+            found.append({"given": e.given, "key": e.key, "state": "found", "how": how,
+                          "as": spellings[:6], "asCount": len(spellings)})
         else:
             unseen.append(e)
 
@@ -510,6 +659,10 @@ def check_against_repo(rule: ProductionRule, index, parsed) -> dict:
         "missing": missing,
         "patterns": pattern_hits,
         "foundCount": len(found),
+        # How many of those were found as a family rather than by their exact
+        # name. The screen says so beside the count, because a list that reads
+        # "all 50 found" over 12 family matches is telling half the truth.
+        "familyCount": len([f for f in found if f["how"] != "exact"]),
         "missingCount": len(missing),
     }
 
@@ -524,10 +677,10 @@ def _table_names(parsed) -> set[str]:
     names: set[str] = set()
     for s in parsed.statements:
         if s.target:
-            names.add(s.target.rsplit(".", 1)[-1].upper())
+            names.add(_DECORATOR.sub("", s.target.rsplit(".", 1)[-1]).upper())
         for src in s.sources:
             if src:
-                names.add(src.rsplit(".", 1)[-1].upper())
+                names.add(_DECORATOR.sub("", src.rsplit(".", 1)[-1]).upper())
     try:
         parsed._table_names_cache = (len(parsed.statements), names)
     except Exception:      # pragma: no cover - a stand-in object in a test

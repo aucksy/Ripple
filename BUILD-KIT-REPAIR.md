@@ -58,8 +58,8 @@ done, whatever the chat told you.
 **4. Some of these files are enormous.** The three biggest:
 
 * `ripple/scanner/sqlread.py` — 3,720 lines
-* `web/app.js` — 3,291 lines
-* `ripple/scanner/lineage.py` — 1,726 lines
+* `web/app.js` — 3,516 lines
+* `ripple/scanner/lineage.py` — 2,002 lines
 
 Pasting one of those into a chat, and catching the new one coming back, is a
 whole evening on its own — and the reply will usually arrive in two or three
@@ -179,9 +179,9 @@ file, give both.
       but the web service is ripple_offline\app.py, not ripple\api.py
 
 THE CATALOGUE — every file, what it decides, and what it touches
-29 Python files and the three screen files, 13,470 lines in all.
+29 Python files and the three screen files, 14,049 lines in all.
 
-### ripple/ai.py   (305 lines, normal build only)
+### ripple/ai.py   (312 lines, normal build only)
 WHAT IT DECIDES: The optional AI layer.
 IT NEEDS      : ripple/config.py, ripple/providers.py
 NEEDED BY     : ripple/api.py
@@ -193,7 +193,7 @@ WHY IT IS LIKE THIS, in the file's own words:
 
     If there is no key, or the call fails, every function here falls back to a
     written-out version. Ripple must work with the AI switched off.
-### ripple/api.py   (906 lines, normal build only)
+### ripple/api.py   (920 lines, normal build only)
 WHAT IT DECIDES: The web service.
 IT NEEDS      : ripple/ai.py, ripple/build_info.py, ripple/catalog.py, ripple/config.py, ripple/narrative.py, ripple/notification.py, ripple/production.py, ripple/progress.py, ripple/providers.py, ripple/scanner/github.py, ripple/scanner/lineage.py, ripple/scanner/repo.py, ripple/scanner/sqlread.py, ripple/store.py
 NEEDED BY     : nothing else in Ripple
@@ -249,7 +249,7 @@ CALLABLE      : git_branch(), Settings
 WHY IT IS LIKE THIS, in the file's own words:
     Everything that would differ between a laptop, a demo host and a real corporate
     network lives here, so nothing has to be hunted for in code.
-### ripple/narrative.py   (528 lines, both builds)
+### ripple/narrative.py   (592 lines, both builds)
 WHAT IT DECIDES: Writing the summary and the reply without any AI.
 IT NEEDS      : nothing else in Ripple
 NEEDED BY     : ripple/api.py, ripple_offline/app.py
@@ -259,11 +259,11 @@ WHY IT IS LIKE THIS, in the file's own words:
     someone decides no data may leave the network. It is plainer than the AI
     version, but it says exactly the same things -- the facts come from the scan
     either way.
-### ripple/notification.py   (494 lines, both builds)
+### ripple/notification.py   (545 lines, both builds)
 WHAT IT DECIDES: Reading the impact notification.
 IT NEEDS      : ripple/catalog.py
 NEEDED BY     : ripple/api.py, ripple_offline/app.py
-CALLABLE      : Notification, read_eml(), read_msg(), strip_html(), split_pasted_headers(), parse_sender(), signature(), source_system(), enrich(), read_pasted(), read_upload(), parse_date(), classify_change(), extract_by_rules() and 1 more
+CALLABLE      : names_the_whole_table(), Notification, read_eml(), read_msg(), strip_html(), split_pasted_headers(), parse_sender(), signature(), source_system(), enrich(), read_pasted(), read_upload(), parse_date(), classify_change() and 2 more
 WHY IT IS LIKE THIS, in the file's own words:
     Two ways in, and both end at the same editable form:
 
@@ -272,11 +272,11 @@ WHY IT IS LIKE THIS, in the file's own words:
 
     Extraction never has the last word. Whatever comes out of here is shown to a
     human to correct before a single file is scanned.
-### ripple/production.py   (535 lines, both builds)
+### ripple/production.py   (688 lines, both builds)
 WHAT IT DECIDES: Which tables are the ones this team publishes.
 IT NEEDS      : nothing else in Ripple
 NEEDED BY     : ripple/api.py, ripple/config.py, ripple_offline/app.py
-CALLABLE      : Entry, parse(), parse_production_rule(), ProductionRule, check_against_repo()
+CALLABLE      : Entry, parse(), parse_production_rule(), family_of(), ProductionRule, check_against_repo()
 WHY IT IS LIKE THIS, in the file's own words:
     This is the single most expensive setting in Ripple. A finding only counts as
     production impact if the table it ends at is on this list, so getting it wrong
@@ -379,7 +379,7 @@ WHY IT IS LIKE THIS, in the file's own words:
 
     The access token is only ever used as an Authorization header. It is never
     written to disk, never logged, and never returned by any route.
-### ripple/scanner/lineage.py   (1,726 lines, both builds)
+### ripple/scanner/lineage.py   (2,002 lines, both builds)
 WHAT IT DECIDES: Following a column through the pipeline, and saying what it means.
 IT NEEDS      : ripple/config.py, ripple/scanner/dialectcompat.py, ripple/scanner/repo.py, ripple/scanner/sqlread.py
 NEEDED BY     : ripple/api.py, ripple_offline/app.py
@@ -513,7 +513,7 @@ WHY IT IS LIKE THIS, in the file's own words:
     the scanner, the SQL reader, the lineage tracer and the writer. What lives here
     is only what genuinely differs offline — settings chosen on screen instead of
     in environment variables, and a front end with nothing on it that reaches out.
-### ripple_offline/app.py   (627 lines, packaged build only)
+### ripple_offline/app.py   (641 lines, packaged build only)
 WHAT IT DECIDES: The offline web service.
 IT NEEDS      : ripple/build_info.py, ripple/catalog.py, ripple/config.py, ripple/narrative.py, ripple/notification.py, ripple/production.py, ripple/progress.py, ripple/scanner/lineage.py, ripple/scanner/repo.py, ripple/scanner/sqlread.py, ripple/store.py, ripple_offline/folderpick.py, ripple_offline/lifecycle.py, ripple_offline/nonet.py, ripple_offline/paths.py, ripple_offline/prefs.py, ripple_offline/synced.py
 NEEDED BY     : nothing else in Ripple
@@ -682,12 +682,12 @@ WHY IT IS LIKE THIS, in the file's own words:
     the stripped script rather than loaded separately, because JavaScript hoists
     every function declaration in a file before running any of it, which is what
     lets it replace the online settings screen cleanly.
-### web/app.js   (3,291 lines, both builds)
+### web/app.js   (3,516 lines, both builds)
 WHAT IT DECIDES: Every screen. All seven steps, every card, every table and every word on them. No Python file draws anything.
 IT NEEDS      : reads the JSON that ripple/api.py (or ripple_offline/app.py) returns
 NEEDED BY     : nothing imports it — the page loads it
 CALLABLE      : not Python
-### web/styles.css   (396 lines, both builds)
+### web/styles.css   (438 lines, both builds)
 WHAT IT DECIDES: Every colour, size and spacing rule.
 IT NEEDS      : nothing
 NEEDED BY     : web/index.html loads it

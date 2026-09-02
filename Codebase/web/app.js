@@ -21,7 +21,7 @@ const STEPS = [
   ['Review fields',   'Check before scanning'],
   ['Repository',      'What will be searched'],
   ['Impact analysis', 'Grouped by production table'],
-  ['Dependency map',  'Where the column goes'],
+  ['Dependency map',  'Where the change goes'],
   ['Summary',         'What it means'],
   ['Reply',           'Answer the upstream team'],
 ];
@@ -39,7 +39,7 @@ const S = {
   //<online-only>
   aiMsg: null,        // result of the last AI key action, kept across redraws
   //</online-only>
-  manRows: [{ table: '', attrs: '' }],
+  manRows: [{ table: '', attrs: '', whole: false }],
   man: { source: '', changeKind: 'unknown', effectiveDate: '', changeDesc: '',
          pocName: '', pocEmail: '', pocTeam: '' },
   busy: false, busyWhat: '',
@@ -47,6 +47,9 @@ const S = {
   // Which information buttons are open, by label. Kept here so a redraw does
   // not shut a panel somebody is in the middle of reading.
   why: {},
+  // Which folded lists are open, by label. Same reason: a redraw must not
+  // shut a list somebody has just opened.
+  folds: {},
   //<online-only>
   // Repository step. The token is held here only long enough to send it once;
   // it is cleared as soon as the server has accepted it.
@@ -72,12 +75,15 @@ const MAN_FIELDS = [
   ['pocTeam', 'Contact team', 'text', 'e.g. C360 Data Governance'],
 ];
 
+// No "attribute" in front of the change: the same notice can be about a whole
+// table, and "Attribute decommission" over a table being dropped describes a
+// change that is not the one happening.
 const CHANGE_KINDS = [
   ['unknown', 'Not specified'],
-  ['removal', 'Attribute decommission'],
+  ['removal', 'Decommission'],
   ['value_change', 'Value format change'],
   ['type_change', 'Data type change'],
-  ['rename', 'Attribute rename'],
+  ['rename', 'Rename'],
 ];
 const kindLabel = (id) => (CHANGE_KINDS.find(([k]) => k === id) || CHANGE_KINDS[0])[1];
 
@@ -144,6 +150,73 @@ function why(fact, label, ...body) {
   };
   wrap.append(el('div', { className: 'ifact' }, fact, btn), panel);
   return wrap;
+}
+
+/* ── the folded list ──────────────────────────────────────────────────────
+   A long list folds shut by default. The heading stays on the page and carries
+   the fact -- what the list is, and how many are in it -- so somebody who never
+   opens it still sees everything Ripple knows it missed. What folds is the list
+   itself: the names, the chips, the rows.
+
+   Measured on a repository the size of the one this was built for: the
+   findings screen ran to forty thousand pixels, and every caveat on it was a
+   heading over a list nobody could scroll past. The heading is the caveat;
+   the list is the evidence. Only the evidence folds.
+
+   `label` keys whether it is open, so a redraw does not shut a list somebody
+   is reading. `head` is the heading, a node or a string. `body` is the list,
+   built only when it is open. `opts.count` is drawn as a badge, `opts.tag`
+   as the small capitals label, `opts.after` is a node that stays visible
+   under the heading whether or not the list is open -- a button that acts
+   on the list belongs there, not inside it. */
+function fold(label, head, body, opts = {}) {
+  const open = S.folds[label] == null ? !!opts.open : !!S.folds[label];
+  const card = el('div', { className: 'card clip fold' + (open ? ' open' : '') + (opts.tone ? ' ' + opts.tone : ''),
+    style: opts.style || '' });
+  const h = el('div', { className: 'fhead', tabIndex: 0, role: 'button' });
+  h.setAttribute('aria-expanded', String(open));
+  if (opts.tag) h.append(el('span', { className: 'tag', textContent: opts.tag, style: opts.tagStyle || '' }));
+  h.append(el('div', { className: 'ftitle' }, head));
+  if (opts.count != null) {
+    h.append(el('span', { className: 'badge sm ' + (opts.badge || 'grey'), textContent: String(opts.count) }));
+  }
+  h.append(el('span', { className: 'fhint', textContent: open ? 'hide' : 'show' }),
+    el('span', { className: 'caret', textContent: '›' }));
+  const toggle = () => { S.folds[label] = !open; render(); };
+  // The information button inside a heading opens its own panel; it must not
+  // fold the list underneath it as well.
+  h.onclick = (e) => { if (e.target.closest && e.target.closest('button')) return; toggle(); };
+  h.onkeydown = (e) => {
+    if (e.target !== h) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  };
+  card.append(h);
+  if (opts.after) card.append(el('div', { className: 'fextra' }, opts.after));
+  if (open) card.append(el('div', { className: 'fbody' }, typeof body === 'function' ? body() : body));
+  return card;
+}
+
+/* A card that was built the old way -- heading first, then the list -- turned
+   into a folded one. The first child becomes the heading that stays; everything
+   after it becomes the list that folds. */
+function foldFrom(label, card, opts = {}) {
+  const kids = [...card.childNodes];
+  const head = kids.shift();
+  const body = el('div');
+  kids.forEach(k => body.append(k));
+  return fold(label, head, body, opts);
+}
+
+/* The one control that turns "which column" into "the whole table". A real
+   checkbox with a label, so it can be reached by keyboard and read out. When
+   it is on, the attribute box is emptied and disabled: the two are different
+   questions, and a row that asks both would be answering neither. */
+let wholeToggleCount = 0;
+function wholeToggle(on, onchange) {
+  const id = 'whole-' + (++wholeToggleCount);
+  const box = el('input', { type: 'checkbox', id, checked: !!on });
+  box.onchange = () => onchange(box.checked);
+  return el('label', { htmlFor: id, className: 'small wholetoggle' }, box, 'Whole table');
 }
 
 /* Every email address in a blob of text, once each.
@@ -360,7 +433,7 @@ function productionReport(p, opts = {}) {
 
 function productionNotes(r) {
   const wrap = el('div', { className: 'note info', style: 'margin-top:12px' });
-  wrap.append(el('b', { style: 'display:block', textContent: 'What was left out of that paste' }));
+  wrap.append(el('b', { style: 'display:block', textContent: 'What Ripple did with that paste' }));
   r.notes.forEach(n => {
     const line = el('div', { style: 'margin-top:6px;line-height:1.55' }, n.text);
     if (n.examples && n.examples.length) {
@@ -400,6 +473,29 @@ function productionCheck(r) {
           + 'a clean result for these tables means nothing.'
         : `Checked against the ${c.tablesKnown.toLocaleString()} table names Ripple read out of `
           + 'this repository.' })));
+    // Found as a family rather than by the exact name: the list says
+    // order_lines, the code writes order_lines_20260101. Said here, because
+    // "found" over a family match is half the truth, and half the truth is
+    // what this whole screen exists to prevent.
+    const family = (c.found || []).filter(f => f.how && f.how !== 'exact');
+    if (family.length) {
+      const fam = el('div', { className: 'note info', style: 'margin-top:12px' });
+      fam.append(why(
+        el('b', { textContent: `${family.length} of the found table${family.length === 1 ? '' : 's'} `
+          + `${family.length === 1 ? 'was' : 'were'} matched as a family, not by exact name` }),
+        'tables matched as a family',
+        'The code writes these with a date or a run-time placeholder on the end — '
+        + 'order_lines_20260101, or fact_returns with a run date glued on — and the list has '
+        + 'the name without it. Ripple counts every such copy as the published table. That is '
+        + 'a loose match in the safe direction: it can only add a finding, never hide one.'));
+      const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:8px' });
+      family.forEach(f => chips.append(el('span', { className: 'chip mono',
+        textContent: `${f.given} → ${(f.as || []).join(', ')}`
+          + (f.asCount > (f.as || []).length ? ` and ${f.asCount - f.as.length} more` : '')
+          + ` (${f.how === 'shard' ? 'dated copies' : 'a placeholder on the end'})` })));
+      fam.append(chips);
+      wrap.append(fam);
+    }
     // Grouped rather than listed one sentence at a time. Sixty rows each saying
     // the same thing is a page nobody scrolls to the end of, and the two groups
     // send a person to two completely different places.
@@ -614,14 +710,20 @@ function step1(root) {
   const rows = x(root, 'manRows');
   rows.innerHTML = '';
   S.manRows.forEach((r, i) => {
-    const wrap = el('div', { style: 'display:flex;gap:20px;align-items:flex-end;padding:16px 20px' + (i ? ';border-top:1px solid var(--hair)' : '') });
+    const wrap = el('div', { style: 'display:flex;gap:20px;align-items:flex-end;padding:16px 20px;flex-wrap:wrap' + (i ? ';border-top:1px solid var(--hair)' : '') });
     const t = el('input', { type: 'text', className: 'mono', value: r.table, placeholder: 'CUSTOMER_DEMOGRAPHICS', style: 'margin-top:6px' });
     t.oninput = () => { r.table = t.value; updateManHint(root); };
-    const a = el('input', { type: 'text', className: 'mono', value: r.attrs, placeholder: 'MARKET_CODE, MARKET_NAME', style: 'margin-top:6px' });
+    // Emptied and disabled while "Whole table" is on: the table itself is
+    // changing, so there is no one column to name.
+    const a = el('input', { type: 'text', className: 'mono', value: r.whole ? '' : r.attrs,
+      placeholder: r.whole ? 'every column — the table itself is changing' : 'MARKET_CODE, MARKET_NAME',
+      disabled: !!r.whole, style: 'margin-top:6px' });
     a.oninput = () => { r.attrs = a.value; updateManHint(root); };
     wrap.append(
-      el('div', { style: 'flex:1;min-width:0' }, el('span', { className: 'lbl faint', textContent: 'Upstream table name' }), t),
-      el('div', { style: 'flex:1;min-width:0' }, el('span', { className: 'lbl faint', textContent: 'Attributes — comma separated' }), a));
+      el('div', { style: 'flex:1;min-width:220px' }, el('span', { className: 'lbl faint', textContent: 'Upstream table name' }), t),
+      el('div', { style: 'flex:1.4;min-width:260px' }, el('span', { className: 'lbl faint', textContent: 'Attributes — comma separated' }), a),
+      el('div', { style: 'padding-bottom:9px' },
+        wholeToggle(r.whole, (on) => { r.whole = on; if (on) r.attrs = ''; render(); })));
     if (S.manRows.length > 1) {
       const rm = el('button', { className: 'danger', textContent: 'Remove' });
       rm.onclick = () => { S.manRows.splice(i, 1); render(); };
@@ -629,7 +731,7 @@ function step1(root) {
     }
     rows.append(wrap);
   });
-  x(root, 'addRow').onclick = () => { S.manRows.push({ table: '', attrs: '' }); render(); };
+  x(root, 'addRow').onclick = () => { S.manRows.push({ table: '', attrs: '', whole: false }); render(); };
 
   const fields = x(root, 'manFields');
   fields.innerHTML = '';
@@ -687,19 +789,31 @@ function step1(root) {
   updateManHint(root);
 }
 
-function manValid() { return S.manRows.some(r => r.table.trim() && r.attrs.trim()); }
+/* A row can be scanned when it names a table and either names an attribute or
+   says the whole table is changing. A table with neither is refused by the
+   server with the same words, so it is refused here first, in the open. */
+function manRowReady(r) { return !!r.table.trim() && (!!r.whole || !!r.attrs.trim()); }
+function manValid() { return S.manRows.some(manRowReady); }
 function updateManHint(root) {
   const tables = S.manRows.filter(r => r.table.trim()).length;
-  const attrs = S.manRows.reduce((a, r) => a + r.attrs.split(',').map(s => s.trim()).filter(Boolean).length, 0);
-  x(root, 'manCount').textContent = tables ? `${tables} table${tables > 1 ? 's' : ''} · ${attrs} attribute${attrs === 1 ? '' : 's'}` : 'Nothing entered yet';
+  const attrs = S.manRows.reduce((a, r) => a + (r.whole ? 0 : r.attrs.split(',').map(s => s.trim()).filter(Boolean).length), 0);
+  const whole = S.manRows.filter(r => r.table.trim() && r.whole).length;
+  const half = S.manRows.filter(r => r.table.trim() && !manRowReady(r)).length;
+  x(root, 'manCount').textContent = tables
+    ? `${tables} table${tables > 1 ? 's' : ''} · ${attrs} attribute${attrs === 1 ? '' : 's'}`
+      + (whole ? ` · ${whole} whole table${whole === 1 ? '' : 's'}` : '')
+    : 'Nothing entered yet';
   const ok = manValid();
   x(root, 'manStart').disabled = !ok;
   // The button says where it goes, so the hint no longer repeats it. It used to
   // read "Run impact analysis" and land on the repository screen instead, beside
   // a second button of the same name.
-  x(root, 'manHint').textContent = ok
-    ? 'Nothing is scanned yet.'
-    : 'Enter at least one table name and one attribute to continue.';
+  x(root, 'manHint').textContent = !ok
+    ? 'Enter a table name and an attribute — or tick "Whole table" if the table itself is changing.'
+    : half
+      ? `${half} table${half === 1 ? ' has' : 's have'} no attribute and ${half === 1 ? 'is' : 'are'} not `
+        + `marked whole, so ${half === 1 ? 'it' : 'they'} will not be scanned. Nothing is scanned yet.`
+      : 'Nothing is scanned yet.';
 }
 
 function startManual() {
@@ -709,14 +823,15 @@ function startManual() {
     changeType: kindLabel(S.man.changeKind),
     changeKind: S.man.changeKind || 'unknown',
     changeDesc: S.man.changeDesc.trim() || 'Entered by hand — no notification email was used.',
-    subject: 'Manual impact check — ' + S.manRows.filter(r => r.table.trim()).map(r => r.table.trim()).join(', '),
+    subject: 'Manual impact check — ' + S.manRows.filter(manRowReady).map(r => r.table.trim()).join(', '),
     effectiveDate: S.man.effectiveDate.trim(),
     pocName: S.man.pocName.trim(),
     pocEmail: S.man.pocEmail.trim(), pocEmails: emailList(S.man.pocEmail),
     pocTeam: S.man.pocTeam.trim(),
-    upstream: S.manRows.filter(r => r.table.trim()).map(r => ({
+    upstream: S.manRows.filter(manRowReady).map(r => ({
       table: r.table.trim(),
-      attrs: r.attrs.split(',').map(s => s.trim()).filter(Boolean),
+      attrs: r.whole ? [] : r.attrs.split(',').map(s => s.trim()).filter(Boolean),
+      whole: !!r.whole,
     })),
     extractedBy: 'manual', warnings: [],
   };
@@ -756,7 +871,10 @@ function acceptExtract(out) {
     changeDesc: out.changeDesc || '', subject: out.subject || '', effectiveDate: out.effectiveDate || '',
     pocName: out.pocName || '', pocEmail: out.pocEmail || '', pocEmails: emailList(out.pocEmail),
     pocTeam: out.pocTeam || '',
-    upstream: (out.upstream || []).map(u => ({ table: u.table, attrs: u.attrs || [] })),
+    // A named attribute wins over "whole", as it does in the reader: the two
+    // scans are different questions, and a row asking both answers neither.
+    upstream: (out.upstream || []).map(u => ({ table: u.table, attrs: u.attrs || [],
+      whole: !!u.whole && !(u.attrs || []).length })),
     extractedBy: out.extractedBy || 'rules',
     warnings: out.warnings || [], aiNote: out.aiNote || '',
   };
@@ -820,29 +938,61 @@ function step2(root) {
   const desc = x(root, 'desc'); desc.value = v.changeDesc || ''; desc.oninput = () => { v.changeDesc = desc.value; };
 
   renderUpstreamRows(root, v);
-  x(root, 'addRow').onclick = () => { v.upstream.push({ table: '', attrs: [] }); render(); };
+  x(root, 'addRow').onclick = () => { v.upstream.push({ table: '', attrs: [], whole: false }); render(); };
   x(root, 'next').onclick = () => goto(3);
 }
+
+/* A row can be scanned when it names a table and either names an attribute or
+   says the whole table is changing. The same rule as the manual screen and
+   the server, in the same words. */
+function rowReady(u) { return !!(u.table || '').trim() && (!!u.whole || (u.attrs || []).length > 0); }
 
 function renderUpstreamRows(root, v) {
   const box = x(root, 'rows'); box.innerHTML = '';
   const tables = v.upstream.filter(u => u.table.trim()).length;
-  const attrs = v.upstream.reduce((a, u) => a + (u.attrs || []).length, 0);
-  x(root, 'count').textContent = `${tables} table${tables === 1 ? '' : 's'} · ${attrs} attribute${attrs === 1 ? '' : 's'}`;
+  const attrs = v.upstream.reduce((a, u) => a + (u.whole ? 0 : (u.attrs || []).length), 0);
+  const whole = v.upstream.filter(u => u.table.trim() && u.whole).length;
+  x(root, 'count').textContent = `${tables} table${tables === 1 ? '' : 's'} · ${attrs} attribute${attrs === 1 ? '' : 's'}`
+    + (whole ? ` · ${whole} whole table${whole === 1 ? '' : 's'}` : '');
   v.upstream.forEach((u, i) => {
-    const wrap = el('div', { style: 'display:flex;gap:24px;align-items:flex-end;padding:16px 20px;animation:fadeUp .3s ease' + (i ? ';border-top:1px solid var(--hair)' : '') });
+    const wrap = el('div', { style: 'padding:16px 20px;animation:fadeUp .3s ease' + (i ? ';border-top:1px solid var(--hair)' : '') });
+    const line = el('div', { style: 'display:flex;gap:24px;align-items:flex-end;flex-wrap:wrap' });
     const t = el('input', { type: 'text', className: 'mono', value: u.table, style: 'margin-top:6px' });
     t.oninput = () => { u.table = t.value; };
-    const a = el('input', { type: 'text', className: 'mono', value: (u.attrs || []).join(', '), style: 'margin-top:6px' });
+    const a = el('input', { type: 'text', className: 'mono', value: u.whole ? '' : (u.attrs || []).join(', '),
+      placeholder: u.whole ? 'every column — the table itself is changing' : 'MARKET_CODE, MARKET_NAME',
+      disabled: !!u.whole, style: 'margin-top:6px' });
     a.oninput = () => { u.attrs = a.value.split(',').map(s => s.trim()).filter(Boolean); };
     const rm = el('button', { className: 'danger', textContent: 'Remove' });
     rm.onclick = () => { v.upstream.splice(i, 1); render(); };
-    wrap.append(
+    line.append(
       el('div', { style: 'width:288px;flex-shrink:0' }, el('span', { className: 'lbl faint', textContent: 'Upstream table name' }), t),
-      el('div', { style: 'flex:1;min-width:0' }, el('span', { className: 'lbl faint', textContent: 'Upstream attributes name' }), a), rm);
+      el('div', { style: 'flex:1;min-width:240px' }, el('span', { className: 'lbl faint', textContent: 'Upstream attributes name' }), a),
+      el('div', { style: 'padding-bottom:9px' },
+        wholeToggle(u.whole, (on) => { u.whole = on; if (on) u.attrs = []; render(); })),
+      rm);
+    wrap.append(line);
+    // Said on the row, in the words the scan will use. A whole-table row and a
+    // row with nothing on it look alike from across the room, and they are
+    // opposites: one scans everything, the other cannot be scanned at all.
+    if (u.table.trim() && u.whole) {
+      wrap.append(el('div', { className: 'note warn', style: 'margin-top:10px;padding:10px 14px' },
+        el('b', { textContent: 'Whole table. ' }),
+        `Ripple will follow every statement that reads ${u.table.trim()}, and every table built `
+        + 'from those. Untick this if only some attributes change, and name them instead.'));
+    } else if (u.table.trim() && !rowReady(u)) {
+      wrap.append(el('div', { className: 'note bad', style: 'margin-top:10px;padding:10px 14px' },
+        el('b', { textContent: 'Nothing to scan on this row. ' }),
+        'Add the attribute that is changing, or tick "Whole table" if the table itself is '
+        + 'changing. As it stands Ripple will refuse to scan it.'));
+    }
     box.append(wrap);
   });
   if (!v.upstream.length) box.append(el('div', { className: 'pad muted', textContent: 'Nothing to scan yet — add a table below.' }));
+  // The button follows the rows. Nothing can go forward while a named table
+  // has nothing on it: the server refuses that row, in the same words.
+  const next = x(root, 'next');
+  next.disabled = !v.upstream.some(rowReady) || v.upstream.some(u => u.table.trim() && !rowReady(u));
 }
 
 // ── step 3 ────────────────────────────────────────────────────────────────
@@ -1284,8 +1434,11 @@ function step4(root) {
   // are opposite answers: one is an answer to the question, the other is the
   // question never having been asked. A typo in an attribute name shipped as
   // "no impact", which is the most convincing wrong answer this tool can give.
+  // A scan of a whole table asks a different question, and the screen says
+  // which question it answered wherever the two would read differently.
+  const wholeScan = !!(sc.stats && sc.stats.wholeTables);
   const [cls, label] = nothingRead ? ['amber', 'Nothing was scanned']
-    : sc.lookupFailed ? ['amber', 'Column not found — nothing was checked']
+    : sc.lookupFailed ? ['amber', (wholeScan ? 'Table' : 'Column') + ' not found — nothing was checked']
     : (RISK[sc.risk] || RISK.none);
   x(root, 'risk').append(el('span', { className: 'badge ' + cls, textContent: label }));
   // Beside the risk word, never on another screen. "No impact, and I could
@@ -1309,9 +1462,13 @@ function step4(root) {
   // The line under the title has to be true of the screen underneath it, and
   // "grouped under the production table" is not true when there is not one.
   x(root, 'sub').textContent = sc.lookupFailed
-    ? 'Ripple never met these column names. Check the spelling before reading anything below.'
+    ? (wholeScan
+      ? 'Ripple never met this table. Check the spelling before reading anything below.'
+      : 'Ripple never met these column names. Check the spelling before reading anything below.')
     : sc.groups.length
-    ? 'Every finding grouped under the production table it puts at risk.'
+    ? (wholeScan
+      ? 'Every statement that reads the table, and every table built from those, grouped under the production table at risk.'
+      : 'Every finding grouped under the production table it puts at risk.')
     : (sc.reached || []).length || (sc.other || []).length
       ? 'Nothing matched your published-table rule. Every table the change does reach is below.'
       : 'What the change touches in this repository, and what could not be read.';
@@ -1383,7 +1540,8 @@ function step4(root) {
      ? [['Deliveries out of the warehouse', st.feedsBroken,
          'var(--red)', 'Files another team reads — tell them']] : []),
    ['Other tables reached', st.tablesReached ?? 0, (st.tablesReached ? 'var(--amber)' : ''), 'The chain ends at these'],
-   ['Attributes impacted', st.attributesImpacted, '', 'Of those you confirmed'],
+   [st.wholeTables ? 'Tables and attributes impacted' : 'Attributes impacted',
+    st.attributesImpacted, '', 'Of those you confirmed'],
    ['Files to change', st.filesWithImpact, '', `Of ${sc.filesScanned} scanned`],
    // "Across every table reached" is load-bearing: the summary counts only the
    // usages feeding a published table, so without it this card and that sentence
@@ -1474,8 +1632,12 @@ function step4(root) {
     // ask it, and a typo shipped as "no impact".
     groups.append(el('div', { className: 'note warn', style: 'display:flex;align-items:center;gap:14px;padding:18px 22px' },
       el('span', { textContent: '?', style: 'width:30px;height:30px;border-radius:50%;background:var(--amber);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0' }),
-      el('div', {}, el('b', { textContent: 'Ripple never met these column names, so nothing was checked', style: 'display:block' }),
-        el('div', { style: 'margin-top:3px', textContent: 'This is not "the change is safe" — it is "the question was not answered". The columns Ripple did read on that table are listed below; if one of them is what you meant, scan again for that name.' }))));
+      el('div', {}, el('b', { textContent: wholeScan
+          ? 'Ripple never met this table, so nothing was checked'
+          : 'Ripple never met these column names, so nothing was checked', style: 'display:block' }),
+        el('div', { style: 'margin-top:3px', textContent: wholeScan
+          ? 'This is not "the change is safe" — it is "the question was not answered". Nothing here reads a table of that name and nothing here builds one. Check the spelling, and check that the table is used in this repository at all.'
+          : 'This is not "the change is safe" — it is "the question was not answered". The columns Ripple did read on that table are listed below; if one of them is what you meant, scan again for that name.' }))));
   } else if (!sc.groups.length && !reached.length && !other.length) {
     // "No table is built from them, and no code reads them" is a claim about
     // the WHOLE repository, and it was printed in green directly above a card
@@ -1562,7 +1724,7 @@ function step4(root) {
       if (ro) p.append(detailFor(r));
     });
     card.append(p);
-    groups.append(card);
+    groups.append(foldFrom('other-usages', card, { count: other.length }));
   }
 
   renderStopsLoading(groups, sc);
@@ -1604,7 +1766,7 @@ function drawGroups(box, list, prefix, tag, tagStyle, one, many) {
   rest.forEach(g => chips.append(el('span', { className: 'chip mono',
     textContent: `${g.prod} · ${g.rows.length}` })));
   card.append(chips);
-  box.append(card);
+  box.append(foldFrom('more-' + prefix, card, { count: rest.length }));
 }
 
 /* One production table, or one table a chain ends at. The same rows either
@@ -1636,13 +1798,20 @@ function groupCard(g, key, tag, tagStyle) {
     row.append(
       el('span', { className: 'mono', textContent: r.inter, style: 'font-weight:600;font-size:13px;min-width:0;overflow-wrap:break-word' }),
       el('span', { style: 'min-width:0' },
-        el('span', { className: 'mono', textContent: r.attr,
-          style: 'font-size:13px;font-weight:600;color:var(--blued);overflow-wrap:break-word' }),
-        other.length
+        // The row is about the table itself. There is no column and no alias
+        // to name, and a blank in either cell reads as a value that failed to
+        // load, so each says what it is.
+        r.whole
+          ? el('span', { className: 'chip whole', textContent: 'whole table' })
+          : el('span', { className: 'mono', textContent: r.attr,
+              style: 'font-size:13px;font-weight:600;color:var(--blued);overflow-wrap:break-word' }),
+        other.length && !r.whole
           ? el('span', { className: 'small faint', style: 'display:block;margin-top:3px',
               textContent: 'from ' + other.join(', ') })
           : null),
-      el('span', {}, el('span', { className: 'chip alias', textContent: r.alias })),
+      el('span', {}, r.whole
+        ? el('span', { className: 'small faint', textContent: 'every column' })
+        : el('span', { className: 'chip alias', textContent: r.alias })),
       // The second badge goes inside the same cell rather than adding a column,
       // so a row that has it lines up with the rows that do not.
       el('span', {}, el('span', { className: 'badge sm ' + (r.breaking ? 'red' : 'grey'), textContent: r.logic }),
@@ -1662,7 +1831,7 @@ function groupCard(g, key, tag, tagStyle) {
           ? el('span', { className: 'badge sm amber', style: 'margin-left:6px',
               textContent: 'run as text' })
           : null),
-      el('span', {}, el('span', { className: 'badge sm ' + (r.mode === 'Direct pull' ? 'blue' : 'violet'), textContent: r.mode })),
+      el('span', {}, el('span', { className: 'badge sm ' + (r.whole ? 'grey' : r.mode === 'Direct pull' ? 'blue' : 'violet'), textContent: r.mode })),
       el('span', { className: 'caret', textContent: '›' }));
     row.onclick = () => { S.openRow = ro ? null : rowKey; render(); };
     card.append(row);
@@ -1744,7 +1913,8 @@ function renderChecks(box, sc) {
           ? ['grey', `named in ${a.mentionedIn} file${a.mentionedIn === 1 ? '' : 's'}, never read from`]
           : ['grey', 'this name is not in the repository at all'];
     p.append(el('div', { style: 'display:flex;gap:10px;align-items:baseline;margin-top:10px;flex-wrap:wrap' },
-      el('span', { className: 'chip mono', textContent: `${a.table}.${a.attr}` }),
+      // "table.column" for a column; a whole table is not a column of itself.
+      el('span', { className: 'chip mono', textContent: a.whole ? `${a.table} · whole table` : `${a.table}.${a.attr}` }),
       el('span', { className: 'badge sm ' + badge[0], textContent: badge[1] }),
       (a.endsAt || []).length
         ? el('span', { className: 'small muted', textContent: 'ends at ' + a.endsAt.join(', ') })
@@ -1831,7 +2001,12 @@ function renderChecks(box, sc) {
     }
   });
   card.append(p);
-  box.append(card);
+  // Open when it is short, or when it holds a correction somebody has to see:
+  // a name Ripple never met, or a trail it stopped following.
+  const mustSee = rows.some(a => a.lookupFailed || (a.cutShortAt || []).length);
+  box.append(foldFrom('every-attribute', card, {
+    count: rows.length, open: mustSee || rows.length <= 3,
+    badge: rows.some(a => a.reachesProduction) ? 'red' : rows.some(a => a.lookupFailed) ? 'amber' : 'grey' }));
 }
 
 /* The address of a finding in the connected repository, or nothing at all.
@@ -1856,9 +2031,13 @@ function detailFor(r) {
   if (r.certain === false) {
     d.append(el('div', { className: 'note info', style: 'margin-top:10px' },
       el('b', { textContent: 'The table is inferred here. ' }),
-      `This statement reads more than one table with a column called ${r.attr}, and the SQL `
-      + `does not say which one this is. Ripple has counted it as ${r.from}'s. Worth a look at `
-      + 'the code below before acting on it.'));
+      r.whole
+        ? `Whether this statement reads ${r.from} is worked out, not read: it names a family `
+          + 'of dated tables by wildcard, or a shard the file does not pin to a date, and '
+          + `${r.from} falls inside that. Worth a look at the code below before acting on it.`
+        : `This statement reads more than one table with a column called ${r.attr}, and the SQL `
+          + `does not say which one this is. Ripple has counted it as ${r.from}'s. Worth a look at `
+          + 'the code below before acting on it.'));
   }
   // How much of the path to this row was read and how much was worked out. A
   // row two hops past a SELECT * is exactly as real as the code below it, and
@@ -1971,7 +2150,7 @@ function renderNeverOpened(box, sc) {
       card.append(el('div', { className: 'small muted', style: 'margin-top:8px',
         textContent: `and ${names.length - 300} more, not listed here to keep this page readable.` }));
     }
-    box.append(card);
+    box.append(foldFrom('never-opened', card, { count: names.length, badge: 'red', tone: 'red' }));
   }
   // A whole folder of code walked past because of what it is called. In most
   // repositories "build" and "target" hold generated output; in a few they hold
@@ -2021,6 +2200,9 @@ function renderTrailGaps(box, sc) {
     sc.cutShort.forEach(c => chips.append(el('span', { className: 'chip mono',
       textContent: `${c.table} · ${c.attr}` })));
     card.append(chips);
+    // The button stays visible whether or not the list is open: it acts on the
+    // list, and a button hidden inside a folded list is a button nobody presses.
+    let after = null;
     if (sc.maxHops) {
       // To the END, not twice as far. Doubling was a button that could be
       // pressed and pressed and never finish: measured on a 36-hop chain, ten
@@ -2028,15 +2210,14 @@ function renderTrailGaps(box, sc) {
       // the deepest this ever offered -- cut it short as well, for the same
       // empty answer each time. There is no number worth offering, so it offers
       // the only thing that answers the question.
-      const again = el('button', { className: 'ghost', style: 'margin-top:14px',
+      const again = el('button', { className: 'ghost',
         textContent: 'Follow these to the end of the code' });
       again.onclick = () => runScan(0);
-      card.append(el('div', { style: 'margin-top:14px' },
-        why(again, 'what following them to the end costs',
+      after = why(again, 'what following them to the end costs',
       'This runs the scan again on code Ripple has already read. No file is opened a second '
-      + 'time, and nothing on the settings screen changes.')));
+      + 'time, and nothing on the settings screen changes.');
     }
-    box.append(card);
+    box.append(foldFrom('cut-short', card, { count: sc.cutShort.length, badge: 'red', tone: 'red', after }));
   }
 
   // 2. A table built with SELECT * carries every column and names none of them.
@@ -2083,7 +2264,7 @@ function renderTrailGaps(box, sc) {
         ? `${s.table} — column list filled in at run time, from ${s.from}`
         : `${s.table} — from ${s.from}` })));
     card.append(chips);
-    box.append(card);
+    box.append(foldFrom('star-tables', card, { count: n, badge: 'amber', tone: 'amber' }));
   }
 
   // 3. One name, more than one table, and nothing in the SQL to tell them apart.
@@ -2107,7 +2288,7 @@ function renderTrailGaps(box, sc) {
         ? `${m.spellings.join('  vs  ')} — same name, different capitals`
         : `${m.table} — in ${m.datasets.join(', ')}` })));
     card.append(chips);
-    box.append(card);
+    box.append(foldFrom('merged-names', card, { count: n }));
   }
 
   // 4. The SQL named a family of date-sharded tables, not the one being scanned.
@@ -2145,7 +2326,7 @@ function renderTrailGaps(box, sc) {
       + 'guess about what you meant. Every row from it is marked "table not stated". To be '
       + 'exact, scan for the full name of one table.')));
     }
-    box.append(card);
+    box.append(foldFrom('wildcard-names', card, { count: n }));
   }
 
   // 4a. One table, two files that build it from scratch. Only one of them can
@@ -2167,7 +2348,7 @@ function renderTrailGaps(box, sc) {
     sc.twoDefinitions.forEach(t => chips.append(el('span', { className: 'chip mono',
       textContent: `${t.table} — ${t.files.join('  and  ')}` })));
     card.append(chips);
-    box.append(card);
+    box.append(foldFrom('two-definitions', card, { count: n }));
   }
 
   // 4b. Code files Ripple would have read, sitting in a folder it skips. The
@@ -2193,7 +2374,7 @@ function renderTrailGaps(box, sc) {
       card.append(el('div', { className: 'small muted', style: 'margin-top:8px',
         textContent: `Showing the first 200 of ${n}.` }));
     }
-    box.append(card);
+    box.append(foldFrom('skipped-folders', card, { count: n, badge: 'amber', tone: 'amber' }));
   }
 
   // 4c. File types Ripple does not open at all. The repository screen has always
@@ -2216,7 +2397,7 @@ function renderTrailGaps(box, sc) {
     sc.fileTypesUnopened.slice(0, 40).forEach(t => chips.append(
       el('span', { className: 'chip mono', textContent: `${t.ext || 'no extension'} — ${t.count}` })));
     card.append(chips);
-    box.append(card);
+    box.append(foldFrom('file-types', card, { count: total, badge: 'amber', tone: 'amber' }));
   }
 
   // 5. The file builds a table but never writes its name. A dbt model is a bare
@@ -2249,7 +2430,7 @@ function renderTrailGaps(box, sc) {
     sc.namedByFile.forEach(t => chips.append(el('span', { className: 'chip mono',
       textContent: `${t.table} — from ${t.file}` })));
     card.append(chips);
-    box.append(card);
+    box.append(foldFrom('named-by-file', card, { count: n }));
   }
 
   // 6. SQL the file holds as a quoted string and runs as text. Ripple reads the
@@ -2273,7 +2454,7 @@ function renderTrailGaps(box, sc) {
     sc.builtAsText.forEach(t => chips.append(el('span', { className: 'chip mono',
       textContent: `${t.file}:${t.line} — ${t.how} → ${t.table}` })));
     card.append(chips);
-    box.append(card);
+    box.append(foldFrom('built-as-text', card, { count: n }));
   }
 
   // 7. Statements that NAME the table or the column and carry it nowhere: a
@@ -2305,7 +2486,7 @@ function renderTrailGaps(box, sc) {
       + ((r.namesColumns || []).length ? ` — names ${r.namesColumns.join(', ')}` : '')
       + ` · ${r.file}:${r.line}` })));
     card.append(list);
-    box.append(card);
+    box.append(foldFrom('referenced-here', card, { count: rows.length }));
   }
 }
 
@@ -2351,7 +2532,10 @@ function renderStopsLoading(box, sc) {
         'why this list was cut short',
       'Ripple stopped after looking 400 tables downstream, so there may be more than these.')));
   }
-  box.append(card);
+  // Open when short enough to read at a glance. Measured on a real repository
+  // this list runs to four hundred, and then the heading with its count is the
+  // answer and the list is the evidence.
+  box.append(foldFrom('stops-loading', card, { count: n, badge: 'red', tone: 'red', open: n <= 5 }));
 }
 
 /* A file delivered OUT of the warehouse, rather than a table inside it.
@@ -2390,7 +2574,7 @@ function renderFeeds(box, sc) {
       ` · ${r.file}:${r.line}`));
     card.append(line);
   });
-  box.append(card);
+  box.append(foldFrom('feeds', card, { count: n, badge: 'red', tone: 'red', open: n <= 5 }));
 }
 
 /* The honest half of the report: what Ripple could NOT account for. Styled to
@@ -2460,7 +2644,7 @@ function renderGaps(box, sc) {
       p.append(more);
     }
     card.append(p);
-    box.append(card);
+    box.append(foldFrom('check-by-hand', card, { count: sc.unreadable.length, badge: 'amber', tone: 'amber' }));
   }
   if (sc.mentionsOnly?.length) {
     const card = el('div', { className: 'card pad lg', style: 'margin-top:16px' });
@@ -2471,7 +2655,7 @@ function renderGaps(box, sc) {
     const chips = el('div', { className: 'chips scrollbox', style: 'margin-top:10px' });
     sc.mentionsOnly.forEach(m => chips.append(el('span', { className: 'chip mono', textContent: m.file })));
     card.append(chips);
-    box.append(card);
+    box.append(foldFrom('mentions-only', card, { count: sc.mentionsOnly.length }));
   }
 }
 
@@ -2487,8 +2671,13 @@ function step5(root) {
   // "None of these reach a published table" is a claim, and it is not one this
   // picture can make while some of its branches were cut short by a setting.
   const anyCut = (S.scan?.cutShort || []).length;
+  // "The changed attribute" is wrong over a whole-table scan: nothing there
+  // is called anything at any step. Say what was followed.
+  const wholeMap = !!(S.scan?.stats?.wholeTables);
   x(root, 'sub').textContent = anyProd
-    ? 'Where the changed attribute travels, what it is called at each step, and which published tables it reaches.'
+    ? (wholeMap
+      ? 'Where the change travels — every table built from the one that is changing — and which published tables it reaches.'
+      : 'Where the changed attribute travels, what it is called at each step, and which published tables it reaches.')
     : anyCut
       ? `Where the changed attribute travels, and what it is called at each step. Ripple stopped `
         + `following ${anyCut === 1 ? 'one branch' : `${anyCut} branches`} at ${S.scan.maxHops} `
@@ -2539,26 +2728,21 @@ function step5(root) {
     el('div', { className: 'ct', textContent: `${all.length} branch${all.length === 1 ? '' : 'es'} followed`
       + (g.branches.length ? ` · ${g.branches.length} to production` : '') })));
   const branches = el('div', { className: 'branches' });
-  // Measured on a repository the size of the one this was built for: following
-  // one of the key columns produces about 1,500 branches. Drawing all of them
-  // is a wall of boxes nobody can read, and a map nobody can read is the same
-  // as no map. So a readable number is drawn — the ones that reach a published
-  // table first, because those are the ones that matter — and the rest are
-  // COUNTED OUT LOUD rather than quietly left off. Nothing is lost: every
-  // branch here is already a finding in the list on the previous step.
+  // Branches that share their first steps are drawn once, as one tree, instead
+  // of once per branch as a row of boxes running off the right of the screen.
+  // Measured before this on the practice pipeline: four rows of three boxes,
+  // with the published table on every row cut off at the right edge. On a
+  // repository the size of the one this was built for, a key column has about
+  // 1,500 branches and nearly all of them share their first two hops -- so the
+  // tree is a fraction of the rows, and a reader follows one path down instead
+  // of re-reading the same start forty times.
   //
-  // Twenty, not forty. Measured again, at a 1,180px window: forty branches of
-  // real table names wrap to three lines each and make this one picture 16,000
-  // pixels tall, which is forty screens of scrolling to see a diagram.
-  const DRAWN = 20;
-  all.slice(0, DRAWN).forEach(br => {
-    const line = el('div', { className: 'branch' });
-    br.forEach((n, i) => {
-      line.append(nodeEl(n));
-      if (i < br.length - 1) line.append(el('span', { className: 'arrow', textContent: '→' }));
-    });
-    branches.append(line);
-  });
+  // Still capped, and the cap is COUNTED OUT LOUD rather than quietly left
+  // off. Nothing is lost: every branch is already a finding on the previous
+  // step, grouped by published table. The ones that reach a published table
+  // come first, because those are the ones that matter.
+  const DRAWN = 60;
+  branches.append(treeEl(treeOf(all.slice(0, DRAWN))));
   row.append(src, branches);
   card.append(row);
   if (all.length > DRAWN) {
@@ -2591,6 +2775,46 @@ function step5(root) {
       'The alias is what your column is called at that point. That rename is exactly what a '
       + 'plain search of the code would miss.')));
   x(root, 'next').onclick = () => makeSummary();
+}
+
+/* Branches folded into one tree. Two branches that start the same way share
+   the same boxes until they part; a box is the same box when its table, its
+   alias and its markers are the same. */
+function treeOf(branches) {
+  const root = { kids: [], index: new Map() };
+  branches.forEach(br => {
+    let at = root;
+    br.forEach(n => {
+      const key = [n.name, n.alias || '', n.prod ? 'p' : '', n.cut ? 'c' : '', n.inferred ? 'i' : ''].join('|');
+      let next = at.index.get(key);
+      if (!next) {
+        next = { node: n, kids: [], index: new Map() };
+        at.index.set(key, next);
+        at.kids.push(next);
+      }
+      at = next;
+    });
+  });
+  return root;
+}
+
+function treeEl(t) {
+  const ul = el('ul', { className: 'tree' });
+  t.kids.forEach(k => {
+    const li = el('li');
+    const box = nodeEl(k.node);
+    // A leaf that is not a published table is where the code ran out -- unless
+    // Ripple stopped, and then the box itself already says so.
+    if (!k.kids.length && !k.node.prod && !k.node.cut) box.classList.add('end');
+    li.append(box);
+    if (!k.kids.length && !k.node.cut) {
+      li.append(el('span', { className: 'tail',
+        textContent: k.node.prod ? 'published table' : 'chain ends here' }));
+    }
+    if (k.kids.length) li.append(treeEl(k));
+    ul.append(li);
+  });
+  return ul;
 }
 
 function nodeEl(n) {
@@ -2669,7 +2893,9 @@ function step6(root) {
   const fields = el('div', { style: 'padding:0 26px 24px;display:grid;grid-template-columns:1fr 1fr;gap:16px 24px' });
   [['Source system', S.vals.source, false], ['Change type', S.vals.changeType, false],
    ['Upstream tables name', S.vals.upstream.map(u => u.table).join(', '), true],
-   ['Upstream attributes name', S.vals.upstream.flatMap(u => u.attrs).join(', '), true]].forEach(([k, v, mono]) =>
+   // "the whole table" where that is what was scanned, never a blank.
+   ['Attributes, or the whole table', S.vals.upstream.map(u => u.whole
+       ? `${u.table} — whole table` : (u.attrs || []).join(', ')).filter(Boolean).join(', '), true]].forEach(([k, v, mono]) =>
     fields.append(el('div', {}, el('span', { className: 'lbl', textContent: k }),
       el('div', { textContent: v || '—',
         style: 'margin-top:5px;font-size:14px;font-weight:600;line-height:1.45;overflow-wrap:break-word;'

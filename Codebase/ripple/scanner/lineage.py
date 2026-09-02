@@ -65,6 +65,95 @@ BREAKS = {
 # Usages with no local fix: the replacement has to come from the upstream team.
 NO_LOCAL_FIX = {"ranking", "dedup_key"}
 
+# ── the whole table, not one column of it ──────────────────────────────────
+# Sometimes the notice is not about a column at all. The table itself is being
+# dropped, renamed, moved or rebuilt, and the question is "what reads it" --
+# every statement, every column, and everything built from what they build.
+# Followed at the level of tables: which column carries onwards does not matter
+# when the table underneath every column is what changes.
+#
+# Measured before this: a table with no attribute went through the column walk
+# with nothing to walk, and came back "no usage found" with a blank where the
+# name should have been, in a letter ready to send.
+WHOLE_TABLE = "whole table"
+# What a given kind of change does to a statement that reads the table.
+# Removing or renaming it stops the statement running at all. A change of
+# values or types runs; what it produces changes. "unknown" is treated as the
+# worse case, and the sentence says the notice did not say.
+TABLE_BREAKS = {"removal", "rename", "unknown"}
+
+
+def _how_table_is_read(stmt, table: str) -> str:
+    """"copied", "exported", "joined" or "read": how this statement takes the table."""
+    if stmt.whole_copy:
+        return "copied"
+    if stmt.export_uri:
+        return "exported"
+    if stmt.expr is not None:
+        wanted = short_name(table).upper()
+        for join in stmt.expr.find_all(exp.Join):
+            t = join.this
+            if isinstance(t, exp.Table) and short_name(t.name).upper() == wanted:
+                return "joined"
+    return "read"
+
+
+def _table_logic(stmt, role: str, change_type: str) -> tuple[str, str]:
+    """The badge on the row, and the note on the marked line, for a whole-table hop."""
+    stops = change_type in TABLE_BREAKS
+    if role == "copied":
+        return (f"Copied whole by {stmt.whole_copy}",
+                f"{stmt.whole_copy} of the whole table - every column carried on")
+    if role == "exported":
+        return ("Exported from this table",
+                "Reads this table and writes a file out of the warehouse")
+    if role == "joined":
+        return ("Joined to this table",
+                "Joined here - the statement stops running without this table" if stops
+                else "Joined here - whatever changes in the table flows on from this line")
+    return ("Reads this table",
+            "Reads this table - the statement stops running without it" if stops
+            else "Reads this table - whatever changes in it flows on from this line")
+
+
+def _table_impact_sentence(change_type: str, src: str, tgt: str | None, role: str,
+                           copied_by: str = "", feed: str = "", hop: int = 0) -> str:
+    """One plain sentence about what this statement does the day the table changes."""
+    where = tgt or "the next table"
+    reads = (f"copies the whole of {src} with {copied_by}" if role == "copied"
+             else f"joins to {src}" if role == "joined"
+             else f"reads {src}")
+    further = ("" if hop == 0 else
+               f" {src} is itself built from the table that is changing, so this is the "
+               f"same change one step further down.")
+    if feed:
+        what = ("Once the table is gone this export fails and the file stops arriving."
+                if change_type == "removal" else
+                "Once the table is renamed this export fails until the name is changed here."
+                if change_type == "rename" else
+                "The file changes shape on the next run, with no error anywhere.")
+        return (f"This statement {reads} and writes the result to the file delivered to {feed}. "
+                f"{what} Whoever reads that file is outside this repository - tell them before "
+                f"the change ships.{further}")
+    if change_type == "removal":
+        return (f"This statement {reads} directly. Once the table is gone it fails outright, so "
+                f"{where} stops being built, and everything built from {where} goes stale from "
+                f"that day.{further}")
+    if change_type == "rename":
+        return (f"This statement {reads} by its current name. Once the table is renamed it "
+                f"fails outright until the name is changed here, and {where} stops being built "
+                f"in the meantime.{further}")
+    if change_type == "type_change":
+        return (f"This statement {reads} directly, so the changed types arrive here first. "
+                f"Anything it filters, joins or casts on those columns can fail, and the rest "
+                f"flows into {where} changed.{further}")
+    if change_type == "value_change":
+        return (f"This statement {reads} directly, so the new values flow straight into {where} "
+                f"on the next run. Nothing fails on the day - the data changes.{further}")
+    return (f"The notice did not say what changes about the table. This statement {reads} "
+            f"directly, so any change to it reaches {where} on the next run - and if the table "
+            f"goes, this statement fails outright.{further}")
+
 
 def _impact_sentence(u: Usage, change_type: str, target: str | None,
                      copied_by: str = "", feed: str = "") -> str:
@@ -466,6 +555,9 @@ class ScanResult:
             # the way down is one attribute, and the card says "of those you
             # confirmed", so it has to be true of that number.
             "attributesImpacted": len([a for a in self.attributes if a.get("found")]),
+            # How many of the things asked about were whole tables rather than
+            # columns. The screen names the count differently when this is set.
+            "wholeTables": len([a for a in self.attributes if a.get("whole")]),
             "filesWithImpact": len({f.file for f in self.findings}),
             "breakingUsages": len([f for f in self.findings if f.breaking]),
             "couldNotRead": len(self.unreadable),
@@ -683,6 +775,188 @@ def trace(
             if not columns_cache:
                 columns_cache.append(_columns_on(parsed, table)[:MAX_COLUMNS_SHOWN])
             return columns_cache[0]
+
+        if up.get("whole"):
+            # The table itself is changing. Every statement that reads it is a
+            # finding, and every table those statements build is followed the
+            # same way, as far as the code goes -- see WHOLE_TABLE.
+            branches: list[list[dict]] = []
+            end_branches: list[list[dict]] = []
+            attr_findings: list[Finding] = []
+            attr_cut: list[dict] = []
+            readers = [0]
+
+            def walk_table(cur_table: str, hop: int, path: list[dict],
+                           chain: list[Finding], seen: set) -> tuple[bool, bool]:
+                """Follow the table onwards. Same two answers as walk()."""
+                if cfg.max_hops and hop >= cfg.max_hops:
+                    entry = cut_seen.setdefault(
+                        (cur_table.upper(), WHOLE_TABLE.upper()),
+                        {"table": show(cur_table), "attr": WHOLE_TABLE, "hop": hop, "roots": []},
+                    )
+                    if WHOLE_TABLE not in entry["roots"]:
+                        entry["roots"].append(WHOLE_TABLE)
+                    if entry not in attr_cut:
+                        attr_cut.append(entry)
+                    return False, True
+                key = cur_table.upper()
+                if key in seen:
+                    return False, False
+                seen = seen | {key}
+                recorded = False
+                truncated = False
+                matched = parsed.reading(cur_table)
+                visited.add(short_name(cur_table).upper())
+                note_if_merged(cur_table, matched, hop)
+                note_if_wildcard(cur_table)
+
+                for stmt in matched:
+                    looked[0] += 1
+                    if on_progress is not None and looked[0] % 200 == 0:
+                        on_progress(looked[0], 0,
+                                    f"Following the whole of {short_name(typed)} — "
+                                    f"{len(findings_by_key)} usages so far")
+                    reads = suffix_verdict(stmt, cur_table)
+                    if reads == "excluded":
+                        continue
+                    how = _how_this_statement_reads(stmt, cur_table)
+                    if how:
+                        wild_confirmed.add(short_name(cur_table).upper())
+                    src = index.get(stmt.file)
+                    if src is None:
+                        continue
+                    if hop == 0:
+                        readers[0] += 1
+                    role = _how_table_is_read(stmt, cur_table)
+                    logic, note = _table_logic(stmt, role, change_type)
+                    hit = locate(src, short_name(cur_table), "table", stmt.line_offset, stmt.line_end)
+                    tgt_shown = show(stmt.target) if stmt.target else None
+                    f = Finding(
+                        source_table=show(cur_table),
+                        source_column=WHOLE_TABLE,
+                        target_table=tgt_shown,
+                        alias="",
+                        logic=logic,
+                        kind="table",
+                        mode="Whole table",
+                        impact=_table_impact_sentence(change_type, show(cur_table), tgt_shown,
+                                                      role, stmt.whole_copy, stmt.export_uri, hop),
+                        breaking=change_type in TABLE_BREAKS,
+                        no_local_fix=False,
+                        file=stmt.file,
+                        lang=src.lang,
+                        lines=snippet(src, hit, note),
+                        hop=hop,
+                        certain=reads != "maybe" and how != "family",
+                        via_star=False,
+                        copied_by=stmt.whole_copy,
+                        built_as_text=stmt.built_as_text,
+                        feed_uri=stmt.export_uri,
+                        inferred_hops=0,
+                        at=stmt.line_offset,
+                        target_key=stmt.target or "",
+                    )
+                    findings_by_key.setdefault(f.key(), f)
+                    f = findings_by_key[f.key()]
+                    if WHOLE_TABLE not in f.roots:
+                        f.roots.append(WHOLE_TABLE)
+                    if f not in attr_findings:
+                        attr_findings.append(f)
+                    new_chain = chain + [f]
+
+                    tgt = stmt.target
+                    if stmt.export_uri:
+                        entry = feed_seen.setdefault(stmt.export_uri, {
+                            "uri": stmt.export_uri, "file": stmt.file,
+                            "line": stmt.line_offset + 1, "from": show(cur_table),
+                            "attrs": [], "breaking": False})
+                        if WHOLE_TABLE not in entry["attrs"]:
+                            entry["attrs"].append(WHOLE_TABLE)
+                        entry["breaking"] = entry["breaking"] or f.breaking
+                        recorded = True
+                    if not tgt:
+                        continue
+                    shown = show(tgt)
+                    node = {"name": shown, "kind": _kind_of_node(short_name(tgt), cfg),
+                            "alias": "", "whole": True}
+                    forks = parsed.rebuilt_in(tgt)
+                    if forks:
+                        node["twoDefinitions"] = True
+                        forked_seen.setdefault(shown, {"table": shown, "files": forks})
+                    if stmt.built_as_text:
+                        node["builtAsText"] = True
+                        text_sql_seen.setdefault(
+                            (stmt.file, stmt.line_offset),
+                            {"table": shown, "file": stmt.file,
+                             "line": stmt.line_offset + 1, "how": stmt.built_as_text})
+                    if stmt.named_by:
+                        node["namedByFile"] = True
+                        file_named_seen.setdefault(shown, {
+                            "table": shown, "file": stmt.file, "how": stmt.named_by})
+                    if cfg.is_production_table(short_name(tgt)):
+                        node["prod"] = True
+                        branch = path + [node]
+                        if branch not in branches:
+                            branches.append(branch)
+                        _collect(prod_groups, shown, new_chain)
+                        recorded = True
+                        _, hit_cap = walk_table(tgt, hop + 1, path + [node], new_chain, seen)
+                        truncated = truncated or hit_cap
+                        continue
+                    done, hit_cap = walk_table(tgt, hop + 1, path + [node], new_chain, seen)
+                    truncated = truncated or hit_cap
+                    if done:
+                        recorded = True
+                    else:
+                        if hit_cap:
+                            node["cut"] = True
+                        branch = path + [node]
+                        if branch not in end_branches:
+                            end_branches.append(branch)
+                        _collect(end_groups, shown, new_chain)
+                        recorded = True
+                return recorded, truncated
+
+            walk_table(table, 0, [], [], set())
+            branches = _longest_only(branches)
+            end_branches = _longest_only(end_branches)
+            res.findings.extend([f for f in attr_findings if f not in res.findings])
+            # "Nothing reads it" is an answer. "Ripple never met it" is the
+            # question not having been asked -- split on whether anything in
+            # the repository builds the table, since nothing reads it either.
+            wanted = short_name(table).upper()
+            built_here = any(s.target and short_name(s.target).upper() == wanted
+                             for s in parsed.statements)
+            lookup_failed = not attr_findings and not built_here
+            if branches or end_branches:
+                graphs.append({"attr": WHOLE_TABLE, "table": typed, "whole": True,
+                               "branches": branches, "endBranches": end_branches})
+            res.attributes.append(
+                {
+                    "table": typed,
+                    "attr": WHOLE_TABLE,
+                    "whole": True,
+                    "found": len(attr_findings),
+                    "files": len({f.file for f in attr_findings}),
+                    "mentionedIn": len({m.file for m in index.search([short_name(typed)])}),
+                    # Statements that read the table itself, before any hop.
+                    "readers": readers[0],
+                    "builtHere": built_here,
+                    "reachesProduction": bool(branches),
+                    "endsAt": sorted({b[-1]["name"] for b in end_branches
+                                      if not b[-1].get("cut")}),
+                    "cutShortAt": sorted({c["table"] for c in attr_cut}),
+                    "notVisible": [],
+                    "inferred": 0,
+                    "nameInTables": 0,
+                    "tablesRead": table_count,
+                    "lookupFailed": lookup_failed,
+                    "tableColumns": [],
+                    "uncertain": len([f for f in attr_findings if not f.certain]),
+                }
+            )
+            continue
+
         for attr in up.get("attrs") or []:
             branches: list[list[dict]] = []
             end_branches: list[list[dict]] = []
@@ -1652,6 +1926,8 @@ def _finding_row(f: Finding) -> dict:
         "builtAsText": f.built_as_text,
         "feed": f.feed_uri,
         "inferredHops": f.inferred_hops,
+        # The row is about the table itself, not a column of it. See WHOLE_TABLE.
+        "whole": f.kind == "table",
     }
 
 

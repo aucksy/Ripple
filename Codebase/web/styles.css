@@ -271,6 +271,48 @@ button.i[aria-expanded="true"]{background:var(--navy);border-color:var(--navy);c
 .stat .v{font-size:26px;font-weight:800;margin-top:6px;font-variant-numeric:tabular-nums}
 .stat .s{font-size:12px;color:var(--faint);margin-top:3px}
 
+/* ── the folded list ─────────────────────────────────── */
+/* One control for every long list on the findings screen. The heading is the
+   fact and stays; the list is the evidence and folds. See fold() in app.js. */
+.fold{margin-top:16px}
+.fhead{display:flex;align-items:center;gap:12px;padding:14px 20px;cursor:pointer;
+  background:var(--tint);border-bottom:1px solid transparent;flex-wrap:wrap}
+.fhead:hover{background:#EEF3F9}
+.fhead:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+.fold.open .fhead{border-bottom-color:var(--line3)}
+.fold.amber .fhead{background:var(--amberbg)}
+.fold.red .fhead{background:var(--redbg)}
+.ftitle{flex:1;min-width:200px;font-size:14px;font-weight:700;line-height:1.4}
+.ftitle b{font-weight:700}
+.fhint{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.fhead .caret{color:var(--faint);font-size:22px;font-weight:700;line-height:1;transition:transform .18s}
+.fold.open .fhead .caret{transform:rotate(90deg)}
+.fbody{padding:16px 20px 20px;animation:fadeUp .2s ease}
+/* Inside a fold the list already had to be opened on purpose, so it may be
+   taller before it scrolls. */
+.fbody .scrollbox{max-height:440px}
+.fbody>div>.chips:first-child,.fbody>div>.note:first-child{margin-top:0 !important}
+.ftitle .note{margin:0;padding:0;background:none;border:none}
+.fextra{padding:12px 20px 0}
+.fold.open .fextra{padding-bottom:0}
+.wholetoggle{display:flex;align-items:center;gap:7px;cursor:pointer;font-weight:600;white-space:nowrap;
+  padding:8px 12px;border:1px solid var(--line2);border-radius:8px;background:#fff}
+.wholetoggle input{margin:0;width:15px;height:15px;accent-color:var(--navy)}
+.wholetoggle:has(input:checked){background:var(--navy);color:#fff;border-color:var(--navy)}
+.chip.whole{font-family:var(--mono);font-size:12px;font-weight:700;background:var(--navy);color:#fff}
+
+/* ── the dependency tree ─────────────────────────────── */
+/* Branches that share a start are drawn once, as one tree, instead of once
+   per branch as a row of boxes that runs off the right of the screen. */
+.tree{list-style:none;margin:0;padding:0}
+.tree ul{list-style:none;margin:0;padding:0 0 0 30px;position:relative}
+.tree ul::before{content:'';position:absolute;left:12px;top:0;bottom:14px;border-left:2px solid var(--line2)}
+.tree li{position:relative;padding:6px 0 0}
+.tree ul>li::before{content:'';position:absolute;left:-18px;top:26px;width:16px;border-top:2px solid var(--line2)}
+.tree .node{display:inline-block;vertical-align:top}
+.tree .node.end{border-style:dashed}
+.tree .tail{display:inline-block;vertical-align:top;margin:14px 0 0 10px;font-size:12px;color:var(--faint)}
+
 /* ── findings, grouped by production table ───────────── */
 .groups{display:flex;flex-direction:column;gap:16px;margin-top:20px}
 .group{overflow:hidden;animation:fadeUp .3s ease}

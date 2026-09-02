@@ -50,6 +50,40 @@ def _unique(groups: list[dict]) -> list[dict]:
     return rows
 
 
+def _subject_of(vals: dict) -> str:
+    """What is changing, in words: the attributes, or the whole of a table.
+
+    A table with no attribute used to print as an empty name in the middle of
+    a sentence -- "No usage of  was found" -- in a letter ready to send.
+    """
+    bits: list[str] = []
+    for u in vals.get("upstream", []):
+        if u.get("whole") or not u.get("attrs"):
+            bits.append(f"the whole of {u.get('table') or 'the table'}")
+        else:
+            bits.extend(u.get("attrs", []))
+    return ", ".join(bits) or "the changed attributes"
+
+
+def _whole_only(scan: dict) -> bool:
+    """Was every item asked about a whole table rather than a column?"""
+    asked = scan.get("attributes", [])
+    return bool(asked) and all(a.get("whole") for a in asked)
+
+
+def _row_phrase(r: dict) -> str:
+    """A finding as a short phrase. A whole-table row has no alias to name."""
+    if r.get("whole"):
+        return f"{r['inter']} - {r['logic'].lower()}"
+    return f"{r['inter']} - {r['logic'].lower()} on {r['alias']}"
+
+
+def _row_action(r: dict) -> str:
+    if r.get("whole"):
+        return f"Change the statement that {r['logic'].lower()} in {r['file']}."
+    return f"Fix the {r['logic'].lower()} on {r['alias']} in {r['file']}."
+
+
 def summarise(scan: dict, vals: dict) -> dict:
     stats = scan.get("stats", {})
     groups = scan.get("groups", [])
@@ -65,9 +99,8 @@ def summarise(scan: dict, vals: dict) -> dict:
     elsewhere = _unique(reached) + other
     breaking = [r for r in rows if r.get("breaking")]
     no_fix = [r for r in rows if r.get("noLocalFix")]
-    attrs = ", ".join(
-        a for u in vals.get("upstream", []) for a in u.get("attrs", [])
-    ) or "the changed attributes"
+    attrs = _subject_of(vals)
+    whole_only = _whole_only(scan)
     when = vals.get("effectiveLabel") or "the effective date"
 
     # How much of the repository this answer does NOT cover. A headline is a
@@ -181,7 +214,7 @@ def summarise(scan: dict, vals: dict) -> dict:
                "Check the rule on the settings screen before replying.")
             + _inferred_phrase()
         )
-        bullets = [f"{r['inter']} - {r['logic'].lower()} on {r['alias']}" for r in elsewhere[:4]]
+        bullets = [_row_phrase(r) for r in elsewhere[:4]]
         if stop_names:
             bullets.insert(0, f"{_names(stop_names)} stops being refreshed on the day of the "
                               f"change. Nothing fails on screen; the numbers go stale.")
@@ -229,26 +262,47 @@ def summarise(scan: dict, vals: dict) -> dict:
         # attribute" and a letter reading "Please proceed as planned."
         known = [c for a in scan.get("attributes", []) for c in a.get("tableColumns", [])]
         table = (scan.get("attributes") or [{}])[0].get("table", "that table")
-        headline = f"{attrs} was not found - nothing has been checked"
-        narrative = (
-            f"Ripple read {_plural(files_scanned, 'file')} and never met a column called "
-            f"{attrs} on {table}, or on anything else in this repository. That is not the same "
-            f"as the change being safe: the question has not been answered. Check the spelling "
-            f"before replying."
-            + (f" The columns Ripple did read on {table} are {_names(known, 12)}."
-               if known else
-               f" Ripple has no column list for {table} either, because nothing in this "
-               f"repository writes one down.")
-        )
-        bullets = [
-            f"No answer either way about {attrs} - the name was not found as a column.",
-            (f"What Ripple did read on {table}: {_names(known, 12)}." if known else
-             f"Nothing in this repository states the columns of {table}."),
-        ]
-        actions = [
-            f"Check the spelling of {attrs} against the list above, then run the scan again.",
-            "Do not reply to the upstream team on the strength of this scan.",
-        ]
+        if whole_only:
+            # The table itself was never met: nothing here reads it and
+            # nothing here builds it. Not "nothing reads it" -- that would be
+            # an answer, and this is the question not having been asked.
+            headline = f"{table} was not found - nothing has been checked"
+            narrative = (
+                f"Ripple read {_plural(files_scanned, 'file')} and never met a table called "
+                f"{table}: nothing here reads it and nothing here builds it. That is not the "
+                f"same as the change being safe - the question has not been answered. Check "
+                f"the spelling, and check that this table is used in this repository at all, "
+                f"before replying."
+            )
+            bullets = [
+                f"No answer either way about {table} - the name was not found as a table.",
+                "Nothing in this repository reads or builds a table of that name.",
+            ]
+            actions = [
+                f"Check the spelling of {table}, then run the scan again.",
+                "Do not reply to the upstream team on the strength of this scan.",
+            ]
+        else:
+            headline = f"{attrs} was not found - nothing has been checked"
+            narrative = (
+                f"Ripple read {_plural(files_scanned, 'file')} and never met a column called "
+                f"{attrs} on {table}, or on anything else in this repository. That is not the "
+                f"same as the change being safe: the question has not been answered. Check the "
+                f"spelling before replying."
+                + (f" The columns Ripple did read on {table} are {_names(known, 12)}."
+                   if known else
+                   f" Ripple has no column list for {table} either, because nothing in this "
+                   f"repository writes one down.")
+            )
+            bullets = [
+                f"No answer either way about {attrs} - the name was not found as a column.",
+                (f"What Ripple did read on {table}: {_names(known, 12)}." if known else
+                 f"Nothing in this repository states the columns of {table}."),
+            ]
+            actions = [
+                f"Check the spelling of {attrs} against the list above, then run the scan again.",
+                "Do not reply to the upstream team on the strength of this scan.",
+            ]
     elif not groups:
         if referenced:
             # Nothing carries the column anywhere, and something names it
@@ -318,7 +372,7 @@ def summarise(scan: dict, vals: dict) -> dict:
         )
         bullets = []
         for r in breaking[:4]:
-            bullets.append(f"{r['inter']} - {r['logic'].lower()} on {r['alias']} - {r['impact']}")
+            bullets.append(f"{_row_phrase(r)} - {r['impact']}")
         if no_fix:
             bullets.append(
                 "At least one usage has no local fix: a replacement must come from the upstream team."
@@ -327,7 +381,7 @@ def summarise(scan: dict, vals: dict) -> dict:
             bullets.append("Every usage carries the value through unchanged; only labels move.")
         actions = []
         for r in breaking[:4]:
-            actions.append(f"Fix the {r['logic'].lower()} on {r['alias']} in {r['file']}.")
+            actions.append(_row_action(r))
         if no_fix:
             actions.insert(0, "Ask the upstream team for a replacement attribute - this one has no substitute.")
         actions.append("Re-run the scan once the fixes are in, and confirm the findings clear.")
@@ -377,7 +431,8 @@ def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
     no_fix = [r for r in rows if r.get("noLocalFix")]
     poc = vals.get("pocName") or "there"
     first = poc.split()[0] if poc and poc != "there" else "there"
-    attrs = ", ".join(a for u in vals.get("upstream", []) for a in u.get("attrs", []))
+    attrs = _subject_of(vals)
+    whole_only = _whole_only(scan)
     subject_base = vals.get("subject") or f"{attrs} change"
 
     if not groups and elsewhere:
@@ -425,14 +480,23 @@ def draft_reply(scan: dict, vals: dict, summary: dict) -> dict:
         # The question was never answered. Ripple never met this name as a
         # column anywhere it read, so there is nothing to report either way --
         # and this letter used to say "No impact... Please proceed as planned."
-        subject = f"RE: {subject_base} - we need to check the attribute name"
+        table = (scan.get("attributes") or [{}])[0].get("table", "that table")
+        subject = (f"RE: {subject_base} - we need to check the table name" if whole_only
+                   else f"RE: {subject_base} - we need to check the attribute name")
         body = (
             f"Hi {first},\n\n"
             f"We cannot answer this one yet.\n\n"
-            f"Our repository scan could not find a column called {attrs} anywhere in our code, "
-            f"so nothing has actually been checked against it. That is most likely a difference "
-            f"in how the attribute is named on our side.\n\n"
-            f"Could you confirm the exact column name? We will re-run the analysis and come back "
+            + (f"Our repository scan could not find a table called {table} anywhere in our "
+               f"code - nothing reads it and nothing builds it - so nothing has actually been "
+               f"checked against it. That is most likely a difference in how the table is "
+               f"named on our side.\n\n"
+               f"Could you confirm the exact table name? "
+               if whole_only else
+               f"Our repository scan could not find a column called {attrs} anywhere in our "
+               f"code, so nothing has actually been checked against it. That is most likely a "
+               f"difference in how the attribute is named on our side.\n\n"
+               f"Could you confirm the exact column name? ")
+            + f"We will re-run the analysis and come back "
             f"to you with a firm answer before the effective date.\n\n"
             f"Thanks,\nData Engineering"
         )

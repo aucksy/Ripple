@@ -46,12 +46,47 @@ DATE_PATTERNS = [
 MONTHS = {m: i + 1 for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
 
+# The labels no longer say "attribute" in front of the change: the same notice
+# can be about a whole table, and "Attribute decommission" printed over a table
+# being dropped describes a change that is not the one happening.
 CHANGE_HINTS = [
-    (("decommission", "removed", "removal", "dropped", "retire", "sunset"), "removal", "Attribute decommission"),
-    (("renamed", "rename"), "rename", "Attribute rename"),
+    (("decommission", "removed", "removal", "dropped", "retire", "sunset", "deleted", "deletion"),
+     "removal", "Decommission"),
+    (("renamed", "rename", "renaming"), "rename", "Rename"),
     (("format", "value", "iso", "full country"), "value_change", "Value format change"),
     (("data type", "datatype", "length", "precision", "varchar", "widened"), "type_change", "Data type change"),
 ]
+
+# ── the table itself, not a column of it ───────────────────────────────────
+# How a notice says the TABLE is what changes. Checked per table the catalogue
+# confirmed, against the words around its own name, so "the table X will be
+# dropped" is read as X going and "column Y on table X will be dropped" is
+# read as Y going. The scan follows the two completely differently.
+TABLE_VERBS = (r"dropped|removed|decommissioned|retired|renamed|migrated|moved|deprecated|"
+               r"deleted|replaced|sunset|rebuilt|discontinued|archived|decommission")
+TABLE_VERBS_ING = (r"dropping|removing|decommissioning|retiring|renaming|migrating|moving|"
+                   r"deprecating|deleting|replacing|sunsetting|rebuilding|discontinuing|archiving")
+TABLE_NOUNS = (r"decommission|decommissioning|removal|retirement|deletion|migration|"
+               r"deprecation|rename|renaming|replacement|sunset")
+WHOLE_HINTS = ("whole table", "entire table", "the table itself", "all columns", "all attributes",
+               "every column", "all of its columns", "table as a whole", "table-level", "table level")
+
+
+def names_the_whole_table(text: str, table: str) -> bool:
+    """Does the text say this table itself is changing?"""
+    flat = re.sub(r"\s+", " ", text or "")
+    low = flat.lower()
+    if any(h in low for h in WHOLE_HINTS):
+        return True
+    t = re.escape(table)
+    lead = r"(?:will be|is being|is to be|shall be|are being|is getting|gets|is|are|to be|being)"
+    if re.search(rf"\b{t}\b\s*(?:table\s+)?{lead}\s+(?:{TABLE_VERBS})\b", flat, re.I):
+        return True
+    if re.search(rf"\b(?:{TABLE_VERBS_ING})\s+(?:the\s+|of\s+)?(?:table\s+)?{t}\b", flat, re.I):
+        return True
+    if re.search(rf"\b(?:{TABLE_NOUNS})\s+of\s+(?:the\s+)?(?:table\s+)?{t}\b", flat, re.I):
+        return True
+    return False
 
 EMAIL_ADDR = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 
@@ -435,10 +470,26 @@ def extract_by_rules(n: Notification, cat: Catalog) -> dict:
         for a in attrs:
             if a.upper() not in [x.upper() for x in deduped]:
                 deduped.append(a)
-        upstream.append({"table": t, "attrs": deduped})
+        # A named attribute wins. Only a table with none, and words saying
+        # the table itself is going, is read as a whole-table change -- and
+        # either way the screen says which, because the two scans are
+        # completely different questions.
+        whole = not deduped and names_the_whole_table(text, t)
+        upstream.append({"table": t, "attrs": deduped, "whole": whole})
 
     kind, label = classify_change(text)
     warnings = list(n.warnings)
+    for u in upstream:
+        if u["whole"]:
+            warnings.append(
+                f"{u['table']} reads as a whole-table change: every column, and every "
+                f"statement that reads the table. Untick 'Whole table' on the next screen if "
+                f"only some attributes change.")
+        elif not u["attrs"]:
+            warnings.append(
+                f"No attribute of {u['table']} was recognised. If the table itself is "
+                f"changing, tick 'Whole table' on the next screen. Otherwise add the "
+                f"attribute, or nothing can be scanned for it.")
     # Only SHOUTED_NAMES are worth complaining about. Every ordinary word in the
     # email is now checked against the catalogue above, and listing all of them
     # back as "not in your repository" would bury the one line that matters.

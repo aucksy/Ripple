@@ -978,7 +978,7 @@ Usage       : kind, column, alias, detail, certain, via_star
 A finding, as JSON sent to the browser:
   {inter, from, attr, roots[], alias, logic, mode, impact, breaking,
    noLocalFix, file, lang, lines[{n, t, hit}],
-   certain, viaStar, copiedBy, builtAsText, feed, inferredHops}
+   certain, viaStar, copiedBy, builtAsText, feed, inferredHops, whole}
   inter         the intermediate table THIS hop builds, as a person reads it.
                 "" when the hop builds no table anybody can name. In Python the
                 field is inter_table; one function maps the whole row to this
@@ -1020,6 +1020,12 @@ A finding, as JSON sent to the browser:
                 delivers to
   inferredHops  how many SELECT * hops are behind this row, counting this one.
                 Zero means every step to here was written down in the SQL
+  whole         true when the row is about the TABLE itself rather than a
+                column of it — see WHOLE TABLES in Phase 5. attr is then the
+                words "whole table", alias is "", logic says how the statement
+                takes the table ("Reads this table", "Joined to this table",
+                "Copied whole by COPY", "Exported from this table") and mode
+                is "Whole table"
 
 A scan result, as JSON sent to the browser:
   {attributes[], groups[], reached[], other[], graphs[], unreadable[],
@@ -1037,7 +1043,21 @@ A scan result, as JSON sent to the browser:
   stats = {productionTables, tablesReached, intermediateTables,
            attributesImpacted, filesWithImpact, breakingUsages,
            couldNotRead, neverOpened, tablesNotVisible, inferredFindings,
-           trailsCutShort, productionStopsLoading, feedsBroken}
+           trailsCutShort, productionStopsLoading, feedsBroken, wholeTables}
+  wholeTables counts the items asked about that were whole tables rather than
+  columns; the screen names its counted card "Tables and attributes impacted"
+  when it is not zero.
+  attributes[] = one entry per thing asked about: {table, attr, found, files,
+              mentionedIn, reachesProduction, endsAt[], cutShortAt[],
+              notVisible[], inferred, nameInTables, tablesRead, lookupFailed,
+              tableColumns[], uncertain} — and for a whole table also
+              whole: true, readers (statements that read the table itself)
+              and builtHere (whether anything in the repository builds it).
+  graphs[]  = per attribute {attr, table, branches[], endBranches[]}, each
+              branch a list of boxes {name, kind, alias, prod?, cut?,
+              inferred?, how?, twoDefinitions?, namedByFile?, builtAsText?}.
+              A whole-table walk adds whole: true on the graph and on every
+              box, with alias "".
   groups[]  = tables ON the published list, each {prod, note, rows[]}
   reached[] = tables the chain ends at that are NOT on the published list.
               These must never be thrown away: a real breaking impact shown
@@ -1089,8 +1109,13 @@ parse_repo", never "from .sqlread import parse_repo".
   ripple/production.py
     DEFAULT_PRODUCTION         suggestion text only, NEVER applied
     parse(text) -> ProductionRule
+    family_of(name) -> (family, how)     how is "shard", "placeholder" or ""
+    check_against_repo(rule, index, parsed) -> dict
     class ProductionRule
-      methods  matches(name) names() patterns() is_empty() one_line() to_dict()
+      methods  matches(name) match_how(name) names() patterns() is_empty()
+               one_line() to_dict()
+               match_how answers "name", "glob", "suffix", "shard",
+               "placeholder" or "" — matches(name) is bool(match_how(name))
 
   ripple/scanner/repo.py
     class SourceFile           path abs_path text lang;  lines()
@@ -1157,6 +1182,9 @@ parse_repo", never "from .sqlread import parse_repo".
   ripple/scanner/lineage.py
     trace(index, parsed, upstream, change_type="unknown", cfg=None,
           on_progress=None) -> ScanResult
+    WHOLE_TABLE = "whole table"     the attr every whole-table row carries
+    upstream entries are {table, attrs[], whole}; whole: true walks the
+    table itself — see WHOLE TABLES in Phase 5
     class ScanResult   to_dict() produces exactly the scan-result JSON above
 
   ripple/notification.py
@@ -1165,6 +1193,7 @@ parse_repo", never "from .sqlread import parse_repo".
     read_upload(filename, raw) -> Notification
     read_pasted(text) -> Notification
     extract_by_rules(n, catalogue) -> dict
+    names_the_whole_table(text, table) -> bool
 
   ripple/narrative.py
     summarise(scan, vals) -> dict      NOT write_summary
@@ -1249,6 +1278,15 @@ text, and the screen shows nothing at all.
                                 {upstream: [{table, attrs: []}],
                                  changeKind: str,
                                  maxHops: int | null}
+                                Each upstream entry may also carry
+                                whole: bool. whole: true means the TABLE
+                                itself is changing and every statement that
+                                reads it is followed; attrs is then empty.
+                                An entry with attrs empty AND whole false is
+                                REFUSED with a 400 whose detail says to add
+                                the attribute or tick "Whole table" — never
+                                scanned as nothing, which came back as a
+                                clean "no usage found".
                                 UPSTREAM IS A LIST OF OBJECTS, NOT A LIST OF
                                 STRINGS. One entry per upstream table, each
                                 carrying the attributes being changed on it.
@@ -1712,7 +1750,24 @@ Classification of each entry, and this must not change existing behaviour:
 So rules somebody set months ago (_PROD, PROD_*) go on meaning exactly what
 they meant. SQL only ever gives us the last part of a name, so an exact name
 is matched on its last dot-separated part, while the whole thing as pasted is
-kept for showing back on screen.
+kept for showing back on screen. A glob is keyed the same way: "mart.snap_daily_*"
+is matched as "snap_daily_*", because no bare name ever has a dot in it, and a
+dotted pattern compared to bare names matched nothing for ever.
+
+FOUR MORE SHAPES A REAL LIST ARRIVES IN, each measured as a real published
+table reported "did not look like a table name". Read each one as the name it
+holds, and write down that you did, one note per kind (see below):
+  invisible characters   a zero-width space or a no-break space inside the
+                         name, from Confluence or Excel — strip them
+  project:dataset.table  the older BigQuery spelling with a colon — read it
+                         as project.dataset.table
+  a note in brackets     "sales_daily (partitioned by day)" — keep the name,
+                         drop the note
+  a description after    "sales_daily - daily sales", "sales_daily: the daily
+    the name             sales" — keep the name, drop the rest
+The last two are only ever used when the part kept could not be an English
+word: it has an underscore, a dot or a digit in it. "please - confirm by
+friday" is exactly this shape and must still come back as ignored.
 
 BE HONEST ABOUT THE PASTE. Return, alongside the entries, a list of notes
 saying what was left out and why, each already written as a sentence ready to
@@ -1724,6 +1779,11 @@ show on screen, with examples:
   "2 lines did not look like a table name and were ignored."
   "1 pair of names is the same table to Ripple, so only the first was kept:
    SQL only ever says the last part of a table name."
+  "2 names had a note in brackets after them. Ripple kept the name and
+   dropped the note."
+  "1 line had invisible characters in it - a zero-width space or a no-break
+   space, the kind a copy out of Confluence or Excel brings along. Ripple
+   removed them."
 Nothing may be dropped silently. And never split prose into invented table
 names — "please confirm by friday" must come back as ignored, not as four
 published tables Ripple would then never find.
@@ -1735,9 +1795,27 @@ Also provide:
 which answers the question this whole feature exists for: WHICH OF THE
 PASTED TABLES HAS RIPPLE NEVER SEEN. Three answers, and the difference sends
 a person to two completely different places:
-  found    the table is in the SQL that was read
+  found    the table is in the SQL that was read. Each found entry says HOW:
+           "exact", or "shard" / "placeholder" when it was found as a family
+           (below), with the spellings the code uses in as[] and asCount
   written  the name is in the repository, but nothing readable builds it
   nowhere  the name is not in this repository at all
+A FAMILY MATCH. A date-sharded table is written with its day on the end —
+order_lines_20260101 — and pasted without it, because the family is what the
+team publishes. A run-time placeholder glued onto a name is the same shape:
+fact_returns_${RUN_DATE} reaches the parser as fact_returns_RUN_DATE. Neither
+is a different table from the one on the list. So matches() also tries the
+FAMILY of a name: strip a trailing _YYYYMMDD, _YYYYMM or _YYYY_MM_DD (and a
+time after it), or a trailing run-time word — DATE, DT, DS, DS_NODASH,
+RUN_DATE, LOAD_DATE, EXECUTION_DATE, PARTITION_DATE, TABLE_SUFFIX, SUFFIX,
+SHARD, YYYYMMDD, RUN_ID, BATCH_ID, TIMESTAMP, TS, ENV and their close
+spellings — and match what is left against the exact names. Never a version
+or a word that is not one of those: order_lines_v2 and order_lines_backup are
+different tables, as they always were. Loose on purpose, and in the safe
+direction: a family match COUNTS a table as published, which can only add a
+finding, never hide one — and every such match is reported as the family
+match it is (familyCount on the check, how on each found entry), never as an
+exact one.
 For a name that matches nothing but IS the ending of tables that do exist,
 report how many, so the screen can ask "did you mean it as a pattern?"
 instead of quietly deciding. Also report, per pattern, how many tables here
@@ -4601,6 +4679,34 @@ current table, ask usages_of for the current column, record a Finding, then
 recurse into the statement's target under EVERY name the column leaves as,
 up to cfg.max_hops, with a seen-set so a cycle cannot loop.
 
+WHOLE TABLES. Sometimes the notice is not about a column: the table itself is
+being dropped, renamed, moved or rebuilt. An upstream entry then carries
+whole: true and an empty attrs, and the question is "what reads it". Walk the
+TABLE, not a column: every statement that reads the current table is a
+Finding (kind "table", attr WHOLE_TABLE = "whole table", alias "", mode
+"Whole table"), whatever columns it names — a SELECT COUNT(*) names none and
+is still a reader — and then recurse into the statement's target as a table,
+up to cfg.max_hops, with the same seen-set and the same cut-short reporting.
+The row says HOW the statement takes the table: "Reads this table", "Joined
+to this table" when it sits on the JOIN side, "Copied whole by COPY" for a
+whole-table copy, "Exported from this table" for an EXPORT DATA. breaking is
+true for removal, rename and unknown (the statement stops running without the
+table) and false for a value or type change (it runs; what it makes changes).
+The impact sentence says which, names the table the statement builds, and on
+a hop past the first adds "X is itself built from the table that is changing,
+so this is the same change one step further down". An export names the
+delivery and says whoever reads the file is outside the repository. Group
+under the published tables exactly as the column walk does; feeds[],
+stopsLoading, mergedNames, wildcardNames, twoDefinitions, namedByFile and
+builtAsText are recorded the same way. The attributes[] entry carries whole:
+true, readers (statements that read the table itself) and builtHere;
+lookupFailed is true only when nothing reads the table AND nothing builds it
+— "nothing reads it" over a table something builds is an answer, "Ripple
+never met it" is the question not having been asked. stats.wholeTables counts
+these entries. Measured before this existed: a table with no attribute went
+through the column walk with nothing to walk and came back "No usage found"
+with a blank where the name should have been, in a letter ready to send.
+
 THE HOP LIMIT IS A SETTING. A TRAIL IT CUT IS NOT A TRAIL THAT ENDED.
 
 max_hops is a number on the settings screen. When the walk stops because of it,
@@ -5216,8 +5322,29 @@ extract_by_rules matches the text against the repository catalogue built in
 Phase 5, so what comes out is names that actually exist in the code rather
 than a guess. Return: source, changeType, changeKind (one of unknown,
 removal, value_change, type_change, rename), changeDesc, subject,
-effectiveDate (ISO), pocName, pocEmail, pocTeam, upstream[{table, attrs}],
-warnings[], extractedBy: "rules".
+effectiveDate (ISO), pocName, pocEmail, pocTeam, upstream[{table, attrs,
+whole}], warnings[], extractedBy: "rules".
+
+whole is true when the notice says the TABLE itself is changing and names no
+attribute on it. names_the_whole_table(text, table) looks, around the table's
+own name, for "<table> will be / is being dropped, removed, decommissioned,
+retired, renamed, migrated, moved, deprecated, deleted, replaced, sunset,
+rebuilt, discontinued, archived", for "dropping / removing / ... <table>",
+for "decommission / removal / retirement / deletion / migration / deprecation
+/ rename of <table>", and anywhere in the text for "whole table", "entire
+table", "the table itself", "all columns", "all attributes", "every column".
+A NAMED ATTRIBUTE ALWAYS WINS: a table with attributes found on it is a
+column change however the sentence is worded. Then a warning per table, in
+the words the screen shows: a whole-table one says it reads as a whole-table
+change — every column, and every statement that reads the table — and to
+untick "Whole table" on the next screen if only some attributes change; a
+table with no attribute and no such words says to tick "Whole table" if the
+table itself is changing, otherwise add the attribute, or nothing can be
+scanned for it. The change labels no longer say "attribute" in front:
+classify_change gives ("removal", "Decommission"), ("rename", "Rename"),
+("value_change", "Value format change"), ("type_change", "Data type change")
+and ("unknown", "Not specified") — "Attribute decommission" printed over a
+table being dropped described a change that was not the one happening.
 
 Rules worth having: a table name in the text that IS in the catalogue is an
 upstream table; a column name that belongs to one of those tables is one of
@@ -5379,6 +5506,17 @@ Build ripple/narrative.py and tests/test_narrative.py.
 summarise(scan, vals) -> {headline, narrative, bullets[], actions[],
                           writtenBy: "rules"}
 draft_reply(scan, vals, summary) -> {subject, body, writtenBy: "rules"}
+
+WHAT IS CHANGING, IN WORDS. Both functions name the subject the same way,
+from vals.upstream: the attributes, joined — or "the whole of <table>" for an
+entry with whole: true or no attributes at all. Measured before this: a table
+with no attribute printed "No usage of  was found" in a letter ready to send.
+A whole-table row has no alias, so its bullet reads "<table> - reads this
+table" and its action "Change the statement that reads this table in <file>."
+When every item asked about was a whole table and lookupFailed is true, the
+headline is "<table> was not found - nothing has been checked", the narrative
+says nothing here reads it and nothing here builds it, and the reply asks for
+the exact table name rather than a column name.
 
 This is what runs when there is no AI, when a key stops working, or when
 somebody decides no data may leave the network. It must be worth reading on
@@ -6250,6 +6388,16 @@ POST /api/scan        {upstream[], changeKind, maxHops} -> the scan result JSON
                       names is a mistake — not an instruction to search
                       everything.
 
+                      So is an entry with attrs empty and whole false. Refuse
+                      it with 400 and the sentence "<table> has no attribute on
+                      it and is not marked as a whole-table change. Add the
+                      attribute that is changing, or tick 'Whole table' to
+                      follow every column and every statement that reads it."
+                      Measured before this: such an entry went through the
+                      column walk with nothing to walk and came back "no usage
+                      found" — a clean answer to a question never asked. Each
+                      entry is passed to trace as {table, attrs, whole}.
+
                       Add a repo block to the result — label, branch,
                       urlTemplate — so the findings screen can say where the
                       code came from. On a folder there is no address to send
@@ -6581,6 +6729,9 @@ Components to define, because the script uses these class names:
   .groups .group .ghead .rowhead .row .detail        the findings list
   .code .code .f .code .body .code .ln .ln.hit .why  the code snippet
   .maprow .mapsrc .branches .branch .node .arrow .legend   the map
+  .tree .tree .node.end .tree .tail     the map's tree of boxes (Phase 11)
+  .fold .fhead .ftitle .fhint .fbody .fextra   the folded list (Phase 11)
+  .wholetoggle .chip.whole              the whole-table checkbox and chip
   .factrow .drop .foot .spin .big .hist
 
 Five rules that keep it usable with real data. Every one of them was measured
@@ -6599,17 +6750,18 @@ on a repository the size of the one this is built for, not guessed at:
   stretches each card to half the page while the row above holds five narrow
   ones, and a row of one strands it. Order the cards worst first, so when there
   are more than fit a row it is the mildest one that wraps.
-  A chain on the dependency map scrolls sideways inside its own row rather than
-  wrapping. Wrapping puts every box on a line of its own and leaves the arrows
-  stranded at the right-hand edge, so a picture of a chain reads as a list of
-  unconnected boxes. Style the scrollbar so it is visible: left as the browser's
-  overlay, a chain that carries on past the edge looks like one that was cut off.
+  The dependency map is a tree (Phase 11): each box sits on its own line under
+  the box it is built from, indented and joined by a connector line, so nothing
+  scrolls sideways and nothing wraps into unconnected boxes. Keep the .branch
+  rule all the same — it still scrolls sideways inside its own row, with a
+  visible scrollbar — for any chain drawn as a row.
   Long lists are capped in the DRAWING, never in the analysis, and what was
   dropped is said out loud with its count. Measured: two hundred and twelve
   files to check by hand, each with a name, a reason and a snippet, made that
   one card 22,000 pixels tall inside a 40,000-pixel page. Draw forty in full and
-  name the rest as chips in a .scrollbox. Twenty branches on the map, the rest
-  counted out loud. A page nobody scrolls to the end of hides its own ending.
+  name the rest as chips in a .scrollbox, inside a list that folds shut (Phase
+  11). Sixty branches folded into one tree on the map, the rest counted out
+  loud. A page nobody scrolls to the end of hides its own ending.
 
 THE INFORMATION BUTTON, AND WHAT MAY GO BEHIND IT
 Every screen here carries more explanation than a person needs while they are
@@ -6626,6 +6778,12 @@ keys whether the panel is open, so a redraw does not shut a panel somebody is in
 the middle of reading. Everything after that is the explanation — a string
 becomes a paragraph, a node is appended as it is. It returns one block: a line
 holding the fact with a small round i after it, and a hidden panel underneath.
+
+Three more helpers live in the same file under the same rule, and Phases 10
+and 11 both call them, so their names are fixed here: fold(label, head, body,
+opts) and foldFrom(label, card, opts) for the folded list, wholeToggle(on,
+onchange) for the whole-table checkbox. What each does is in the phase that
+draws it.
 
 What the control must be:
   a real <button type="button">, so Tab reaches it and Enter or Space opens it
@@ -6810,7 +6968,9 @@ count, the table name and the warning stay on the page, always.
 STRUCTURE
 A single state object S: {step, maxStep, view, mode, health, vals,
 emailPreview, scan, summary, reply, savedId, manRows, man, busy, busyWhat,
-openGroup, openRow, graphTab, prod, why}. A render() that clears the view, clones
+openGroup, openRow, graphTab, prod, why, folds}. folds keys which folded
+lists are open, by label — see fold() in Phase 11. A manRows entry is
+{table, attrs, whole}. A render() that clears the view, clones
 the template for the current step and calls the function for it. Small
 helpers: $, $$, el(tag, props, ...children), x(root, name) for the data-x
 hooks, api(path, opts) that throws with the server's own message.
@@ -6829,8 +6989,11 @@ Check the file size in the browser as well as on the server, and say what the
 real ceiling is. Nothing is scanned until the person confirms — say so on
 screen.
 Manual mode: rows of upstream table + comma-separated attributes, add and
-remove; and a details panel with source system, change type (a select with
-the five kinds the scan actually understands), effective date (a real date
+remove, each row with the "Whole table" checkbox described below; and a
+details panel with source system, change type (a select with the five kinds
+the scan actually understands, labelled Not specified, Decommission, Value
+format change, Data type change, Rename — no "attribute" in front, because a
+whole table can be what changes), effective date (a real date
 picker, plus the date written out in words underneath so a slip is visible),
 what is changing, contact name, contact email, contact team.
 The contact email box takes ANY number of addresses: it pulls every address
@@ -6842,6 +7005,22 @@ Manual mode goes STRAIGHT to step 3. Being shown "check what Ripple read"
 after typing it yourself is being asked to check your own typing, so the
 review step is not in the wizard at all in that mode — not greyed out, not
 silently skipped while the count still says 7.
+
+THE WHOLE TABLE CHECKBOX, on every upstream row, on this screen and on step 2.
+Ticked, the attribute box is emptied and disabled and its placeholder reads
+"every column — the table itself is changing"; the row is sent as
+{table, attrs: [], whole: true}. A row can go forward when it names a table
+and EITHER names an attribute OR is ticked. A named table with neither is
+refused by the server, so refuse it here first: the count line reads
+"N tables · N attributes · N whole tables", the hint under the button says a
+table with no attribute and not marked whole will not be scanned, and on step
+2 a red note on the row reads "Nothing to scan on this row" and the Continue
+button stays disabled until the row is fixed or removed. A ticked row on step
+2 carries an amber note: "Whole table. Ripple will follow every statement that
+reads <table>, and every table built from those. Untick this if only some
+attributes change, and name them instead." One helper for both screens,
+wholeToggle(on, onchange) -> a <label> holding a real checkbox, so a keyboard
+reaches it and both screens behave the same.
 
 STEP 2 — what Ripple read.
 Warnings first. Four editable cards: source system, change type, effective
@@ -6939,7 +7118,8 @@ above each section.
   names you confirmed". Real counts only.
   Under the heading "What the change reaches", five counted cards:
   production tables at risk, other tables reached, attributes impacted, files
-  to change, breaking usages.
+  to change, breaking usages. The attributes card is labelled "Tables and
+  attributes impacted" when stats.wholeTables is not zero.
   Under the heading "What this result does not cover", up to three: to check
   by hand, never opened, in folders Ripple skips — the last two only when they
   are not zero. When all are zero, say so positively in the space beside them.
@@ -6952,7 +7132,35 @@ above each section.
   value — expanding to a plain-English impact sentence and the real lines of
   code with the matching line marked and the reason on the line itself.
   Where a row's column is no longer what the person asked about, say "from
-  MARKET_CODE" underneath it.
+  MARKET_CODE" underneath it. A row with whole: true shows a navy "whole
+  table" chip in the attribute cell, the words "every column" in the alias
+  cell and a grey mode badge — never a blank cell, which reads as a value
+  that failed to load. The line under the title, the risk badge and the
+  "never met" note all have a whole-table wording ("Ripple never met this
+  table", "Table not found — nothing was checked", "every statement that
+  reads the table, and every table built from those") chosen when
+  stats.wholeTables is not zero.
+
+  EVERY LONG LIST FOLDS SHUT BY DEFAULT, AND THE HEADING STAYS. One helper,
+  fold(label, head, body, opts) -> a card with a clickable heading row (a
+  small-capitals tag, the heading, a count badge, the word "show" or "hide",
+  a caret) and the list underneath only while open; foldFrom(label, card,
+  opts) turns a card built heading-first into one. The heading IS the caveat
+  — what the list is and how many are in it — so somebody who never opens it
+  still sees everything Ripple knows it missed; the list is the evidence.
+  opts.after is a node that stays visible whether or not the list is open,
+  for a button that acts on the list. Open state lives in S.folds by label,
+  so a redraw does not shut a list somebody just opened; the heading is
+  reached by Tab and opened by Enter or Space. Fold: the never-opened file
+  names, every card under FIVE CARDS UNDER THE FINDINGS below, the usages
+  that build no table, the "N more tables" chips, the check-by-hand list, the
+  mentions-only list, and "Every attribute you asked about" (which opens by
+  itself when it holds a correction somebody has to see — a name never met or
+  a trail cut short — or when there are three attributes or fewer). Tables
+  that stop refreshing and deliveries out of the warehouse fold too, and open
+  by themselves when they hold five or fewer. Measured on a real repository:
+  the findings screen ran to forty thousand pixels, and every caveat on it
+  was a heading over a list nobody could scroll past.
   Draw at most 20 cards. On a real repository a key column reaches over two
   hundred tables, and two hundred collapsed cards is a page nobody scrolls to
   the end of, so the tables at the bottom are in practice hidden. Nothing is
@@ -7067,9 +7275,17 @@ above each section.
   built on the whole picture.
 
 STEP 5 — the dependency map. A tab per attribute. The upstream source as a
-dark card on the left, and the branches to its right, each a row of boxes
-joined by arrows, with the alias shown at each step, published tables in red.
-Draw at most 40 branches, longest and production-reaching first, and COUNT
+dark card on the left, and to its right ONE TREE: branches that share their
+first steps are drawn once, as one box with the paths that part from it drawn
+underneath, indented and joined by a connector line. treeOf(branches) folds
+the branches (a box is the same box when its table, its alias and its markers
+are the same) and treeEl(tree) draws nested lists. A box shows the kind, the
+table and the alias at that step; published tables are red; a leaf that is
+not a published table is dashed and labelled "chain ends here", a published
+leaf "published table". Measured before this on the practice pipeline: four
+rows of three boxes, with the published table on every row cut off at the
+right edge. Draw at most 60 branches into the tree, longest and
+production-reaching first, and COUNT
 THE REST OUT LOUD — every one of them is already a finding on the previous
 step. A legend, and one line saying the alias is the rename a word search
 would miss. The line under the title must be true of the picture underneath

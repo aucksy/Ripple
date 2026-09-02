@@ -21,20 +21,23 @@ READ_EMAIL_PROMPT = """You extract structured fields from a data-change notifica
 
 Return ONLY a JSON object, no prose, with exactly these keys:
   source        - the upstream system or team sending the notice (short, e.g. "C360")
-  changeType    - one of: "Attribute decommission", "Value format change",
-                  "Data type change", "Attribute rename", "Not specified"
+  changeType    - one of: "Decommission", "Value format change",
+                  "Data type change", "Rename", "Not specified"
   changeKind    - one of: "removal", "value_change", "type_change", "rename", "unknown"
   changeDesc    - one plain sentence describing what is changing
   effectiveDate - the date the change takes effect, as YYYY-MM-DD, or ""
   pocName       - the person to reply to
   pocEmail      - their email address, or ""
   pocTeam       - their team
-  upstream      - a list of {"table": "...", "attrs": ["...", "..."]}
+  upstream      - a list of {"table": "...", "attrs": ["...", "..."], "whole": false}
 
 Rules:
 - Only list tables and attributes the email actually names. Never invent one.
 - Use the exact spelling from the email, including underscores and case.
 - If a value is not stated, use an empty string rather than guessing.
+- "whole" is true only when the email says the table itself is going, moving,
+  being renamed, rebuilt or changing as a whole. When it names particular
+  attributes on the table, "whole" is false and "attrs" holds them.
 """
 
 SUMMARY_PROMPT = """You write a short impact summary for a data engineering team.
@@ -243,7 +246,11 @@ def read_email(text: str, cfg: Settings | None = None) -> dict:
         table = (u.get("table") or "").strip()
         attrs = [a.strip() for a in (u.get("attrs") or []) if a and a.strip()]
         if table:
-            upstream.append({"table": table, "attrs": attrs})
+            # A named attribute wins over "whole", exactly as in the rules
+            # reader: the two scans are different questions, and a screen
+            # that says both would be answering neither.
+            upstream.append({"table": table, "attrs": attrs,
+                             "whole": bool(u.get("whole")) and not attrs})
     out["upstream"] = upstream
     out["extractedBy"] = "ai"
     out.setdefault("warnings", [])

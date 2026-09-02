@@ -254,6 +254,10 @@ def reindex() -> None:
 class UpstreamIn(BaseModel):
     table: str
     attrs: list[str] = []
+    # The table itself is changing -- dropped, renamed, moved, rebuilt -- and
+    # every statement that reads it is what is asked about. Never inferred
+    # from an empty attrs: a table with nothing on it is refused, see scan().
+    whole: bool = False
 
 
 class ScanIn(BaseModel):
@@ -750,9 +754,19 @@ HOP_CEILING = 25
 @app.post("/api/scan")
 def scan(payload: ScanIn) -> dict:
     idx, parsed, _ = repo_state()
-    upstream = [{"table": u.table, "attrs": u.attrs} for u in payload.upstream]
+    upstream = [{"table": u.table, "attrs": u.attrs, "whole": bool(u.whole)}
+                for u in payload.upstream]
     if not upstream:
         raise HTTPException(status_code=400, detail="No upstream tables were supplied.")
+    # Refused, never answered around. A table with no attribute on it used to
+    # go through the column walk with nothing to walk, and came back "no usage
+    # found" -- a clean answer to a question that was never asked.
+    for u in upstream:
+        if not u["attrs"] and not u["whole"]:
+            raise HTTPException(status_code=400, detail=(
+                f"{u['table']} has no attribute on it and is not marked as a whole-table "
+                f"change. Add the attribute that is changing, or tick 'Whole table' to follow "
+                f"every column and every statement that reads it."))
     # Refused, never answered around. Without the list every table fails the
     # published test, and a scan that reaches three published tables reports
     # "no production table is affected" -- the same green tick as a genuinely
