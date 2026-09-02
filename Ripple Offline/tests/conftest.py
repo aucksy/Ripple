@@ -23,6 +23,16 @@ os.environ["RIPPLE_OFFLINE_HOME"] = str(_HOME)
 
 from ripple_offline.engine import SHARED_DIR                       # noqa: E402
 
+# The page is served from build/web, which is GENERATED from Codebase/web at
+# start-up and by build.py, and is not in the repository. A fresh checkout has
+# no such folder, and the app then answers "/" with a 500 -- measured on the
+# cloud runner, where the whole release was skipped for it. Built here, once,
+# before anything imports the app, so the suite never depends on whatever a
+# previous run left behind.
+from ripple_offline import webbuild                                # noqa: E402
+
+webbuild.build()
+
 MOCKREPO = SHARED_DIR / "mockrepo"
 SAMPLES = SHARED_DIR / "samples"
 
