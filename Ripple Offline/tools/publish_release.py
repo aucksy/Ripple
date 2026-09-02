@@ -15,7 +15,9 @@ this repository. Nothing here stores a secret, and nothing prints one.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -35,14 +37,23 @@ ZIP = ROOT / "Ripple Offline" / "dist" / f"Ripple-Offline-{TAG}.zip"
 
 
 def token() -> str:
-    """The repository token, out of the git credential helper."""
+    """The repository token: the cloud build's own, or the git credential helper's.
+
+    The cloud job (.github/workflows/release.yml) hands its token in as
+    GITHUB_TOKEN. On a person's machine the credential helper already holds
+    one for this repository. Nothing here stores a secret, and nothing prints one.
+    """
+    for name in ("GITHUB_TOKEN", "RIPPLE_RELEASE_TOKEN"):
+        if os.environ.get(name, "").strip():
+            return os.environ[name].strip()
     done = subprocess.run(
         ["git", "credential", "fill"], cwd=str(ROOT), text=True,
         input="protocol=https\nhost=github.com\n\n", capture_output=True)
     for line in done.stdout.splitlines():
         if line.startswith("password="):
             return line.split("=", 1)[1].strip()
-    raise SystemExit("No GitHub token in the credential helper. Nothing was published.")
+    raise SystemExit("No GitHub token in GITHUB_TOKEN or the credential helper. "
+                     "Nothing was published.")
 
 
 def call(method: str, url: str, tok: str, body=None, raw=None, content_type=None):
@@ -92,7 +103,12 @@ def main() -> int:
         return 1
 
     tok = token()
+    # The fingerprint of what leaves here. The releases page reports the
+    # fingerprint of what arrived, so the two can be compared without
+    # downloading anything.
+    digest = hashlib.sha256(ZIP.read_bytes()).hexdigest()
     print(f"publishing {ZIP.name} ({ZIP.stat().st_size / 1_000_000:.0f} MB) at {head[:7]}")
+    print(f"  sha256: {digest}")
 
     code, existing = call("GET", f"{API}/releases", tok)
     if code == 200:
@@ -118,6 +134,7 @@ def main() -> int:
         print("  the zip was not uploaded:", code, asset)
         return 1
     print("  download:", asset["browser_download_url"])
+    print(f"  arrived : {asset.get('size', 0):,} bytes, {asset.get('digest') or 'no digest reported'}")
     return 0
 
 

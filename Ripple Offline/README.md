@@ -19,7 +19,11 @@ another one. Only the newest release is kept.
 The zip is **not** in this repository. Git keeps every version of every file
 for ever, and forty builds of a 22 MB download were the whole repository — a
 fresh clone paid for all forty. It is built by `python build.py` into `dist/`,
-which is not tracked, and published to the releases page from there.
+which is not tracked, and published to the releases page from there. Nobody
+builds it on their own machine: pushing a version tag (`v1.9.0`) runs
+`.github/workflows/release.yml`, which runs both test suites, builds the zip,
+starts the built program and drives it through its own API
+(`tools/prove_build.py`), and only then publishes it, keeping only that one.
 
 ---
 

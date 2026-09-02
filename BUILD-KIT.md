@@ -8176,7 +8176,11 @@ And do not commit it. Git keeps every version of every file for ever, which is
 the exact opposite of "keep only the latest": forty builds of a 22 MB zip WERE
 the whole repository, and a fresh clone paid for all forty. Write it into the
 ignored dist/ folder and publish it to the releases page, keeping only the
-newest one there.
+newest one there. Ripple itself does this in the cloud: a version tag runs
+both test suites, builds the zip, starts the built program and drives it
+through its own API, and only then publishes it. A build nobody watched is a
+download nobody can trust, so "it built" is never the last step — "it ran, and
+answered the questions this commit says it answers" is.
 
 NAME WHAT YOU PRODUCE FOR ITS VERSION, AND STAMP IT. Both halves already exist
 in ripple/build_info.py from Phase 8. Do not re-invent either here.
